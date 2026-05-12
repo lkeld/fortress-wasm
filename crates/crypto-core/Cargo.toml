@@ -1,0 +1,11 @@
+[package]
+name = "crypto-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sha2 = "0.10"
+aes-gcm = "0.10.3"
+hkdf = "0.12.4"
+getrandom = { version = "0.2", features = ["js"] }
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
