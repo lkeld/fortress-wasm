@@ -71,3 +71,17 @@ pub fn extract_steg_key(image_data: &[u8], width: u32, height: u32) -> Option<[u
 
     Some(key)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sha256_prng_consistency() {
+        let mut prng1 = Sha256Prng::new(0xDEADBEEF);
+        let mut prng2 = Sha256Prng::new(0xDEADBEEF);
+        for _ in 0..100 {
+            assert_eq!(prng1.next(), prng2.next());
+        }
+    }
+}

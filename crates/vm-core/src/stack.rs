@@ -3,6 +3,7 @@ use crate::value::Value;
 #[derive(Debug)]
 pub enum VmError {
     StackUnderflow,
+    StackOverflow,
     TypeError,
     InvalidOpCode(u8),
     InvalidConstantIndex,
@@ -11,6 +12,8 @@ pub enum VmError {
     DivisionByZero,
     FieldNotFound,
     UnknownNativeFunction,
+    CallStackOverflow,
+    UnexpectedEndOfCode,
 }
 
 pub struct Stack {
@@ -24,8 +27,12 @@ impl Stack {
         }
     }
 
-    pub fn push(&mut self, val: Value) {
+    pub fn push(&mut self, val: Value) -> Result<(), VmError> {
+        if self.data.len() >= 1024 {
+            return Err(VmError::StackOverflow);
+        }
         self.data.push(val);
+        Ok(())
     }
 
     pub fn pop(&mut self) -> Result<Value, VmError> {
@@ -38,7 +45,7 @@ impl Stack {
 
     pub fn dup(&mut self) -> Result<(), VmError> {
         let val = self.peek()?.clone();
-        self.push(val);
+        self.push(val)?;
         Ok(())
     }
 

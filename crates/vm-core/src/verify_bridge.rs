@@ -5,36 +5,36 @@ use std::cell::RefCell;
 
 thread_local! {
     static SIGNING_KEY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
+    static PAYLOAD_HASH: RefCell<Option<[u8; 32]>> = RefCell::new(None);
 }
 
-fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 {
-        return None;
+#[wasm_bindgen]
+pub fn set_payload_hash(hash: Box<[u8]>) {
+    let mut hash_arr = [0u8; 32];
+    if hash.len() == 32 {
+        hash_arr.copy_from_slice(&hash);
+        PAYLOAD_HASH.with(|h| {
+            *h.borrow_mut() = Some(hash_arr);
+        });
     }
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-        .collect()
 }
 
 #[wasm_bindgen]
 pub fn init_crypto(
-    stego_key_hex: &str,
-    session_seed_hex: &str,
-    fingerprint_hex: &str,
+    mut stego_key: Box<[u8]>,
+    mut session_seed: Box<[u8]>,
+    mut fingerprint: Box<[u8]>,
     epoch_day: u32,
 ) {
-    let mut stego_key = hex_to_bytes(stego_key_hex).unwrap_or_else(|| vec![0; 32]);
-    let mut session_seed = hex_to_bytes(session_seed_hex).unwrap_or_else(|| vec![0; 32]);
-    let mut fingerprint = hex_to_bytes(fingerprint_hex).unwrap_or_else(|| vec![0; 32]);
-
     let sig_key = derive_signing_key(&stego_key, &session_seed, &fingerprint, epoch_day);
 
     SIGNING_KEY.with(|k| {
         *k.borrow_mut() = Some(sig_key);
     });
 
-    // Zeroize sensitive material immediately
+    // Zeroize sensitive material immediately.
+    // Because we take ownership of Box<[u8]>, these exact heap allocations 
+    // made by wasm_bindgen when copying from JS are securely wiped before they are freed.
     stego_key.zeroize();
     session_seed.zeroize();
     fingerprint.zeroize();
@@ -54,7 +54,12 @@ pub fn sign_request(method: &str, url: &str, body_str: &str, timestamp: &str) ->
         None => return "uninitialized".to_string(), // Or handle error
     };
 
-    let message = format!("{}\n{}\n{}\n{}", method, url, timestamp, body_str);
+    let payload_hash_opt = PAYLOAD_HASH.with(|h| *h.borrow());
+    let default_hash = [0u8; 32];
+    let payload_hash = payload_hash_opt.unwrap_or(default_hash);
+    
+    let hash_hex: String = payload_hash.iter().map(|b| format!("{:02x}", b)).collect();
+    let message = format!("{}\n{}\n{}\n{}\n{}", method, url, timestamp, body_str, hash_hex);
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type HmacSha256 = Hmac<Sha256>;

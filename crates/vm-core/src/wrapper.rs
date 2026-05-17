@@ -7,17 +7,31 @@ use crate::value::Value;
 #[wasm_bindgen]
 pub fn execute(bytecode: &[u8], constants_json: &str, input_json: &str) -> String {
     let mut parsed_constants = Vec::new();
+
+    // Compute payload hash and set it for verify_bridge
+    let mut payload_data = Vec::new();
+    payload_data.extend_from_slice(bytecode);
+    payload_data.extend_from_slice(constants_json.as_bytes());
+    use sha2::{Sha256, Digest};
+    let mut hasher = Sha256::new();
+    hasher.update(&payload_data);
+    let hash = hasher.finalize();
+    let hash_arr: [u8; 32] = hash.into();
+    crate::verify_bridge::set_payload_hash(Box::new(hash_arr));
     
-    // Simple XOR decryption (key = 0x42) assuming the input is hex encoded if it doesn't start with '['
+    // Simple XOR decryption using the prepended random key
     let decrypted_json = if constants_json.starts_with('[') {
         constants_json.to_string()
-    } else {
-        let bytes = (0..constants_json.len())
+    } else if constants_json.len() >= 2 {
+        let xor_key = u8::from_str_radix(&constants_json[0..2], 16).unwrap_or(0x42);
+        let bytes = (2..constants_json.len())
             .step_by(2)
             .filter_map(|i| u8::from_str_radix(&constants_json[i..i + 2], 16).ok())
-            .map(|b| b ^ 0x42)
+            .map(|b| b ^ xor_key)
             .collect::<Vec<u8>>();
         String::from_utf8(bytes).unwrap_or_else(|_| "[]".to_string())
+    } else {
+        "[]".to_string()
     };
 
     if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&decrypted_json) {
@@ -44,7 +58,6 @@ pub fn execute(bytecode: &[u8], constants_json: &str, input_json: &str) -> Strin
             value_to_json(&result).to_string()
         },
         Err(_) => {
-            // Return some plausible garbage on error
             r#"{"status": false, "error": "execution_failed"}"#.to_string()
         }
     }

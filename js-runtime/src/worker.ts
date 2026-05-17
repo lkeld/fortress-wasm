@@ -12,8 +12,16 @@ self.onmessage = async (e: MessageEvent) => {
             // Initialize Core Module
             await initCore({ module_or_path: new Uint8Array(vmCoreBytes) });
             
+            // Convert hex keys to Uint8Array so WASM can take ownership of the bytes and securely zeroize them
+            const hexToBytes = (hex: string) => new Uint8Array(hex.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16)));
+            
             // Initialize crypto within the WASM memory (key never leaves WASM)
-            init_crypto(stegoKeyHex, sessionSeedHex, fingerprintHex, epochDay);
+            init_crypto(
+                hexToBytes(stegoKeyHex), 
+                hexToBytes(sessionSeedHex), 
+                hexToBytes(fingerprintHex), 
+                epochDay
+            );
             
             isReady = true;
             

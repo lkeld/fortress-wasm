@@ -2,6 +2,7 @@ pub mod steg;
 
 use sha2::{Sha256, Sha512, Digest};
 use hkdf::Hkdf;
+use zeroize::Zeroize;
 
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -31,6 +32,9 @@ pub fn derive_signing_key(
     let mut okm = [0u8; 32];
     hk.expand(b"anabolic-hmac-v1", &mut okm)
         .expect("HKDF expand failed");
+    
+    ikm.zeroize();
+    salt.zeroize();
     
     okm
 }

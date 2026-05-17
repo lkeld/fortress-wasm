@@ -43,8 +43,25 @@ export class CodeGenerator {
     private locals: Map<string, number> = new Map();
     private functions: Map<string, number> = new Map();
     private functionBodies: Statement[] = [];
+    private unresolvedCalls: { offset: number, name: string }[] = [];
+    private opcodeMap: Uint8Array = new Uint8Array(256);
+    private invertedMap: Uint8Array = new Uint8Array(256);
 
     public generate(program: Program): { code: Uint8Array, constants: string } {
+        // Generate random OpCode mapping
+        for (let i = 0; i < 256; i++) {
+            this.opcodeMap[i] = i;
+        }
+        for (let i = 255; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const temp = this.opcodeMap[i];
+            this.opcodeMap[i] = this.opcodeMap[j];
+            this.opcodeMap[j] = temp;
+        }
+        for (let i = 0; i < 256; i++) {
+            this.invertedMap[this.opcodeMap[i]] = i;
+        }
+
         for (const stmt of program.body) {
             if (stmt.type === 'FunctionDeclaration') {
                 this.functionBodies.push(stmt);
@@ -62,19 +79,35 @@ export class CodeGenerator {
             this.visitStatement(funcStmt);
         }
         
+        // Patch all unresolved function calls
+        for (const call of this.unresolvedCalls) {
+            const target = this.functions.get(call.name);
+            if (target === undefined || target === 0) { // 0 is dummy
+                throw new Error(`Function ${call.name} not found`);
+            }
+            this.patchJump(call.offset, target);
+        }
+        
         const constantsJsonStr = JSON.stringify(this.constants);
+        const xorKey = Math.floor(Math.random() * 256);
         const obfuscatedConstants = Array.from(constantsJsonStr)
-            .map(char => (char.charCodeAt(0) ^ 0x42).toString(16).padStart(2, '0'))
+            .map(char => (char.charCodeAt(0) ^ xorKey).toString(16).padStart(2, '0'))
             .join('');
             
+        const finalPayload = xorKey.toString(16).padStart(2, '0') + obfuscatedConstants;
+            
+        const finalCode = new Uint8Array(256 + this.code.length);
+        finalCode.set(this.invertedMap, 0);
+        finalCode.set(new Uint8Array(this.code), 256);
+            
         return {
-            code: new Uint8Array(this.code),
-            constants: obfuscatedConstants
+            code: finalCode,
+            constants: finalPayload
         };
     }
 
     private emit(opcode: OpCode, operand?: number) {
-        this.code.push(opcode);
+        this.code.push(this.opcodeMap[opcode]);
         if (operand !== undefined) {
             // operand is always 32-bit little endian
             this.code.push(operand & 0xFF);
@@ -118,7 +151,7 @@ export class CodeGenerator {
                 } else {
                     this.emit(OpCode.Push, this.addConstant(null));
                 }
-                this.emit(OpCode.Halt);
+                this.emit(OpCode.Return);
                 break;
             case 'IfStatement':
                 this.visitExpression(stmt.condition);
@@ -219,14 +252,12 @@ export class CodeGenerator {
                         // expects id, arg_count
                         this.emit(OpCode.CallNative);
                     } else {
-                        const target = this.functions.get(expr.callee.name);
-                        if (target === undefined) {
-                            // Defer resolving or throw if we enforce pre-declaration
-                            throw new Error(`Function ${expr.callee.name} not found`);
-                        }
-                        this.emit(OpCode.Call, target);
-                        // Operand 2: arg count (wait, Call instruction takes 2 operands in vm.rs: target, arg_count)
-                        // emit() only takes 1 operand. We'll emit arg_count manually
+                        // We emit the Call instruction with a dummy 0 target, and remember to patch it later
+                        this.emit(OpCode.Call, 0);
+                        const patchOffset = this.code.length - 4; // The target operand is the last 4 bytes
+                        this.unresolvedCalls.push({ offset: patchOffset, name: expr.callee.name });
+                        
+                        // Operand 2: arg count
                         this.code.push(expr.arguments.length & 0xFF);
                         this.code.push((expr.arguments.length >> 8) & 0xFF);
                         this.code.push((expr.arguments.length >> 16) & 0xFF);
