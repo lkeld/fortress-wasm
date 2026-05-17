@@ -27,11 +27,10 @@ pub struct Vm {
 }
 
 impl Vm {
-    pub fn new(mut code: Vec<u8>, constants: Vec<Value>) -> Self {
+    pub fn new(code: Vec<u8>, constants: Vec<Value>, opcode_map_vec: Vec<u8>) -> Self {
         let mut opcode_map = [0u8; 256];
-        if code.len() >= 256 {
-            opcode_map.copy_from_slice(&code[0..256]);
-            code.drain(0..256);
+        if opcode_map_vec.len() >= 256 {
+            opcode_map.copy_from_slice(&opcode_map_vec[0..256]);
         } else {
             // Fallback (identity map) if code is malformed/too short
             for i in 0..256 {
@@ -97,8 +96,15 @@ impl Vm {
                 return Ok(Value::Object(Rc::new(RefCell::new(garbage))));
             }
         }
+        let mut cycles = 0;
+        let max_cycles = 1_000_000;
 
         loop {
+            cycles += 1;
+            if cycles > max_cycles {
+                return Err(VmError::ExecutionLimitExceeded);
+            }
+
             if self.pc >= self.code.len() {
                 break;
             }
@@ -132,62 +138,53 @@ impl Vm {
                     }
                     self.locals[idx] = val;
                 }
-                OpCode::AddInt => {
+                OpCode::Add => {
                     let b = self.stack.pop()?;
                     let a = self.stack.pop()?;
-                    if let (Value::Int(a_val), Value::Int(b_val)) = (a, b) {
-                        self.stack.push(Value::Int(a_val + b_val))?;
-                    } else { return Err(VmError::TypeError); }
+                    match (a, b) {
+                        (Value::Int(a_val), Value::Int(b_val)) => self.stack.push(Value::Int(a_val + b_val))?,
+                        (Value::Float(a_val), Value::Float(b_val)) => self.stack.push(Value::Float(a_val + b_val))?,
+                        (Value::Str(a_val), Value::Str(b_val)) => {
+                            let mut res = String::new();
+                            res.push_str(&a_val);
+                            res.push_str(&b_val);
+                            self.stack.push(Value::Str(std::sync::Arc::new(res)))?;
+                        }
+                        _ => return Err(VmError::TypeError),
+                    }
                 }
-                OpCode::SubInt => {
+                OpCode::Sub => {
                     let b = self.stack.pop()?;
                     let a = self.stack.pop()?;
-                    if let (Value::Int(a_val), Value::Int(b_val)) = (a, b) {
-                        self.stack.push(Value::Int(a_val - b_val))?;
-                    } else { return Err(VmError::TypeError); }
+                    match (a, b) {
+                        (Value::Int(a_val), Value::Int(b_val)) => self.stack.push(Value::Int(a_val - b_val))?,
+                        (Value::Float(a_val), Value::Float(b_val)) => self.stack.push(Value::Float(a_val - b_val))?,
+                        _ => return Err(VmError::TypeError),
+                    }
                 }
-                OpCode::MulInt => {
+                OpCode::Mul => {
                     let b = self.stack.pop()?;
                     let a = self.stack.pop()?;
-                    if let (Value::Int(a_val), Value::Int(b_val)) = (a, b) {
-                        self.stack.push(Value::Int(a_val * b_val))?;
-                    } else { return Err(VmError::TypeError); }
+                    match (a, b) {
+                        (Value::Int(a_val), Value::Int(b_val)) => self.stack.push(Value::Int(a_val * b_val))?,
+                        (Value::Float(a_val), Value::Float(b_val)) => self.stack.push(Value::Float(a_val * b_val))?,
+                        _ => return Err(VmError::TypeError),
+                    }
                 }
-                OpCode::DivInt => {
+                OpCode::Div => {
                     let b = self.stack.pop()?;
                     let a = self.stack.pop()?;
-                    if let (Value::Int(a_val), Value::Int(b_val)) = (a, b) {
-                        if b_val == 0 { return Err(VmError::DivisionByZero); }
-                        self.stack.push(Value::Int(a_val / b_val))?;
-                    } else { return Err(VmError::TypeError); }
-                }
-                OpCode::AddFloat => {
-                    let b = self.stack.pop()?;
-                    let a = self.stack.pop()?;
-                    if let (Value::Float(a_val), Value::Float(b_val)) = (a, b) {
-                        self.stack.push(Value::Float(a_val + b_val))?;
-                    } else { return Err(VmError::TypeError); }
-                }
-                OpCode::SubFloat => {
-                    let b = self.stack.pop()?;
-                    let a = self.stack.pop()?;
-                    if let (Value::Float(a_val), Value::Float(b_val)) = (a, b) {
-                        self.stack.push(Value::Float(a_val - b_val))?;
-                    } else { return Err(VmError::TypeError); }
-                }
-                OpCode::MulFloat => {
-                    let b = self.stack.pop()?;
-                    let a = self.stack.pop()?;
-                    if let (Value::Float(a_val), Value::Float(b_val)) = (a, b) {
-                        self.stack.push(Value::Float(a_val * b_val))?;
-                    } else { return Err(VmError::TypeError); }
-                }
-                OpCode::DivFloat => {
-                    let b = self.stack.pop()?;
-                    let a = self.stack.pop()?;
-                    if let (Value::Float(a_val), Value::Float(b_val)) = (a, b) {
-                        self.stack.push(Value::Float(a_val / b_val))?;
-                    } else { return Err(VmError::TypeError); }
+                    match (a, b) {
+                        (Value::Int(a_val), Value::Int(b_val)) => {
+                            if b_val == 0 { return Err(VmError::DivisionByZero); }
+                            self.stack.push(Value::Int(a_val / b_val))?;
+                        }
+                        (Value::Float(a_val), Value::Float(b_val)) => {
+                            if b_val == 0.0 { return Err(VmError::DivisionByZero); }
+                            self.stack.push(Value::Float(a_val / b_val))?;
+                        }
+                        _ => return Err(VmError::TypeError),
+                    }
                 }
                 OpCode::Eq => {
                     let b = self.stack.pop()?;
@@ -314,6 +311,88 @@ impl Vm {
                         return Err(VmError::TypeError);
                     }
                 }
+                OpCode::GetMember => {
+                    let key = self.stack.pop()?;
+                    let target = self.stack.pop()?;
+                    match target {
+                        Value::Object(map_rc) => {
+                            if let Value::Str(s) = key {
+                                let val = map_rc.borrow().get(s.as_str()).cloned().unwrap_or(Value::Null);
+                                self.stack.push(val)?;
+                            } else {
+                                return Err(VmError::TypeError);
+                            }
+                        }
+                        Value::List(vec_rc) => {
+                            if let Value::Int(i) = key {
+                                let idx = i as usize;
+                                let vec = vec_rc.borrow();
+                                let val = vec.get(idx).cloned().unwrap_or(Value::Null);
+                                self.stack.push(val)?;
+                            } else {
+                                return Err(VmError::TypeError);
+                            }
+                        }
+                        Value::Str(s) => {
+                            if let Value::Int(i) = key {
+                                let idx = i as usize;
+                                if idx < s.len() {
+                                    let ch = s.chars().nth(idx).unwrap_or('\0').to_string();
+                                    self.stack.push(Value::Str(std::sync::Arc::new(ch)))?;
+                                } else {
+                                    return Err(VmError::IndexOutOfBounds);
+                                }
+                            } else {
+                                return Err(VmError::TypeError);
+                            }
+                        }
+                        _ => return Err(VmError::TypeError),
+                    }
+                }
+                OpCode::SetMember => {
+                    let val = self.stack.pop()?;
+                    let key = self.stack.pop()?;
+                    let target = self.stack.pop()?;
+                    match target {
+                        Value::Object(ref map_rc) => {
+                            if let Value::Str(s) = key {
+                                map_rc.borrow_mut().insert(s.to_string(), val);
+                                self.stack.push(target.clone())?;
+                            } else {
+                                return Err(VmError::TypeError);
+                            }
+                        }
+                        Value::List(ref vec_rc) => {
+                            if let Value::Int(i) = key {
+                                let idx = i as usize;
+                                let mut vec = vec_rc.borrow_mut();
+                                if idx < vec.len() {
+                                    vec[idx] = val;
+                                } else if idx == vec.len() {
+                                    vec.push(val);
+                                } else {
+                                    return Err(VmError::IndexOutOfBounds);
+                                }
+                                self.stack.push(target.clone())?;
+                            } else {
+                                return Err(VmError::TypeError);
+                            }
+                        }
+                        _ => return Err(VmError::TypeError),
+                    }
+                }
+                OpCode::Length => {
+                    let target = self.stack.pop()?;
+                    match target {
+                        Value::List(vec_rc) => {
+                            self.stack.push(Value::Int(vec_rc.borrow().len() as i64))?;
+                        }
+                        Value::Str(s) => {
+                            self.stack.push(Value::Int(s.len() as i64))?;
+                        }
+                        _ => return Err(VmError::TypeError),
+                    }
+                }
                 OpCode::Call => {
                     let target = self.read_u32()? as usize;
                     let arg_count = self.read_u32()? as usize;
@@ -354,11 +433,70 @@ impl Vm {
                     }
                     args.reverse(); // Args were pushed left-to-right, so popped right-to-left
                     
-                    // A simple JSON serialization for arguments (in a real VM we'd map this properly)
-                    let args_json = "[]"; // Simplified for now since we don't have serde implemented on Value yet
+                    let mut json_arr = serde_json::Value::Array(Vec::new());
+                    if let serde_json::Value::Array(ref mut arr) = json_arr {
+                        for arg in args {
+                            arr.push(crate::wrapper::value_to_json(&arg));
+                        }
+                    }
+                    let args_json = json_arr.to_string();
                     
-                    let res_str = native_call(id, args_json);
-                    self.stack.push(Value::Str(std::sync::Arc::new(res_str)))?;
+                    let res_str = native_call(id, &args_json);
+                    
+                    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&res_str) {
+                        self.stack.push(crate::wrapper::json_to_value(&json_val))?;
+                    } else {
+                        self.stack.push(Value::Str(std::sync::Arc::new(res_str)))?;
+                    }
+                }
+                OpCode::Hash256 => {
+                    let val = self.stack.pop()?;
+                    let str_val = match val {
+                        Value::Str(s) => s.to_string(),
+                        Value::Int(i) => i.to_string(),
+                        Value::Float(f) => f.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        _ => return Err(VmError::TypeError),
+                    };
+                    use sha2::{Sha256, Digest};
+                    let mut hasher = Sha256::new();
+                    hasher.update(str_val.as_bytes());
+                    let result = hasher.finalize();
+                    let hex_str = format!("{:x}", result);
+                    self.stack.push(Value::Str(std::sync::Arc::new(hex_str)))?;
+                }
+                OpCode::JSONStringify => {
+                    let val = self.stack.pop()?;
+                    let json_val = crate::wrapper::value_to_json(&val);
+                    let json_str = json_val.to_string();
+                    self.stack.push(Value::Str(std::sync::Arc::new(json_str)))?;
+                }
+                OpCode::EncryptAES => {
+                    let key_val = self.stack.pop()?;
+                    let payload_val = self.stack.pop()?;
+                    
+                    if let (Value::Str(key_str), Value::Str(payload_str)) = (key_val, payload_val) {
+                        // Pad or truncate key to 32 bytes
+                        let mut key_bytes = [0u8; 32];
+                        let kb = key_str.as_bytes();
+                        let len = kb.len().min(32);
+                        key_bytes[..len].copy_from_slice(&kb[..len]);
+                        
+                        match crypto_core::encrypt_aes_gcm(payload_str.as_bytes(), &key_bytes) {
+                            Ok(encrypted) => {
+                                // Hex encode the result
+                                let mut hex_str = String::with_capacity(encrypted.len() * 2);
+                                for byte in encrypted {
+                                    use std::fmt::Write;
+                                    write!(&mut hex_str, "{:02x}", byte).unwrap();
+                                }
+                                self.stack.push(Value::Str(std::sync::Arc::new(hex_str)))?;
+                            }
+                            Err(_) => return Err(VmError::TypeError), // Generic error for now
+                        }
+                    } else {
+                        return Err(VmError::TypeError);
+                    }
                 }
                 OpCode::Halt => {
                     return Ok(self.stack.pop().unwrap_or(Value::Null));
@@ -385,21 +523,19 @@ mod tests {
         code.extend_from_slice(&0u32.to_le_bytes());
         code.push(OpCode::Push as u8);
         code.extend_from_slice(&1u32.to_le_bytes());
-        code.push(OpCode::AddInt as u8);
+        code.push(OpCode::Add as u8);
         code.push(OpCode::Push as u8);
         code.extend_from_slice(&2u32.to_le_bytes());
         code.push(OpCode::Eq as u8);
         code.push(OpCode::Halt as u8);
 
-        let mut vm = Vm::new(code, constants);
+        let mut vm = Vm::new(code, constants, vec![]);
         let result = vm.run().expect("VM execution failed");
         assert_eq!(result, Value::Bool(true));
     }
 
     #[test]
     fn test_objects_and_references() {
-        // Create an object, set a field, get it back.
-        // Pushes key "score", pushes value 100, pushes new object, sets field, gets field.
         let constants = vec![Value::Str(Arc::new("score".to_string())), Value::Int(100)];
         let mut code = Vec::new();
         code.push(OpCode::NewObject as u8); // Object is at stack[0]
@@ -413,8 +549,272 @@ mod tests {
         code.extend_from_slice(&0u32.to_le_bytes());
         code.push(OpCode::Halt as u8);
 
-        let mut vm = Vm::new(code, constants);
+        let mut vm = Vm::new(code, constants, vec![]);
         let result = vm.run().expect("VM execution failed");
         assert_eq!(result, Value::Int(100));
+    }
+
+    #[test]
+    fn test_stack_overflow() {
+        let mut code = Vec::new();
+        // Push 0 over 1024 times to trigger stack overflow
+        for _ in 0..1025 {
+            code.push(OpCode::Push as u8);
+            code.extend_from_slice(&0u32.to_le_bytes());
+        }
+        let constants = vec![Value::Int(0)];
+        let mut vm = Vm::new(code, constants, vec![]);
+        let result = vm.run();
+        assert!(matches!(result, Err(VmError::StackOverflow)));
+    }
+
+    #[test]
+    fn test_call_stack_overflow() {
+        let mut code = Vec::new();
+        code.push(OpCode::Call as u8);
+        code.extend_from_slice(&0u32.to_le_bytes()); // target = 0
+        code.extend_from_slice(&0u32.to_le_bytes()); // arg_count = 0
+        
+        let mut vm = Vm::new(code, vec![], vec![]);
+        let result = vm.run();
+        assert!(matches!(result, Err(VmError::CallStackOverflow)));
+    }
+
+    #[test]
+    fn test_unexpected_end_of_code() {
+        let mut code = Vec::new();
+        code.push(OpCode::Push as u8);
+        
+        let mut vm = Vm::new(code, vec![], vec![]);
+        let result = vm.run();
+        assert!(matches!(result, Err(VmError::UnexpectedEndOfCode)));
+    }
+
+    #[test]
+    fn test_arithmetic_exhaustive() {
+        let constants = vec![Value::Int(10), Value::Int(3)];
+        
+        let run_op = |op: OpCode| -> Value {
+            let mut code = Vec::new();
+            code.push(OpCode::Push as u8);
+            code.extend_from_slice(&0u32.to_le_bytes());
+            code.push(OpCode::Push as u8);
+            code.extend_from_slice(&1u32.to_le_bytes());
+            code.push(op as u8);
+            code.push(OpCode::Halt as u8);
+            Vm::new(code, constants.clone(), vec![]).run().unwrap()
+        };
+
+        assert_eq!(run_op(OpCode::Add), Value::Int(13));
+        assert_eq!(run_op(OpCode::Sub), Value::Int(7));
+        assert_eq!(run_op(OpCode::Mul), Value::Int(30));
+        assert_eq!(run_op(OpCode::Div), Value::Int(3)); // 10 / 3 = 3
+
+        // Float arithmetic
+        let fconstants = vec![Value::Float(10.0), Value::Float(2.5)];
+        let run_fop = |op: OpCode| -> Value {
+            let mut code = Vec::new();
+            code.push(OpCode::Push as u8);
+            code.extend_from_slice(&0u32.to_le_bytes());
+            code.push(OpCode::Push as u8);
+            code.extend_from_slice(&1u32.to_le_bytes());
+            code.push(op as u8);
+            code.push(OpCode::Halt as u8);
+            Vm::new(code, fconstants.clone(), vec![]).run().unwrap()
+        };
+
+        assert_eq!(run_fop(OpCode::Add), Value::Float(12.5));
+        assert_eq!(run_fop(OpCode::Sub), Value::Float(7.5));
+        assert_eq!(run_fop(OpCode::Mul), Value::Float(25.0));
+        assert_eq!(run_fop(OpCode::Div), Value::Float(4.0));
+    }
+
+    #[test]
+    fn test_logic_and_comparison() {
+        let constants = vec![Value::Int(10), Value::Int(20), Value::Bool(true), Value::Bool(false)];
+        // idx 0=10, 1=20, 2=true, 3=false
+        
+        let eval_cmp = |a: u32, b: u32, op: OpCode| -> Value {
+            let mut code = Vec::new();
+            code.push(OpCode::Push as u8);
+            code.extend_from_slice(&a.to_le_bytes());
+            code.push(OpCode::Push as u8);
+            code.extend_from_slice(&b.to_le_bytes());
+            code.push(op as u8);
+            code.push(OpCode::Halt as u8);
+            Vm::new(code, constants.clone(), vec![]).run().unwrap()
+        };
+
+        assert_eq!(eval_cmp(0, 1, OpCode::Eq), Value::Bool(false));
+        assert_eq!(eval_cmp(0, 0, OpCode::Eq), Value::Bool(true));
+        assert_eq!(eval_cmp(0, 1, OpCode::Lt), Value::Bool(true));
+        assert_eq!(eval_cmp(1, 0, OpCode::Gt), Value::Bool(true));
+        assert_eq!(eval_cmp(0, 0, OpCode::Lte), Value::Bool(true));
+        assert_eq!(eval_cmp(2, 3, OpCode::And), Value::Bool(false));
+        assert_eq!(eval_cmp(2, 3, OpCode::Or), Value::Bool(true));
+
+        // Test Not
+        let mut code = Vec::new();
+        code.push(OpCode::Push as u8);
+        code.extend_from_slice(&2u32.to_le_bytes()); // Push true
+        code.push(OpCode::Not as u8);
+        code.push(OpCode::Halt as u8);
+        let res = Vm::new(code, constants.clone(), vec![]).run().unwrap();
+        assert_eq!(res, Value::Bool(false));
+    }
+
+    #[test]
+    fn test_list_push() {
+        let constants = vec![Value::Int(5), Value::Int(10)];
+        let mut code = Vec::new();
+        code.push(OpCode::NewList as u8);
+        code.push(OpCode::Dup as u8);
+        code.push(OpCode::Push as u8);
+        code.extend_from_slice(&0u32.to_le_bytes()); // Push 5
+        code.push(OpCode::ListPush as u8);
+        
+        code.push(OpCode::Dup as u8);
+        code.push(OpCode::Push as u8);
+        code.extend_from_slice(&1u32.to_le_bytes()); // Push 10
+        code.push(OpCode::ListPush as u8);
+        code.push(OpCode::Halt as u8);
+
+        let mut vm = Vm::new(code, constants, vec![]);
+        let result = vm.run().unwrap();
+        
+        if let Value::List(vec_rc) = result {
+            let vec = vec_rc.borrow();
+            assert_eq!(vec.len(), 2);
+            assert_eq!(vec[0], Value::Int(5));
+            assert_eq!(vec[1], Value::Int(10));
+        } else {
+            panic!("Expected list");
+        }
+    }
+
+    #[test]
+    fn test_edge_cases() {
+        
+        // Test String + Int TypeError
+        let constants = vec![Value::Str(Arc::new("Hello".to_string())), Value::Int(5)];
+        let mut fail_code = Vec::new();
+        fail_code.push(OpCode::Push as u8);
+        fail_code.extend_from_slice(&0u32.to_le_bytes()); // Push String
+        fail_code.push(OpCode::Push as u8);
+        fail_code.extend_from_slice(&1u32.to_le_bytes()); // Push Int
+        fail_code.push(OpCode::Add as u8);
+        fail_code.push(OpCode::Halt as u8);
+        
+        let res = Vm::new(fail_code, constants.clone(), vec![]).run();
+        assert!(matches!(res, Err(VmError::TypeError)));
+        
+        // Test Division by Zero
+        let mut consts2 = constants.clone();
+        consts2.push(Value::Int(0)); // index 2 is Int(0)
+        
+        let mut fail_code2 = Vec::new();
+        fail_code2.push(OpCode::Push as u8);
+        fail_code2.extend_from_slice(&1u32.to_le_bytes()); // Push 5 (index 1)
+        fail_code2.push(OpCode::Push as u8);
+        fail_code2.extend_from_slice(&2u32.to_le_bytes()); // Push 0 (index 2)
+        fail_code2.push(OpCode::Div as u8);
+        fail_code2.push(OpCode::Halt as u8);
+        
+        let res2 = Vm::new(fail_code2, consts2, vec![]).run();
+        assert!(matches!(res2, Err(VmError::DivisionByZero)));
+        
+        // Test SetMember IndexOutOfBounds
+        let mut out_code = Vec::new();
+        out_code.push(OpCode::NewList as u8);
+        out_code.push(OpCode::Dup as u8); // list
+        out_code.push(OpCode::Push as u8);
+        out_code.extend_from_slice(&1u32.to_le_bytes()); // push Int(5) as key (index out of bounds for empty list!)
+        out_code.push(OpCode::Push as u8);
+        out_code.extend_from_slice(&1u32.to_le_bytes()); // push Int(5) as val
+        out_code.push(OpCode::SetMember as u8);
+        out_code.push(OpCode::Halt as u8);
+        
+        let res3 = Vm::new(out_code, constants.clone(), vec![]).run();
+        assert!(matches!(res3, Err(VmError::IndexOutOfBounds)));
+        
+        // Test Infinite Loop Limit
+        let mut loop_code = Vec::new();
+        loop_code.push(OpCode::Jump as u8);
+        loop_code.extend_from_slice(&0u32.to_le_bytes()); // Jump to 0 (since first 256 bytes are drained)
+        
+        let res4 = Vm::new(loop_code, constants, vec![]).run();
+        assert!(matches!(res4, Err(VmError::ExecutionLimitExceeded)));
+    }
+    
+    #[test]
+    fn test_hash256() {
+        let constants = vec![Value::Str(Arc::new("password123".to_string()))];
+        let mut code = Vec::new();
+        code.push(OpCode::Push as u8);
+        code.extend_from_slice(&0u32.to_le_bytes()); // Push "password123"
+        code.push(OpCode::Hash256 as u8);
+        code.push(OpCode::Halt as u8);
+        
+        let res = Vm::new(code, constants, vec![]).run().unwrap();
+        
+        if let Value::Str(hash_str) = res {
+            // SHA256 of "password123" is ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f
+            assert_eq!(*hash_str, "ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f");
+        } else {
+            panic!("Expected string hash");
+        }
+    }
+
+    #[test]
+    fn test_json_stringify() {
+        let mut code = Vec::new();
+        // Create list [5, 10]
+        code.push(OpCode::NewList as u8);
+        code.push(OpCode::Dup as u8);
+        code.push(OpCode::Push as u8);
+        code.extend_from_slice(&0u32.to_le_bytes()); // Push 5
+        code.push(OpCode::ListPush as u8);
+        code.push(OpCode::Dup as u8);
+        code.push(OpCode::Push as u8);
+        code.extend_from_slice(&1u32.to_le_bytes()); // Push 10
+        code.push(OpCode::ListPush as u8);
+        
+        // Stringify
+        code.push(OpCode::JSONStringify as u8);
+        code.push(OpCode::Halt as u8);
+
+        let constants = vec![Value::Int(5), Value::Int(10)];
+        let res = Vm::new(code, constants, vec![]).run().unwrap();
+        
+        if let Value::Str(json_str) = res {
+            assert_eq!(*json_str, "[5,10]");
+        } else {
+            panic!("Expected JSON string");
+        }
+    }
+
+    #[test]
+    fn test_encrypt_aes() {
+        let constants = vec![
+            Value::Str(Arc::new("{\"data\":\"secret\"}".to_string())), 
+            Value::Str(Arc::new("12345678901234567890123456789012".to_string())) // 32 byte key
+        ];
+        
+        let mut code = Vec::new();
+        code.push(OpCode::Push as u8);
+        code.extend_from_slice(&0u32.to_le_bytes()); // Push payload
+        code.push(OpCode::Push as u8);
+        code.extend_from_slice(&1u32.to_le_bytes()); // Push key
+        code.push(OpCode::EncryptAES as u8);
+        code.push(OpCode::Halt as u8);
+        
+        let res = Vm::new(code, constants, vec![]).run().unwrap();
+        
+        if let Value::Str(hex_str) = res {
+            // Ciphertext should be at least 12 bytes nonce + 16 bytes MAC = 28 bytes = 56 hex chars
+            assert!(hex_str.len() > 56, "Ciphertext too short");
+        } else {
+            panic!("Expected Encrypted hex string");
+        }
     }
 }

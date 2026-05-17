@@ -14,7 +14,9 @@ export type Statement =
     | ExpressionStatement
     | FunctionDeclaration
     | IfStatement
-    | BlockStatement;
+    | BlockStatement
+    | WhileStatement
+    | ForStatement;
 
 export interface LetStatement {
     type: 'LetStatement';
@@ -24,7 +26,7 @@ export interface LetStatement {
 
 export interface AssignStatement {
     type: 'AssignStatement';
-    name: Identifier;
+    left: Identifier | MemberExpression;
     value: Expression;
 }
 
@@ -57,12 +59,29 @@ export interface BlockStatement {
     body: Statement[];
 }
 
+export interface WhileStatement {
+    type: 'WhileStatement';
+    condition: Expression;
+    body: BlockStatement;
+}
+
+export interface ForStatement {
+    type: 'ForStatement';
+    init: Statement | null;
+    condition: Expression | null;
+    update: Expression | null;
+    body: BlockStatement;
+}
+
 export type Expression = 
     | BinaryExpression
     | Literal
     | Identifier
     | CallExpression
-    | ArrayExpression;
+    | ArrayExpression
+    | ObjectExpression
+    | MemberExpression
+    | UpdateExpression;
 
 export interface BinaryExpression {
     type: 'BinaryExpression';
@@ -82,6 +101,17 @@ export interface ArrayExpression {
     elements: Expression[];
 }
 
+export interface ObjectExpression {
+    type: 'ObjectExpression';
+    properties: Property[];
+}
+
+export interface Property {
+    type: 'Property';
+    key: Identifier | Literal;
+    value: Expression;
+}
+
 export interface Identifier {
     type: 'Identifier';
     name: string;
@@ -91,6 +121,19 @@ export interface CallExpression {
     type: 'CallExpression';
     callee: Expression;
     arguments: Expression[];
+}
+
+export interface MemberExpression {
+    type: 'MemberExpression';
+    object: Expression;
+    property: Expression;
+    computed: boolean;
+}
+
+export interface UpdateExpression {
+    type: 'UpdateExpression';
+    operator: string;
+    argument: Expression;
 }
 
 export class Parser {
@@ -131,13 +174,10 @@ export class Parser {
             case TokenType.Return: return this.parseReturnStatement();
             case TokenType.Fn: return this.parseFunctionDeclaration();
             case TokenType.If: return this.parseIfStatement();
+            case TokenType.While: return this.parseWhileStatement();
+            case TokenType.For: return this.parseForStatement();
             case TokenType.LBrace: return this.parseBlockStatement();
-            case TokenType.Identifier:
-                if (this.peekToken.type === TokenType.Eq) {
-                    return this.parseAssignStatement();
-                }
-                return this.parseExpressionStatement();
-            default: return this.parseExpressionStatement();
+            default: return this.parseExpressionOrAssignStatement();
         }
     }
 
@@ -151,13 +191,19 @@ export class Parser {
         return { type: 'LetStatement', name, value };
     }
 
-    private parseAssignStatement(): AssignStatement {
-        const name = { type: 'Identifier' as const, name: this.currentToken.value };
-        this.expect(TokenType.Identifier);
-        this.expect(TokenType.Eq);
-        const value = this.parseExpression(0);
+    private parseExpressionOrAssignStatement(): Statement {
+        const expression = this.parseExpression(0);
+        if (this.currentToken.type === TokenType.Eq) {
+            this.expect(TokenType.Eq);
+            const value = this.parseExpression(0);
+            this.expect(TokenType.Semi);
+            if (expression.type === 'Identifier' || expression.type === 'MemberExpression') {
+                return { type: 'AssignStatement', left: expression, value };
+            }
+            throw new Error("Invalid left-hand side in assignment");
+        }
         this.expect(TokenType.Semi);
-        return { type: 'AssignStatement', name, value };
+        return { type: 'ExpressionStatement', expression };
     }
 
     private parseReturnStatement(): ReturnStatement {
@@ -205,6 +251,41 @@ export class Parser {
         return { type: 'IfStatement', condition, consequent, alternate };
     }
 
+    private parseWhileStatement(): WhileStatement {
+        this.expect(TokenType.While);
+        this.expect(TokenType.LParen);
+        const condition = this.parseExpression(0);
+        this.expect(TokenType.RParen);
+        const body = this.parseBlockStatement();
+        return { type: 'WhileStatement', condition, body };
+    }
+
+    private parseForStatement(): ForStatement {
+        this.expect(TokenType.For);
+        this.expect(TokenType.LParen);
+        let init: Statement | null = null;
+        if (this.currentToken.type !== TokenType.Semi) {
+            init = this.parseStatement();
+        } else {
+            this.expect(TokenType.Semi);
+        }
+        
+        let condition: Expression | null = null;
+        if (this.currentToken.type !== TokenType.Semi) {
+            condition = this.parseExpression(0);
+        }
+        this.expect(TokenType.Semi);
+        
+        let update: Expression | null = null;
+        if (this.currentToken.type !== TokenType.RParen) {
+            update = this.parseExpression(0);
+        }
+        this.expect(TokenType.RParen);
+        
+        const body = this.parseBlockStatement();
+        return { type: 'ForStatement', init, condition, update, body };
+    }
+
     private parseBlockStatement(): BlockStatement {
         this.expect(TokenType.LBrace);
         const body: Statement[] = [];
@@ -235,7 +316,11 @@ export class Parser {
             case TokenType.Minus: return 5;
             case TokenType.Star:
             case TokenType.Slash: return 6;
-            case TokenType.LParen: return 7;
+            case TokenType.LParen: 
+            case TokenType.LBracket:
+            case TokenType.Dot: return 7;
+            case TokenType.PlusPlus:
+            case TokenType.MinusMinus: return 8;
             default: return 0;
         }
     }
@@ -283,13 +368,53 @@ export class Parser {
                 }
                 this.expect(TokenType.RBracket);
                 return { type: 'ArrayExpression', elements };
+            case TokenType.LBrace:
+                this.nextToken();
+                const properties: Property[] = [];
+                while (this.currentToken.type !== TokenType.RBrace && this.currentToken.type !== TokenType.EOF) {
+                    let key: Identifier | Literal;
+                    if (this.currentToken.type === TokenType.Identifier) {
+                        key = { type: 'Identifier', name: this.currentToken.value };
+                        this.nextToken();
+                    } else if (this.currentToken.type === TokenType.String) {
+                        key = { type: 'Literal', value: this.currentToken.value, raw: `"${this.currentToken.value}"` };
+                        this.nextToken();
+                    } else {
+                        throw new Error(`Expected identifier or string as object property key at line ${this.currentToken.line}`);
+                    }
+                    
+                    let value: Expression;
+                    if ((this.currentToken.type as any) === TokenType.Colon) {
+                        this.expect(TokenType.Colon);
+                        value = this.parseExpression(0);
+                    } else if (key.type === 'Identifier') {
+                        // Shorthand: { x } -> { x: x }
+                        value = { type: 'Identifier', name: key.name };
+                    } else {
+                        throw new Error(`Expected ':' after property key at line ${this.currentToken.line}`);
+                    }
+                    
+                    properties.push({ type: 'Property', key, value });
+                    
+                    if ((this.currentToken.type as any) !== TokenType.RBrace) {
+                        this.expect(TokenType.Comma);
+                    }
+                }
+                this.expect(TokenType.RBrace);
+                return { type: 'ObjectExpression', properties };
             default:
-                throw new Error(`Unexpected prefix token ${token.type} at line ${token.line}`);
+                throw new Error(`Unexpected prefix token ${token.type} (${TokenType[token.type]}) at line ${token.line}`);
         }
     }
 
     private parseInfix(left: Expression): Expression {
         const token = this.currentToken;
+        
+        if (token.type === TokenType.PlusPlus || token.type === TokenType.MinusMinus) {
+            this.nextToken();
+            return { type: 'UpdateExpression', operator: token.value, argument: left };
+        }
+
         if (token.type === TokenType.LParen) {
             this.nextToken();
             const args: Expression[] = [];
@@ -302,6 +427,21 @@ export class Parser {
             }
             this.expect(TokenType.RParen);
             return { type: 'CallExpression', callee: left, arguments: args };
+        }
+        
+        if (token.type === TokenType.LBracket) {
+            this.nextToken();
+            const property = this.parseExpression(0);
+            this.expect(TokenType.RBracket);
+            return { type: 'MemberExpression', object: left, property, computed: true };
+        }
+
+        if (token.type === TokenType.Dot) {
+            this.nextToken();
+            const name = this.currentToken.value;
+            this.expect(TokenType.Identifier);
+            const property = { type: 'Identifier' as const, name };
+            return { type: 'MemberExpression', object: left, property, computed: false };
         }
 
         const precedence = this.getPrecedence(token.type);

@@ -1,0 +1,27 @@
+let greeting = "Hello, ";
+let target = "World";
+let message = greeting + target; // String concatenation
+
+let arr = [1, 2, 3];
+arr[0] = arr[0] + 10; // Array mutation
+
+let i = 0;
+let sum = 0;
+
+// Test While loop and length
+while (i < len(arr)) {
+    sum = sum + arr[i];
+    i = i + 1;
+}
+
+// sum should be 11 + 2 + 3 = 16
+
+let obj = {};
+obj.result = sum;
+obj.valid = true;
+
+if (message == "Hello, World" && obj.result == 16 && obj.valid == true) {
+    return 100; // Success code
+}
+
+return 0; // Fail code

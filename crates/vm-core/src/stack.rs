@@ -14,6 +14,8 @@ pub enum VmError {
     UnknownNativeFunction,
     CallStackOverflow,
     UnexpectedEndOfCode,
+    IndexOutOfBounds,
+    ExecutionLimitExceeded,
 }
 
 pub struct Stack {

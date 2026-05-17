@@ -5,7 +5,7 @@ use crate::value::Value;
 // No wee_alloc for now to keep dependencies simple
 
 #[wasm_bindgen]
-pub fn execute(bytecode: &[u8], constants_json: &str, input_json: &str) -> String {
+pub fn execute(bytecode: &[u8], constants_json: &str, input_json: &str, opcode_map: &[u8]) -> String {
     let mut parsed_constants = Vec::new();
 
     // Compute payload hash and set it for verify_bridge
@@ -42,7 +42,7 @@ pub fn execute(bytecode: &[u8], constants_json: &str, input_json: &str) -> Strin
         }
     }
 
-    let mut vm = Vm::new(bytecode.to_vec(), parsed_constants);
+    let mut vm = Vm::new(bytecode.to_vec(), parsed_constants, opcode_map.to_vec());
     
     // Load input_json into locals
     if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(input_json) {
@@ -64,7 +64,7 @@ pub fn execute(bytecode: &[u8], constants_json: &str, input_json: &str) -> Strin
 }
 
 // Helpers to convert between our Value enum and serde_json::Value
-fn json_to_value(v: &serde_json::Value) -> Value {
+pub fn json_to_value(v: &serde_json::Value) -> Value {
     match v {
         serde_json::Value::Null => Value::Null,
         serde_json::Value::Bool(b) => Value::Bool(*b),
@@ -92,7 +92,7 @@ fn json_to_value(v: &serde_json::Value) -> Value {
     }
 }
 
-fn value_to_json(v: &Value) -> serde_json::Value {
+pub fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),

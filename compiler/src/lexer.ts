@@ -10,8 +10,12 @@ export enum TokenType {
     True,
     False,
     Null,
+    While,
+    For,
     Plus,
     Minus,
+    PlusPlus,
+    MinusMinus,
     Star,
     Slash,
     EqEq,
@@ -30,6 +34,8 @@ export enum TokenType {
     RBrace,
     Comma,
     Semi,
+    Dot,
+    Colon,
     LBracket,
     RBracket,
     EOF,
@@ -97,6 +103,8 @@ export class Lexer {
                 case 'return': return { type: TokenType.Return, value: ident, line: this.line };
                 case 'if': return { type: TokenType.If, value: ident, line: this.line };
                 case 'else': return { type: TokenType.Else, value: ident, line: this.line };
+                case 'while': return { type: TokenType.While, value: ident, line: this.line };
+                case 'for': return { type: TokenType.For, value: ident, line: this.line };
                 case 'true': return { type: TokenType.True, value: ident, line: this.line };
                 case 'false': return { type: TokenType.False, value: ident, line: this.line };
                 case 'null': return { type: TokenType.Null, value: ident, line: this.line };
@@ -122,8 +130,18 @@ export class Lexer {
         }
 
         switch (c) {
-            case '+': return { type: TokenType.Plus, value: c, line: this.line };
-            case '-': return { type: TokenType.Minus, value: c, line: this.line };
+            case '+': 
+                if (this.peek() === '+') {
+                    this.advance();
+                    return { type: TokenType.PlusPlus, value: '++', line: this.line };
+                }
+                return { type: TokenType.Plus, value: c, line: this.line };
+            case '-':
+                if (this.peek() === '-') {
+                    this.advance();
+                    return { type: TokenType.MinusMinus, value: '--', line: this.line };
+                }
+                return { type: TokenType.Minus, value: c, line: this.line };
             case '*': return { type: TokenType.Star, value: c, line: this.line };
             case '/': return { type: TokenType.Slash, value: c, line: this.line };
             case '(': return { type: TokenType.LParen, value: c, line: this.line };
@@ -134,6 +152,8 @@ export class Lexer {
             case ']': return { type: TokenType.RBracket, value: c, line: this.line };
             case ',': return { type: TokenType.Comma, value: c, line: this.line };
             case ';': return { type: TokenType.Semi, value: c, line: this.line };
+            case ':': return { type: TokenType.Colon, value: c, line: this.line };
+            case '.': return { type: TokenType.Dot, value: c, line: this.line };
             case '=':
                 if (this.peek() === '=') {
                     this.advance();

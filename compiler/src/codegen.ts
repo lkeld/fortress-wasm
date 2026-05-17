@@ -6,14 +6,10 @@ export enum OpCode {
     Dup         = 0x03,
     LoadLocal   = 0x10,
     StoreLocal  = 0x11,
-    AddInt      = 0x20,
-    SubInt      = 0x21,
-    MulInt      = 0x22,
-    DivInt      = 0x23,
-    AddFloat    = 0x24,
-    SubFloat    = 0x25,
-    MulFloat    = 0x26,
-    DivFloat    = 0x27,
+    Add         = 0x20,
+    Sub         = 0x21,
+    Mul         = 0x22,
+    Div         = 0x23,
     Eq          = 0x30,
     Neq         = 0x31,
     Lt          = 0x32,
@@ -31,6 +27,12 @@ export enum OpCode {
     GetField    = 0x62,
     NewList     = 0x63,
     ListPush    = 0x64,
+    GetMember   = 0x65,
+    SetMember   = 0x66,
+    Length      = 0x67,
+    Hash256     = 0x68,
+    EncryptAES  = 0x69,
+    JSONStringify = 0x6A,
     Call        = 0x70,
     Return      = 0x71,
     CallNative  = 0x80,
@@ -47,7 +49,7 @@ export class CodeGenerator {
     private opcodeMap: Uint8Array = new Uint8Array(256);
     private invertedMap: Uint8Array = new Uint8Array(256);
 
-    public generate(program: Program): { code: Uint8Array, constants: string } {
+    public generate(program: Program): { code: Uint8Array, constants: string, opcodeMap: Uint8Array } {
         // Generate random OpCode mapping
         for (let i = 0; i < 256; i++) {
             this.opcodeMap[i] = i;
@@ -96,19 +98,15 @@ export class CodeGenerator {
             
         const finalPayload = xorKey.toString(16).padStart(2, '0') + obfuscatedConstants;
             
-        const finalCode = new Uint8Array(256 + this.code.length);
-        finalCode.set(this.invertedMap, 0);
-        finalCode.set(new Uint8Array(this.code), 256);
-            
-        return {
-            code: finalCode,
-            constants: finalPayload
-        };
+        const finalCode = new Uint8Array(this.code.length);
+        finalCode.set(this.code, 0);
+        return { code: finalCode, constants: finalPayload, opcodeMap: this.invertedMap };
     }
 
-    private emit(opcode: OpCode, operand?: number) {
-        this.code.push(this.opcodeMap[opcode]);
-        if (operand !== undefined) {
+    private emit(op: OpCode, ...operands: number[]) {
+        // Map the internal opcode to the randomized byte
+        this.code.push(this.opcodeMap[op]);
+        for (const operand of operands) {
             // operand is always 32-bit little endian
             this.code.push(operand & 0xFF);
             this.code.push((operand >> 8) & 0xFF);
@@ -138,8 +136,21 @@ export class CodeGenerator {
                 this.emit(OpCode.StoreLocal, this.resolveLocal(stmt.name.name));
                 break;
             case 'AssignStatement':
-                this.visitExpression(stmt.value);
-                this.emit(OpCode.StoreLocal, this.resolveLocal(stmt.name.name));
+                if (stmt.left.type === 'Identifier') {
+                    this.visitExpression(stmt.value);
+                    this.emit(OpCode.StoreLocal, this.resolveLocal(stmt.left.name));
+                } else if (stmt.left.type === 'MemberExpression') {
+                    this.visitExpression(stmt.left.object);
+                    if (stmt.left.computed) {
+                        this.visitExpression(stmt.left.property);
+                    } else {
+                        const propName = (stmt.left.property as any).name;
+                        this.emit(OpCode.Push, this.addConstant(propName));
+                    }
+                    this.visitExpression(stmt.value);
+                    this.emit(OpCode.SetMember);
+                    this.emit(OpCode.Pop); // SetMember leaves target on stack, statement should clean it up
+                }
                 break;
             case 'ExpressionStatement':
                 this.visitExpression(stmt.expression);
@@ -177,6 +188,34 @@ export class CodeGenerator {
                         this.visitStatement(aStmt);
                     }
                     this.patchJump(jumpOff + 1, this.code.length);
+                }
+                break;
+            case 'WhileStatement':
+                const loopStart = this.code.length;
+                this.visitExpression(stmt.condition);
+                const jumpOutOff = this.code.length;
+                this.emit(OpCode.JumpIfNot, 0);
+                this.visitStatement(stmt.body);
+                this.emit(OpCode.Jump, loopStart);
+                this.patchJump(jumpOutOff + 1, this.code.length);
+                break;
+            case 'ForStatement':
+                if (stmt.init) this.visitStatement(stmt.init);
+                const forLoopStart = this.code.length;
+                let forJumpOutOff = -1;
+                if (stmt.condition) {
+                    this.visitExpression(stmt.condition);
+                    forJumpOutOff = this.code.length;
+                    this.emit(OpCode.JumpIfNot, 0);
+                }
+                this.visitStatement(stmt.body);
+                if (stmt.update) {
+                    this.visitExpression(stmt.update);
+                    this.emit(OpCode.Pop); // Update is an expression evaluated for side effects
+                }
+                this.emit(OpCode.Jump, forLoopStart);
+                if (forJumpOutOff !== -1) {
+                    this.patchJump(forJumpOutOff + 1, this.code.length);
                 }
                 break;
             case 'BlockStatement':
@@ -226,10 +265,10 @@ export class CodeGenerator {
                 this.visitExpression(expr.left);
                 this.visitExpression(expr.right);
                 switch (expr.operator) {
-                    case '+': this.emit(OpCode.AddInt); break;
-                    case '-': this.emit(OpCode.SubInt); break;
-                    case '*': this.emit(OpCode.MulInt); break;
-                    case '/': this.emit(OpCode.DivInt); break;
+                    case '+': this.emit(OpCode.Add); break;
+                    case '-': this.emit(OpCode.Sub); break;
+                    case '*': this.emit(OpCode.Mul); break;
+                    case '/': this.emit(OpCode.Div); break;
                     case '==': this.emit(OpCode.Eq); break;
                     case '<': this.emit(OpCode.Lt); break;
                     case '>': this.emit(OpCode.Gt); break;
@@ -248,7 +287,19 @@ export class CodeGenerator {
                 }
                 
                 if (expr.callee.type === 'Identifier') {
-                    if (expr.callee.name === '__native_call') {
+                    if (expr.callee.name === 'len') {
+                        // expects 1 argument
+                        this.emit(OpCode.Length);
+                    } else if (expr.callee.name === 'hash256') {
+                        // expects 1 argument
+                        this.emit(OpCode.Hash256);
+                    } else if (expr.callee.name === 'encrypt_aes') {
+                        // expects 2 arguments
+                        this.emit(OpCode.EncryptAES);
+                    } else if (expr.callee.name === 'json_stringify') {
+                        // expects 1 argument
+                        this.emit(OpCode.JSONStringify);
+                    } else if (expr.callee.name === '__native_call') {
                         // expects id, arg_count
                         this.emit(OpCode.CallNative);
                     } else {
@@ -272,6 +323,44 @@ export class CodeGenerator {
                 for (const element of expr.elements) {
                     this.visitExpression(element);
                     this.emit(OpCode.ListPush);
+                }
+                break;
+            case 'ObjectExpression':
+                this.emit(OpCode.NewObject);
+                for (const prop of expr.properties) {
+                    const keyName = prop.key.type === 'Identifier' ? prop.key.name : prop.key.value;
+                    this.emit(OpCode.Push, this.addConstant(keyName));
+                    this.visitExpression(prop.value);
+                    this.emit(OpCode.SetMember);
+                }
+                break;
+            case 'MemberExpression':
+                this.visitExpression(expr.object);
+                if (expr.computed) {
+                    this.visitExpression(expr.property);
+                } else {
+                    const propName = (expr.property as any).name;
+                    this.emit(OpCode.Push, this.addConstant(propName));
+                }
+                this.emit(OpCode.GetMember);
+                break;
+            case 'UpdateExpression':
+                // simple desugaring: fetch, push 1, op, store
+                // wait, if it's i++, it modifies i but returns the original value?
+                // we'll implement it as ++i semantics (returns new value) for simplicity since we don't have temporary registers
+                if (expr.argument.type === 'Identifier') {
+                    this.emit(OpCode.LoadLocal, this.resolveLocal(expr.argument.name));
+                    this.emit(OpCode.Push, this.addConstant(1));
+                    this.emit(expr.operator === '++' ? OpCode.Add : OpCode.Sub);
+                    this.emit(OpCode.Dup); // keep value on stack
+                    this.emit(OpCode.StoreLocal, this.resolveLocal(expr.argument.name));
+                } else if (expr.argument.type === 'MemberExpression') {
+                    // This is much harder to desugar properly without duplicating evaluation of the object/property.
+                    // For now, we evaluate obj and prop, get member, add 1, then we have to set member which needs obj and prop again!
+                    // This is too complex for this simple compiler without duping deep stack. We'll leave it as unsupported or partial support for locals only.
+                    throw new Error("Update expressions on members are currently unsupported.");
+                } else {
+                    throw new Error("Invalid left-hand side expression in update operation");
                 }
                 break;
         }

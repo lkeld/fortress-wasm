@@ -11,14 +11,10 @@ pub enum OpCode {
     StoreLocal  = 0x11,
     
     // Arithmetic
-    AddInt      = 0x20,
-    SubInt      = 0x21,
-    MulInt      = 0x22,
-    DivInt      = 0x23,
-    AddFloat    = 0x24,
-    SubFloat    = 0x25,
-    MulFloat    = 0x26,
-    DivFloat    = 0x27,
+    Add         = 0x20,
+    Sub         = 0x21,
+    Mul         = 0x22,
+    Div         = 0x23,
     
     // Comparison
     Eq          = 0x30,
@@ -44,7 +40,15 @@ pub enum OpCode {
     GetField    = 0x62,
     NewList     = 0x63,
     ListPush    = 0x64,
+    GetMember   = 0x65,  // pops key, pops obj/list
+    SetMember   = 0x66,  // pops val, pops key, pops obj/list
+    Length      = 0x67,  // pops obj/list/string, pushes length
+    Hash256     = 0x68,  // pops value, pushes sha256 hash string
     
+    // Cryptography and Parsing
+    EncryptAES  = 0x69,  // pops key, pops payload, pushes encrypted base64 string
+    JSONStringify = 0x6A, // pops value, pushes json string
+
     // Functions
     Call        = 0x70,  // operand = function index in function table
     Return      = 0x71,
@@ -66,14 +70,10 @@ impl TryFrom<u8> for OpCode {
             0x03 => Ok(OpCode::Dup),
             0x10 => Ok(OpCode::LoadLocal),
             0x11 => Ok(OpCode::StoreLocal),
-            0x20 => Ok(OpCode::AddInt),
-            0x21 => Ok(OpCode::SubInt),
-            0x22 => Ok(OpCode::MulInt),
-            0x23 => Ok(OpCode::DivInt),
-            0x24 => Ok(OpCode::AddFloat),
-            0x25 => Ok(OpCode::SubFloat),
-            0x26 => Ok(OpCode::MulFloat),
-            0x27 => Ok(OpCode::DivFloat),
+            0x20 => Ok(OpCode::Add),
+            0x21 => Ok(OpCode::Sub),
+            0x22 => Ok(OpCode::Mul),
+            0x23 => Ok(OpCode::Div),
             0x30 => Ok(OpCode::Eq),
             0x31 => Ok(OpCode::Neq),
             0x32 => Ok(OpCode::Lt),
@@ -91,6 +91,12 @@ impl TryFrom<u8> for OpCode {
             0x62 => Ok(OpCode::GetField),
             0x63 => Ok(OpCode::NewList),
             0x64 => Ok(OpCode::ListPush),
+            0x65 => Ok(OpCode::GetMember),
+            0x66 => Ok(OpCode::SetMember),
+            0x67 => Ok(OpCode::Length),
+            0x68 => Ok(OpCode::Hash256),
+            0x69 => Ok(OpCode::EncryptAES),
+            0x6A => Ok(OpCode::JSONStringify),
             0x70 => Ok(OpCode::Call),
             0x71 => Ok(OpCode::Return),
             0x80 => Ok(OpCode::CallNative),
