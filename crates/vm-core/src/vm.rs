@@ -75,6 +75,7 @@ impl Vm {
     fn set_pc(&mut self, new_pc: usize) {
         self.pc_base = new_pc / 2;
         self.pc_offset = new_pc - self.pc_base;
+        self.current_page_id = -1; // Invalidate JIT cache on jump
     }
 
     fn advance_pc(&mut self, amount: usize) {

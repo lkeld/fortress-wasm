@@ -19,26 +19,26 @@ pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map:
     crate::verify_bridge::set_payload_hash(Box::new(hash_arr));
 
     let mut session_key = [0u8; 32];
-    if image_rgba.len() >= 1024 { // 256 pixels * 4 channels
-        // Dynamic LSB Steganography Extraction
-        // By deriving the extraction stride directly from the randomised R channel of the very first pixel,
-        // we eliminate any fixed mathematical anchor. Without knowing this derivation, linear statistical extraction fails.
-        let primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
-        let stride = primes[(image_rgba[0] as usize) % primes.len()];
-        let mut pixel_offset = 0;
-        
-        for i in 0..32 {
-            let mut byte = 0u8;
-            for bit in 0..8 {
-                pixel_offset = (pixel_offset + stride) % 256;
-                let channel = (i + bit) % 3;
-                let data_idx = pixel_offset * 4 + channel;
-                let bit_val = image_rgba[data_idx] & 1;
-                byte |= bit_val << bit;
+    if let Ok(mut reader) = png::Decoder::new(&image_rgba[..]).read_info() {
+        let mut buf = vec![0; reader.output_buffer_size()];
+        if let Ok(_) = reader.next_frame(&mut buf) {
+                let primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
+                let stride = primes[(buf[0] as usize) % primes.len()];
+                let mut pixel_offset = 0;
+                
+                for i in 0..32 {
+                    let mut byte = 0u8;
+                    for bit in 0..8 {
+                        pixel_offset = (pixel_offset + stride) % 256;
+                        let channel = (i + bit) % 3;
+                        let data_idx = pixel_offset * 4 + channel;
+                        let bit_val = buf[data_idx] & 1;
+                        byte |= bit_val << bit;
+                    }
+                    session_key[i] = byte;
+                }
             }
-            session_key[i] = byte;
         }
-    }
 
     let bytecode_payload = bytecode;
 

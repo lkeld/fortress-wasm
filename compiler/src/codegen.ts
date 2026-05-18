@@ -451,6 +451,30 @@ export class CodeGenerator {
                 }
                 break;
             case 'CallExpression':
+                if (expr.callee.type === 'Identifier') {
+                    if (expr.callee.name === '__native_call') {
+                        // expects id, arg_count inline. First argument is id (must be Literal).
+                        const idNode = expr.arguments[0];
+                        if (idNode.type !== 'Literal' || typeof idNode.value !== 'number') {
+                            throw new Error('__native_call expects a numeric literal ID as the first argument');
+                        }
+                        const nativeId = idNode.value;
+                        const nativeArgs = expr.arguments.slice(1);
+                        
+                        for (const arg of nativeArgs) {
+                            this.visitExpression(arg);
+                        }
+                        
+                        this.emit(OpCode.CallNative, nativeId);
+                        const patchOffset = this.code.length;
+                        this.code.push(nativeArgs.length & 0xFF);
+                        this.code.push((nativeArgs.length >> 8) & 0xFF);
+                        this.code.push((nativeArgs.length >> 16) & 0xFF);
+                        this.code.push((nativeArgs.length >> 24) & 0xFF);
+                        break;
+                    }
+                }
+                
                 // Simple implementation: args are pushed to the stack
                 for (const arg of expr.arguments) {
                     this.visitExpression(arg);
@@ -472,9 +496,6 @@ export class CodeGenerator {
                     } else if (expr.callee.name === 'json_stringify') {
                         // expects 1 argument
                         this.emit(OpCode.JSONStringify);
-                    } else if (expr.callee.name === '__native_call') {
-                        // expects id, arg_count
-                        this.emit(OpCode.CallNative);
                     } else {
                         // We emit the Call instruction with a dummy 0 target, and remember to patch it later
                         this.emit(OpCode.Call, 0);

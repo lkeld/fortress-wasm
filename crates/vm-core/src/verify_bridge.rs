@@ -28,8 +28,27 @@ pub fn init_crypto(
     mut fingerprint: Box<[u8]>,
     epoch_day: u32,
 ) {
-    let mut stego_key = crypto_core::steg::extract_steg_key(&image_bytes, width, height)
-        .expect("Failed to extract steganographic key from image");
+    let mut stego_key = [0u8; 32];
+    if let Ok(mut reader) = png::Decoder::new(&image_bytes[..]).read_info() {
+        let mut buf = vec![0; reader.output_buffer_size()];
+        if let Ok(_) = reader.next_frame(&mut buf) {
+                let primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
+                let stride = primes[(buf[0] as usize) % primes.len()];
+                let mut pixel_offset = 0;
+                
+                for i in 0..32 {
+                    let mut byte = 0u8;
+                    for bit in 0..8 {
+                        pixel_offset = (pixel_offset + stride) % 256;
+                        let channel = (i + bit) % 3;
+                        let data_idx = pixel_offset * 4 + channel;
+                        let bit_val = buf[data_idx] & 1;
+                        byte |= bit_val << bit;
+                    }
+                    stego_key[i] = byte;
+                }
+            }
+        }
 
     let sig_key = derive_signing_key(&stego_key, &session_seed, &fingerprint, epoch_day);
 

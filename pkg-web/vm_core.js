@@ -1,5 +1,5 @@
 /* @ts-self-types="./vm_core.d.ts" */
-const native_call = typeof window !== 'undefined' ? window.native_call : () => "";
+const native_call = (arg0, arg1) => (typeof window !== 'undefined' && typeof window.native_call === 'function') ? window.native_call(arg0, arg1) : "";
 
 
 /**
