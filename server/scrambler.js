@@ -45,7 +45,7 @@ const opcodes_js_1 = require("../compiler/dist/opcodes.js");
  * @param originalMapPath Path to the original opcode_map.json
  * @returns { payload: Uint8Array, newMap: number[], pngBuffer: Buffer }
  */
-function scrambleSessionPayload(fvbcPath, originalMapPath) {
+function scrambleSessionPayload(fvbcPath, originalMapPath, providedSessionKey) {
     const originalBytecode = fs.readFileSync(fvbcPath);
     const originalMap = JSON.parse(fs.readFileSync(originalMapPath, 'utf8'));
     // 1. In original mapping, the array exported from compiler represents opcodeMap.
@@ -75,9 +75,16 @@ function scrambleSessionPayload(fvbcPath, originalMapPath) {
         newInverseMap[newMap[i]] = i;
     }
     // 3.5. Generate 32-byte Session Key early so it can be used for string encryption
-    const sessionKey = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) {
-        sessionKey[i] = Math.floor(Math.random() * 256);
+    let sessionKey = new Uint8Array(32);
+    if (providedSessionKey) {
+        for (let i = 0; i < 32; i++) {
+            sessionKey[i] = providedSessionKey[i];
+        }
+    }
+    else {
+        for (let i = 0; i < 32; i++) {
+            sessionKey[i] = Math.floor(Math.random() * 256);
+        }
     }
     // 4. Translate the payload
     const newBytecode = new Uint8Array(originalBytecode.length);

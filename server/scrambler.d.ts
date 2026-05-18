@@ -5,7 +5,7 @@
  * @param originalMapPath Path to the original opcode_map.json
  * @returns { payload: Uint8Array, newMap: number[], pngBuffer: Buffer }
  */
-export declare function scrambleSessionPayload(fvbcPath: string, originalMapPath: string): {
+export declare function scrambleSessionPayload(fvbcPath: string, originalMapPath: string, providedSessionKey?: Uint8Array | Buffer): {
     payload: Uint8Array;
     newMap: number[];
     pngBuffer: Buffer;
