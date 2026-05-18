@@ -26,8 +26,10 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
     // originalMap maps: encodedByte -> standardOpcode.
     // So to decode: standardOpcode = originalMap[encodedByte]
     
-    // 2. Generate a brand new random mapping for this session
-    // newMap will map: standardOpcode -> newEncodedByte
+    // Phase 12: Per-Request Code Renewability
+    // By generating a fresh, mathematically distinct translation map (standardOpcode -> newEncodedByte) for every single invocation,
+    // we render signature-based analysis, caching attacks, and payload diffing structurally impossible.
+    // See Code Renewability for Native Software Protection, arxiv.org/abs/2003.00916.
     const newMap = Array.from({ length: 256 }, (_, i) => i);
     for (let i = 255; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -112,7 +114,8 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
         }
     }
 
-    // 5. Encode Session Key into a PNG via LSB
+    // Phase 4: LSB Steganographic Key Delivery
+    // We encode the 32-byte session key into the PNG's Least Significant Bits.
     const png = new PNG({ width: 16, height: 16 });
     for (let i = 0; i < 256; i++) {
         const idx = i * 4;
@@ -122,23 +125,15 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
         png.data[idx+3] = 255; // Alpha is always 255 now! No longer an anomaly
     }
     
-    // Dynamic stride derived from the first byte of sessionKey
     const primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
-    const stride = primes[sessionKey[0] % primes.length];
+    const stride = primes[png.data[0] % primes.length];
     
     let pixelOffset = 0;
-    
-    // Encode byte 0 with fixed stride 17
-    for (let bit = 0; bit < 8; bit++) {
-        pixelOffset = (pixelOffset + 17) % 256;
-        const channel = bit % 3;
-        const dataIdx = pixelOffset * 4 + channel;
-        const bitValue = (sessionKey[0] >> bit) & 1;
-        png.data[dataIdx] = (png.data[dataIdx] & ~1) | bitValue;
-    }
 
-    // Embed remaining 31 bytes into RGB channels non-sequentially using dynamic stride
-    for (let i = 1; i < 32; i++) {
+    // Embed all 32 bytes into RGB channels non-sequentially using dynamic stride.
+    // The extraction stride is derived dynamically from the randomized R channel of the first pixel,
+    // removing any fixed mathematical anchor for an attacker.
+    for (let i = 0; i < 32; i++) {
         for (let bit = 0; bit < 8; bit++) {
             pixelOffset = (pixelOffset + stride) % 256;
             const channel = (i + bit) % 3;

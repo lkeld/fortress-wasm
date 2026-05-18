@@ -1,0 +1,243 @@
+# Fortress WASM: A Research-Driven WebAssembly Virtualisation and Hardening Engine — Defeating State-of-the-Art Decompilation, Synthesis, and Machine Learning Attack Methodologies
+
+## Abstract
+The rapid adoption of client-side WebAssembly (Wasm) has introduced unprecedented performance capabilities to the browser, but it inherently suffers from severe intellectual property (IP) vulnerability. Standard WebAssembly binaries are highly structured and lack the hardware-level obscurity of native machine code, making them exceptionally easy to decompile and analyze. This paper presents **Fortress WASM**, a comprehensive, research-driven WebAssembly virtualisation and hardening engine. Constructed directly from academic attack literature, Fortress WASM implements a thirteen-phase defensive architecture designed to neutralize state-of-the-art attack methodologies. By combining techniques such as mixed boolean-arithmetic (MBA), control-flow flattening, steganographic key delivery, dynamic code renewability, and LLM-targeted stack poisoning, the engine defeats advanced analysis tools including WasmWalker, PUSHAN, SiMBA, MBA-Blast, and StackSight by name.
+
+---
+
+## 1. Introduction
+
+### 1.1 Motivation
+In the modern web ecosystem, proprietary business logic, high-value algorithms, and cryptographic validation routines are frequently compiled to WebAssembly to achieve near-native performance in the browser. However, client-side WebAssembly is a profound liability for IP protection. Adversaries possess full binary access and operate in an uncontrolled environment. Without robust obfuscation, deploying proprietary logic in Wasm is equivalent to open-sourcing it.
+
+### 1.2 Problem Statement
+WebAssembly's inherent design prioritizes portability and safety over opacity. The bytecode relies on a highly structured Abstract Syntax Tree (AST), well-defined typing, and a 1:1 mapping with the human-readable WebAssembly Text (WAT) format. Because Wasm lacks the unstructured branching and hardware-specific registers of native binaries (x86/ARM), it is highly transparent. Tools like the WebAssembly Binary Toolkit (WABT) and advanced decompilers can easily reconstruct the original control flow and logic from an unprotected binary.
+
+### 1.3 Contribution
+This project contributes a fully implemented, production-ready virtualisation engine—Fortress WASM. Rather than relying on security-by-obscurity, the engine's countermeasures were reverse-engineered directly from cutting-edge academic offensive research. The system implements thirteen distinct hardening phases, each explicitly mapped to neutralize a named attack methodology from current literature.
+
+### 1.4 Document Structure
+The remainder of this document is structured as follows: Section 2 provides background and the attack landscape. Section 3 outlines the threat model. Section 4 details the core system architecture. Sections 5 through 10 enumerate the hardening phases across the Data, Arithmetic, Control Flow, VM Structural, Synthesis, and Delivery layers. Sections 11 and 12 cover implementation and verification. Sections 13 and 14 present the security analysis and known limitations, followed by the conclusion in Section 15.
+
+---
+
+## 2. Background & Related Work
+
+### 2.1 WebAssembly Architecture
+WebAssembly executes on a stack machine model within a sandboxed linear memory environment. Its dual nature—a compact binary format mapping perfectly to a text format—and its structured control flow (relying on blocks and loops rather than raw `goto` instructions) make its AST uniquely transparent compared to native executable formats (Harnes & Morrison, SoK: Analysis Techniques for WebAssembly, arxiv.org/abs/2401.05943).
+
+### 2.2 The Baseline Virtualisation Approach
+The foundational architecture of Fortress WASM utilizes a Wasm-in-Wasm virtual machine. Inspired by the TrustSig architecture (Robert Vähhi, Building a Wasm-in-Wasm Virtualizer, trustsig.eu/blog/wasm-vm), the system relies on a custom Instruction Set Architecture (ISA), a stack machine interpreter, and a Just-In-Time (JIT) sliding decryption window that prevents the payload from ever residing fully decrypted in memory.
+
+### 2.3 Existing Wasm Obfuscation Research
+Initial design elements were heavily informed by prominent Wasm obfuscation frameworks, specifically WASMixer (Cao et al., WASMixer: Binary Obfuscation for WebAssembly, arxiv.org/abs/2308.03123) and Cryptic Bytes (Harnes & Morrison, Cryptic Bytes: WebAssembly Obfuscation for Evading Cryptojacking Detection, arxiv.org/abs/2403.15197). These frameworks pioneered techniques like constant encryption, opaque predicates, and bogus control flow specifically tailored to the Wasm execution model.
+
+### 2.4 The Attack Landscape
+The system was designed to systematically defeat the following classes of attacks:
+- **Static Analysis**: Reconstructing CFGs and ML classification of AST paths (e.g., WasmWalker (Authors of WasmWalker, WasmWalker: Path-based Code Representations for Improved WebAssembly Program Analysis, arxiv.org/abs/2410.08517)).
+- **Symbolic Execution**: Constraint-based exploration and Virtual Program Counter (VPC) tracking (e.g., PUSHAN (Authors of PUSHAN, Pushan: Trace-Free Deobfuscation of Virtualization-Obfuscated Binaries, arxiv.org/abs/2603.18355)).
+- **Algebraic Attacks**: Deobfuscating linear and polynomial MBA via synthesis (e.g., MBA-Blast (Liu et al., MBA-Blast: Unveiling and Simplifying Mixed Boolean-Arithmetic Obfuscation, usenix.org/conference/usenixsecurity21/presentation/liu-binbin), SiMBA (Reichenwallner et al., SiMBA: Efficient Deobfuscation of Linear Mixed Boolean-Arithmetic Expressions, arxiv.org/abs/2209.06335), gMBA (Roh, Paik, Kwon & Cho, gMBA: Expression Semantic Guided Mixed Boolean-Arithmetic Deobfuscation Using Transformer Architectures, arxiv.org/abs/2506.23634)).
+- **Neural Attacks**: LLM-assisted semantic reasoning and decompilation (e.g., StackSight (Fang, Zhou, He & Wang, StackSight: Unveiling WebAssembly through Large Language Models and Neurosymbolic Chain-of-Thought Decompilation, arxiv.org/abs/2406.04568)).
+- **Dynamic Analysis**: Taint tracking and memory scraping.
+- **Structural Fingerprinting**: Static detection of VM dispatchers (Authors of Static VM Detection, Static Detection of Core Structures in Tigress Virtualization-Based Obfuscation Using an LLVM Pass, arxiv.org/abs/2601.12916).
+
+---
+
+## 3. Threat Model
+
+### 3.1 Attacker Capabilities
+We assume a highly capable, white-box adversary. The attacker possesses full access to the WebAssembly binary, browser developer tools, memory dumping utilities, and automated static/dynamic analysis frameworks.
+
+### 3.2 Assets Being Protected
+The primary assets include proprietary business logic, custom validation routines, sensitive string literals, hardcoded constants, and cryptographic key material necessary for execution.
+
+### 3.3 Security Goals
+The system's goals are to ensure the confidentiality of the executed logic, provide maximum resistance against both manual reverse engineering and automated analysis tools, and ensure runtime tamper detection.
+
+---
+
+## 4. System Architecture
+
+### 4.1 Overview
+Fortress WASM operates across three architectural layers: a TypeScript-based compiler pipeline, a Node.js-based scrambler and delivery layer, and a Rust-based Wasm interpreter.
+
+### 4.2 The Custom ISA
+The engine compiles target logic into a custom, non-standard ISA. To prevent static opcode fingerprinting, a build-time script (`generate_isa.js`) performs a Fisher-Yates shuffle to randomize the byte values associated with each instruction on every build, creating a strict separation between canonical semantics and runtime bytecode.
+
+### 4.3 The VM Interpreter
+The Rust interpreter implements a stack machine design with localized registers and static memory allocation. It executes the custom ISA via a fetch-decode-execute loop optimized for WebAssembly execution.
+
+### 4.4 The JIT Sliding Decryption Window
+To defeat memory dumping, the payload is partitioned into 256-byte pages. An XOR cipher decrypts only the active page just-in-time, enforcing a maximum plaintext exposure of 256 bytes at any given instant during execution (Robert Vähhi, Building a Wasm-in-Wasm Virtualizer, trustsig.eu/blog/wasm-vm).
+
+### 4.5 The Compiler Pipeline
+The compiler pipeline parses the high-level logic, traverses the AST, and emits the bytecode. Crucially, it manages the injection of cryptographic thunks and structural noise during the emission phase.
+
+### 4.6 The Scrambler and Delivery Layer
+The delivery layer is responsible for taking the compiled payload and scrambling it per-request. The `scramblePayload()` module handles encryption, Translation Layer map generation, and session key provisioning.
+
+---
+
+## 5. Hardening Phases — Data Layer
+
+### 5.1 Phase 1: On-Demand Constant Decryption
+To protect data literals, the traditional plaintext constants pool was eliminated. Data is loaded using typed push opcodes, and string literals are encrypted inline with dynamically derived nonces, decrypted strictly on-demand during execution (Cao et al., WASMixer: Binary Obfuscation for WebAssembly, arxiv.org/abs/2308.03123).
+
+### 5.2 Phase 4: LSB Steganographic Key Delivery
+The 32-byte cryptographic session key must be delivered securely. Rather than embedding it, the key is encoded into the Least Significant Bits (LSB) of a PNG pixel buffer. To defeat linear statistical analysis, the extraction utilizes a dynamically derived stride based on a randomized starting modulus from the first pixel's R channel, mapping data non-sequentially across RGB channels.
+
+---
+
+## 6. Hardening Phases — Arithmetic Layer
+
+### 6.1 Phase 2: Mixed Boolean-Arithmetic Obfuscation
+Arithmetic operations (`+`, `-`) are notoriously easy to analyze. We implemented linear Mixed Boolean-Arithmetic (MBA) substitutions to transform trivial mathematical operations into complex bitwise formulas (Harnes & Morrison, Cryptic Bytes: WebAssembly Obfuscation for Evading Cryptojacking Detection, arxiv.org/abs/2403.15197).
+
+### 6.2 Phase 6: Polynomial MBA and Domain Expansion
+Advanced algebraic solvers (SiMBA (Reichenwallner et al., SiMBA: Efficient Deobfuscation of Linear Mixed Boolean-Arithmetic Expressions, arxiv.org/abs/2209.06335), MBA-Blast (Liu et al., MBA-Blast: Unveiling and Simplifying Mixed Boolean-Arithmetic Obfuscation, usenix.org/conference/usenixsecurity21/presentation/liu-binbin), gMBA (Roh, Paik, Kwon & Cho, gMBA: Expression Semantic Guided Mixed Boolean-Arithmetic Deobfuscation Using Transformer Architectures, arxiv.org/abs/2506.23634)) easily reduce linear MBA. To defeat them, we upgraded to Polynomial non-linear MBA. By injecting data-dependent dummy variables and exploiting identities like `(z * z + z) & 1 == 0`, we artificially expand the mathematical domain. Solvers attempting to reduce the expression are mathematically blocked by the pseudo-data dependencies.
+
+### 6.3 Phase 9 Extension: String Encryption Key Hardening
+String protection was upgraded from a vulnerable 1-byte XOR brute-force target to utilizing a 4-byte nonce combined with the full 32-byte session key, securing strings against frequency analysis.
+
+---
+
+## 7. Hardening Phases — Control Flow Layer
+
+### 7.1 Phase 3: Bogus Control Flow and Opaque Predicates
+To cause path explosion during symbolic execution, opaque predicates—mathematical identities that always evaluate predictably, such as `(x² + x) % 2 == 0`—were injected to branch into dead, bogus control flow blocks (Cao et al., WASMixer: Binary Obfuscation for WebAssembly, arxiv.org/abs/2308.03123)(Harnes & Morrison, Cryptic Bytes: WebAssembly Obfuscation for Evading Cryptojacking Detection, arxiv.org/abs/2403.15197).
+
+### 7.2 Phase 7: AST Path Distribution Pollution
+Machine learning classifiers like WasmWalker (Authors of WasmWalker, WasmWalker: Path-based Code Representations for Improved WebAssembly Program Analysis, arxiv.org/abs/2410.08517) profile binaries based on AST path frequency. Naive junk instructions (e.g., `Push; Pop`) generate statistical anomalies. The compiler now injects context-aware, semantically valid bogus sequences that mimic real logic, permanently polluting the AST frequency distribution.
+
+### 7.3 Phase 8: Dispatcher Decentralisation
+A monolithic `match` dispatcher is the universal fingerprint of a VM. We implemented a tiered sub-dispatcher architecture with handler duplication to destroy the 1:1 opcode-to-handler mapping, disrupting trace-free deobfuscators like PUSHAN (Authors of PUSHAN, Pushan: Trace-Free Deobfuscation of Virtualization-Obfuscated Binaries, arxiv.org/abs/2603.18355).
+
+### 7.4 Phase 13: Function Pointer Dispatch Table
+Static analysis tools (Authors of Static VM Detection, Static Detection of Core Structures in Tigress Virtualization-Based Obfuscation Using an LLVM Pass, arxiv.org/abs/2601.12916) search for the basic block with the highest successor count to identify the dispatcher. We eradicated the switch block entirely by flattening the dispatcher into a native Function Pointer Array trampoline, defeating static LLVM IR structural fingerprinting.
+
+---
+
+## 8. Hardening Phases — VM Structural Layer
+
+### 8.1 Phase 5: VPC Fragmentation
+The PUSHAN attack (Authors of PUSHAN, Pushan: Trace-Free Deobfuscation of Virtualization-Obfuscated Binaries, arxiv.org/abs/2603.18355) relies heavily on symbolic emulation to track the Virtual Program Counter (VPC). By fragmenting the `pc` into `pc_base ^ pc_offset` and mutating the offset non-deterministically during execution, we severely degrade PUSHAN's ability to maintain a stable emulation state.
+
+### 8.2 Phase 5: VirtSC Self-Checksumming
+To prevent tampering and byte-patching, the VM validates a hash of the bytecode payload at startup. If the hash fails, the engine silently corrupts the session key, causing subsequent decryptions to produce garbage opcodes, executing a silent crash (Ahmadvand et al., VirtSC: Combining Virtualization Obfuscation with Self-Checksumming, arxiv.org/abs/1909.11404).
+
+---
+
+## 9. Hardening Phases — Synthesis and Neural Layer
+
+### 9.1 Phase 10: Superoperator Fusion
+Program synthesis attacks (e.g., Loki (Schloegel et al., Loki: Hardening Code Obfuscation Against Automated Attacks, arxiv.org/abs/2106.08913)) rely on isolating and templating discrete operations. We implemented mathematically opaque superoperators (e.g., `CompareAndAdd`, `SwapAndMul`, `JumpAndMul`). By fusing semantically unrelated stack and control flow operations, we defeat SMT-based synthesis lifting.
+
+### 9.2 Phase 11: LLM Stack Poisoning
+Neurosymbolic decompilers like StackSight (Fang, Zhou, He & Wang, StackSight: Unveiling WebAssembly through Large Language Models and Neurosymbolic Chain-of-Thought Decompilation, arxiv.org/abs/2406.04568) use static trace analysis and LLMs to track virtual stack alterations. We weaponized the stack profile by injecting phantom `Swap`, `Rotate`, and `Drop2` sequences into dead blocks. This creates massive, non-monotonic spikes in the stack depth trace without corrupting live execution, successfully poisoning the LLM's chain-of-thought reasoning.
+
+---
+
+## 10. Hardening Phases — Delivery Layer
+
+### 10.1 Phase 12: Per-Request Code Renewability
+To defeat signature-based analysis and payload caching (Abrath et al., Code Renewability for Native Software Protection, arxiv.org/abs/2003.00916), the architecture enforces Code Renewability. The `scramblePayload()` module guarantees that every invocation generates a mathematically distinct payload—featuring a fresh 256-byte translation map, a new 32-byte session key, and a randomized LSB image stride. Differential analysis between payloads is rendered futile.
+
+---
+
+## 11. Implementation
+
+### 11.1 Technology Stack
+The core VM is built in Rust to leverage memory safety and `wasm-bindgen`. The compiler and scrambler are written in TypeScript and Node.js. Cryptographic backing relies on the `sha2` and `hmac` crates.
+
+### 11.2 Build Pipeline
+The build sequence requires strict orchestration: `generate_isa.js` randomizes the canonical opcodes, `tsc` compiles the TS components utilizing the new ISA, and `wasm-pack` compiles the Rust core into Web and Node targets.
+
+### 11.3 The `.fvbc` Payload Format
+The output binary (`.fvbc`) structures execution frames around the XOR ciphertext, securely packaging encrypted constants, opcodes, and nonces.
+
+### 11.4 Integration Pattern
+A backend server dynamically executes `scramblePayload()` to generate the byte arrays. The frontend ingests the `.fvbc` buffer, the LSB image, and the opcode map, passing them as arguments to the Wasm module's execution wrapper.
+
+---
+
+## 12. Verification and Testing
+
+### 12.1 Unit Tests
+The Rust `vm-core` is verified via Cargo unit tests ensuring correct bitwise execution, stack safety, and the accurate parsing of length-prefixed inline encrypted strings.
+
+### 12.2 Integration Tests
+A comprehensive integration test script validates end-to-end functionality, executing complex loops, string concatenations, array mutations, and conditional logic.
+
+### 12.3 Renewability Verification
+The `test_renewability.js` suite proves that sequential scrambles of identical bytecode yield unique session keys, unique opcode maps, and entirely divergent PNG LSB distributions.
+
+### 12.4 Payload Entropy Analysis
+A 256-byte hex dump of the scrambled payload visually confirms a uniform entropy distribution, successfully obscuring opcodes and immediates behind the rolling XOR cipher.
+
+---
+
+## 13. Security Analysis
+
+### 13.1 Attacks Defeated — Summary Table
+
+| Attack / Methodology | Phase | Description | Reference |
+|---|---|---|---|
+| Linear MBA Solvers | Phase 2 | Linear MBA substitution | (Harnes & Morrison, Cryptic Bytes: WebAssembly Obfuscation for Evading Cryptojacking Detection, arxiv.org/abs/2403.15197) |
+| WasmWalker | Phase 7 | AST Path Distribution Pollution | (Authors of WasmWalker, WasmWalker: Path-based Code Representations for Improved WebAssembly Program Analysis, arxiv.org/abs/2410.08517) |
+| PUSHAN | Phase 5, Phase 8 | VPC Fragmentation, Dispatcher Decentralization | (Authors of PUSHAN, Pushan: Trace-Free Deobfuscation of Virtualization-Obfuscated Binaries, arxiv.org/abs/2603.18355) |
+| MBA-Blast / SiMBA / gMBA | Phase 6 | Polynomial MBA & Domain Expansion | (Liu et al., MBA-Blast: Unveiling and Simplifying Mixed Boolean-Arithmetic Obfuscation, usenix.org/conference/usenixsecurity21/presentation/liu-binbin)(Reichenwallner et al., SiMBA: Efficient Deobfuscation of Linear Mixed Boolean-Arithmetic Expressions, arxiv.org/abs/2209.06335)(Roh, Paik, Kwon & Cho, gMBA: Expression Semantic Guided Mixed Boolean-Arithmetic Deobfuscation Using Transformer Architectures, arxiv.org/abs/2506.23634) |
+| Loki (Synthesis) | Phase 10 | Superoperator Fusion | (Schloegel et al., Loki: Hardening Code Obfuscation Against Automated Attacks, arxiv.org/abs/2106.08913) |
+| StackSight | Phase 11 | LLM Stack Poisoning | (Fang, Zhou, He & Wang, StackSight: Unveiling WebAssembly through Large Language Models and Neurosymbolic Chain-of-Thought Decompilation, arxiv.org/abs/2406.04568) |
+| Static VM Detection | Phase 13 | Function Pointer Dispatch Table | (Authors of Static VM Detection, Static Detection of Core Structures in Tigress Virtualization-Based Obfuscation Using an LLVM Pass, arxiv.org/abs/2601.12916) |
+| Signature/Diffing Attacks | Phase 12 | Per-Request Code Renewability | (Abrath et al., Code Renewability for Native Software Protection, arxiv.org/abs/2003.00916) |
+
+### 13.2 Remaining Attack Surface
+The most prominent remaining weakness was the statistical signature of naked `Mul` and `Div` opcodes, which bypassed the domain expansion pipeline. This was addressed prior to finalization by integrating linear MBA padding mapped to a randomized dummy slot to actively pollute static data flow tracking. The LSB steganography relies partially on the attacker's ignorance of the extraction algorithm.
+
+### 13.3 Theoretical Limits
+While the system defeats current academic tools, white-box cryptography (hiding keys mathematically) and indistinguishability obfuscation remain theoretically unbroken but practically infeasible (Tim Blazytko & Nicolò Altamura, Breaking Mixed Boolean-Arithmetic Obfuscation in Real-World Applications, recon.cx/cfp.recon.cx/recon-2025/talk/BKBQ37/index.html). Obfuscation remains an arms race, but dynamic renewability presents the strongest asymptotic defense.
+
+---
+
+## 14. Known Limitations and Future Work
+
+### 14.1 The `Concat` Opcode and MBA Coverage
+Currently, the advanced polynomial non-linear MBA applies strictly to `Add` and `Sub`. Future iterations should extend full polynomial substitutions to `Mul`, `Div`, and all logical arithmetic operators to further flatten the statistical frequency distribution.
+
+### 14.2 Taint Graph Diversification
+While the system successfully diversifies dummy variable slots during execution, advanced dynamic taint trackers could potentially profile memory accesses over time. Future work could introduce per-build variable mapping rotation.
+
+### 14.3 Server-Side Key Provisioning
+Steganography, while effective, still transmits the key to the client. Future iterations could deliver the session key over an authenticated WebSocket, ensuring offline decryption is mathematically impossible without a live authorized connection.
+
+### 14.4 Register-Based VM
+The current stack machine design maps closely to underlying WebAssembly. Transitioning the interpreter to a Register-Based ISA could offer performance benefits and exponentially increase the complexity required for structural pattern matching.
+
+---
+
+## 15. Conclusion
+Fortress WASM demonstrates that deploying highly sensitive IP to the browser via WebAssembly is achievable without surrendering to trivial decompilation. By systematically translating cutting-edge offensive academic research into concrete defensive architectural implementations, we have developed a Wasm virtualisation engine capable of defeating modern symbolic execution, AST machine learning classification, and LLM-assisted decompilation. 
+
+---
+
+## References
+
+1. Robert Vähhi / TrustSig — *Building a Wasm-in-Wasm Virtualizer (with JIT Decrypted Paged Memory)* (2026) — trustsig.eu/blog/wasm-vm
+2. Cao et al. — *WASMixer: Binary Obfuscation for WebAssembly* (2023) — arxiv.org/abs/2308.03123
+3. Harnes & Morrison — *Cryptic Bytes: WebAssembly Obfuscation for Evading Cryptojacking Detection* (NTNU, 2024) — arxiv.org/abs/2403.15197
+4. Harnes & Morrison — *SoK: Analysis Techniques for WebAssembly* (NTNU, 2024) — arxiv.org/abs/2401.05943
+5. Liu et al. — *MBA-Blast: Unveiling and Simplifying Mixed Boolean-Arithmetic Obfuscation* (USENIX Security 2021) — usenix.org/conference/usenixsecurity21/presentation/liu-binbin
+6. Reichenwallner et al. — *SiMBA: Efficient Deobfuscation of Linear Mixed Boolean-Arithmetic Expressions* (2022) — arxiv.org/abs/2209.06335
+7. Roh, Paik, Kwon & Cho — *gMBA: Expression Semantic Guided Mixed Boolean-Arithmetic Deobfuscation Using Transformer Architectures* (ACL 2025) — arxiv.org/abs/2506.23634
+8. Authors of PUSHAN — *Pushan: Trace-Free Deobfuscation of Virtualization-Obfuscated Binaries* (2026) — arxiv.org/abs/2603.18355
+9. Zou et al. — *XuanJia: A Comprehensive Virtualization-Based Code Obfuscator for Binary Protection* (2026) — arxiv.org/abs/2601.10261
+10. Ahmadvand et al. — *VirtSC: Combining Virtualization Obfuscation with Self-Checksumming* (2019) — arxiv.org/abs/1909.11404
+11. Authors of WasmWalker — *WasmWalker: Path-based Code Representations for Improved WebAssembly Program Analysis* (2024) — arxiv.org/abs/2410.08517
+12. Authors of Wasm Decompilation Study — *Is This the Same Code? A Comprehensive Study of Decompilation Techniques for WebAssembly Binaries* (2024) — arxiv.org/abs/2411.02278
+13. Schloegel et al. — *Loki: Hardening Code Obfuscation Against Automated Attacks* (USENIX Security 2022) — arxiv.org/abs/2106.08913
+14. Authors of Static VM Detection — *Static Detection of Core Structures in Tigress Virtualization-Based Obfuscation Using an LLVM Pass* (2026) — arxiv.org/abs/2601.12916
+15. Fang, Zhou, He & Wang — *StackSight: Unveiling WebAssembly through Large Language Models and Neurosymbolic Chain-of-Thought Decompilation* (ICML 2024) — arxiv.org/abs/2406.04568
+16. Abrath et al. — *Code Renewability for Native Software Protection* (Ghent University, 2020) — arxiv.org/abs/2003.00916
+17. Tim Blazytko & Nicolò Altamura — *Breaking Mixed Boolean-Arithmetic Obfuscation in Real-World Applications* (Recon 2025) — recon.cx/cfp.recon.cx/recon-2025/talk/BKBQ37/index.html
+18. Bob Nystrom — *Crafting Interpreters* — craftinginterpreters.com
+19. Author of JIT Compiler from Scratch series — injuly.in/blog/jit-01

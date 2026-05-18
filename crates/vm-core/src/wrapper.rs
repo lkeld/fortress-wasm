@@ -6,7 +6,9 @@ use crate::value::Value;
 
 #[wasm_bindgen]
 pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map: &[u8]) -> String {
-    // Compute payload hash and set it for verify_bridge
+    // VirtSC Verification Step 1: Compute the payload hash at the exact moment of ingestion.
+    // This hash is stored globally and verified inside the VM loop. If the payload is patched, the VM silently corrupts the key.
+    // See VirtSC: Combining Virtualization Obfuscation with Self-Checksumming, arxiv.org/abs/1909.11404.
     let mut payload_data = Vec::new();
     payload_data.extend_from_slice(bytecode);
     use sha2::{Sha256, Digest};
@@ -18,25 +20,14 @@ pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map:
 
     let mut session_key = [0u8; 32];
     if image_rgba.len() >= 1024 { // 256 pixels * 4 channels
+        // Dynamic LSB Steganography Extraction
+        // By deriving the extraction stride directly from the randomized R channel of the very first pixel,
+        // we eliminate any fixed mathematical anchor. Without knowing this derivation, linear statistical extraction fails.
         let primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
-        
+        let stride = primes[(image_rgba[0] as usize) % primes.len()];
         let mut pixel_offset = 0;
         
-        // Decode byte 0 with fixed stride 17
-        let mut byte0 = 0u8;
-        for bit in 0..8 {
-            pixel_offset = (pixel_offset + 17) % 256;
-            let channel = bit % 3;
-            let data_idx = pixel_offset * 4 + channel;
-            let bit_val = image_rgba[data_idx] & 1;
-            byte0 |= bit_val << bit;
-        }
-        session_key[0] = byte0;
-        
-        let stride = primes[(byte0 as usize) % primes.len()];
-
-        // Decode remaining 31 bytes with dynamic stride
-        for i in 1..32 {
+        for i in 0..32 {
             let mut byte = 0u8;
             for bit in 0..8 {
                 pixel_offset = (pixel_offset + stride) % 256;

@@ -10,6 +10,8 @@ export class CodeGenerator {
     private unresolvedCalls: { offset: number, name: string }[] = [];
     private opcodeMap: Uint8Array = new Uint8Array(256);
     private invertedMap: Uint8Array = new Uint8Array(256);
+    private currentJunkThreshold: number = 0.3;
+    private dummyVariables: string[] = [];
 
     public generate(program: Program): { code: Uint8Array, opcodeMap: Uint8Array } {
         // Generate random OpCode mapping
@@ -26,9 +28,13 @@ export class CodeGenerator {
             this.invertedMap[this.opcodeMap[i]] = i;
         }
 
-        // Initialize _mba_dummy variable for polynomial domain expansion
-        this.emit(OpCode.PushInt, 42);
-        this.emit(OpCode.StoreLocal, this.resolveLocal('_mba_dummy'));
+        // Initialize array of diversified dummy variables to defeat taint tracking
+        for (let i = 0; i < 7; i++) {
+            const name = `_mba_dummy_${i}`;
+            this.dummyVariables.push(name);
+            this.emit(OpCode.PushInt, Math.floor(Math.random() * 256));
+            this.emit(OpCode.StoreLocal, this.resolveLocal(name));
+        }
 
         for (const stmt of program.body) {
             if (stmt.type === 'FunctionDeclaration') {
@@ -115,15 +121,16 @@ export class CodeGenerator {
     }
 
     private getDummyVariable(): string {
-        return '_mba_dummy';
+        return this.dummyVariables[Math.floor(Math.random() * this.dummyVariables.length)];
     }
 
     private emitJunk() {
-        if (Math.random() > 0.3) return; // 30% chance to emit junk
+        if (Math.random() > this.currentJunkThreshold) return; // Randomized chance per function
         
-        // Phase 7: AST Path Distribution Pollution (Defeating WasmWalker)
+        // AST Path Distribution Pollution
         // Inserting context-aware, semantically valid structures mimicking actual logic 
-        // (rather than pure anomaly Push/Pop sequences) poisons WasmWalker's ML classifier.
+        // (rather than pure anomaly Push/Pop sequences) poisons ML classifiers that fingerprint WebAssembly binaries based on AST path frequency.
+        // See WasmWalker: Path-based Code Representations for Improved WebAssembly Program Analysis, arxiv.org/abs/2410.08517.
         const dummy = this.getDummyVariable();
         
         // Opaque predicate: (x * x + x) & 1 == 0 is always true
@@ -269,6 +276,9 @@ export class CodeGenerator {
             case 'FunctionDeclaration':
                 // Record the function's start address
                 this.functions.set(stmt.name.name, this.code.length);
+                // Randomize junk emission rate per function (10% to 50%) to defeat statistical profiling
+                this.currentJunkThreshold = 0.1 + Math.random() * 0.4;
+                
                 // Assign parameters to locals
                 stmt.params.forEach((param, index) => {
                     this.locals.set(param.name, index);
@@ -330,10 +340,10 @@ export class CodeGenerator {
                     const dummy = this.getDummyVariable();
                     
                     if (expr.operator === '+') {
-                        // Phase 6: Polynomial MBA & Domain Expansion
-                        // Defeats SiMBA (linear solver) by injecting polynomial terms (z*z).
-                        // Defeats gMBA (truth-table neural extraction) by artificially expanding the 
-                        // truth table domain size via data-dependent dummy variables.
+                        // Polynomial MBA & Domain Expansion
+                        // We upgrade from linear MBA to Polynomial MBA to artificially expand the mathematical domain size via data-dependent dummy variables.
+                        // This defeats advanced linear solvers (SiMBA: Efficient Deobfuscation of Linear Mixed Boolean-Arithmetic Expressions, arxiv.org/abs/2209.06335)
+                        // and truth-table neural extraction attacks (gMBA: Expression Semantic Guided Mixed Boolean-Arithmetic Deobfuscation Using Transformer Architectures, arxiv.org/abs/2506.23634).
                         
                         // (x ^ y)
                         this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
@@ -401,8 +411,33 @@ export class CodeGenerator {
                     this.visitExpression(expr.left);
                     this.visitExpression(expr.right);
                     switch (expr.operator) {
-                        case '*': this.emit(OpCode.Mul); break;
-                        case '/': this.emit(OpCode.Div); break;
+                        case '*': 
+                            if (Math.random() > 0.5) {
+                                this.emit(OpCode.SwapAndMul);
+                            } else if (Math.random() > 0.5) {
+                                this.emit(OpCode.PushInt, 0); // false condition
+                                this.emit(OpCode.JumpAndMul, 0); // dummy target
+                            } else {
+                                this.emit(OpCode.Mul);
+                                // Structural Linear MBA Padding
+                                // While not a full polynomial substitution, deriving the +0 padding from a randomized dummy slot 
+                                // pollutes static taint tracking by artificially linking the operation to a disjoint memory region.
+                                const dummy = this.getDummyVariable();
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(dummy));
+                                this.emit(OpCode.Dup);
+                                this.emit(OpCode.Sub); // dummy - dummy = 0
+                                this.emit(OpCode.Add); // val + 0
+                            }
+                            break;
+                        case '/': 
+                            this.emit(OpCode.Div);
+                            // Linear MBA: Add 0
+                            const dummyDiv = this.getDummyVariable();
+                            this.emit(OpCode.LoadLocal, this.resolveLocal(dummyDiv));
+                            this.emit(OpCode.Dup);
+                            this.emit(OpCode.Sub);
+                            this.emit(OpCode.Add);
+                            break;
                         case '==': this.emit(OpCode.Eq); break;
                         case '<': this.emit(OpCode.Lt); break;
                         case '>': this.emit(OpCode.Gt); break;

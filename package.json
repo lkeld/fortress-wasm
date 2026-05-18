@@ -1,17 +1,31 @@
 {
-  "name": "fortress-wasm",
+  "name": "@lkeld/fortress-wasm",
   "version": "1.0.0",
-  "description": "",
+  "description": "Hardened WASM Virtual Machine and Compiler",
   "main": "index.js",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com/"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "cargo test --manifest-path crates/vm-core/Cargo.toml",
+    "build:isa": "node scripts/generate_isa.js",
+    "build:compiler": "tsc -p compiler/tsconfig.json",
+    "build:server": "tsc -p server/tsconfig.json",
+    "build:wasm-node": "wasm-pack build crates/vm-core --target nodejs --out-dir ../../pkg-node && rm -f pkg-node/.gitignore",
+    "build:wasm-web": "wasm-pack build crates/vm-core --target bundler --out-dir ../../pkg-web && rm -f pkg-web/.gitignore",
+    "build": "npm run build:isa && npm run build:compiler && npm run build:server && npm run build:wasm-node && npm run build:wasm-web"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lkeld/fortress-wasm.git"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "wasm",
+    "obfuscation",
+    "vm",
+    "security"
+  ],
+  "author": "lkeld",
   "license": "ISC",
   "type": "commonjs",
   "bugs": {
@@ -23,6 +37,16 @@
     "pngjs": "^7.0.0"
   },
   "devDependencies": {
-    "@types/pngjs": "^6.0.5"
-  }
+    "@types/node": "^20.0.0",
+    "@types/pngjs": "^6.0.5",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "index.js",
+    "compiler/dist",
+    "server/dist",
+    "pkg-node",
+    "pkg-web",
+    "scripts/generate_isa.js"
+  ]
 }

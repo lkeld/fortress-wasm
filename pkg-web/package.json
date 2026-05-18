@@ -1,0 +1,17 @@
+{
+  "name": "vm-core",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "vm_core_bg.wasm",
+    "vm_core.js",
+    "vm_core_bg.js",
+    "vm_core.d.ts"
+  ],
+  "main": "vm_core.js",
+  "types": "vm_core.d.ts",
+  "sideEffects": [
+    "./vm_core.js",
+    "./snippets/*"
+  ]
+}
