@@ -25,4 +25,6 @@ function main() {
     console.log(`Successfully compiled to ${outBase}.fvbc and ${outBase}.opcodes.json`);
 }
 
-main();
+if (require.main === module) {
+    main();
+}
