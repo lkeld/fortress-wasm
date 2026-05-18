@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { PNG } from 'pngjs';
-import { OpCode } from '../compiler/src/opcodes';
+// @ts-ignore
+import { OpCode } from '../compiler/dist/opcodes.js';
 
 /**
  * Dynamically scrambles a compiled .fvbc payload for a specific user session.

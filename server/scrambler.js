@@ -36,7 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.scrambleSessionPayload = scrambleSessionPayload;
 const fs = __importStar(require("fs"));
 const pngjs_1 = require("pngjs");
-const opcodes_1 = require("../compiler/src/opcodes");
+// @ts-ignore
+const opcodes_js_1 = require("../compiler/dist/opcodes.js");
 /**
  * Dynamically scrambles a compiled .fvbc payload for a specific user session.
  *
@@ -87,7 +88,7 @@ function scrambleSessionPayload(fvbcPath, originalMapPath) {
         const newByte = newMap[standardOpcode];
         newBytecode[i] = newByte;
         i++;
-        if (standardOpcode === opcodes_1.OpCode.PushString) { // PushString
+        if (standardOpcode === opcodes_js_1.OpCode.PushString) { // PushString
             // 4 byte nonce
             const nonce = new Uint8Array(4);
             for (let j = 0; j < 4; j++) {
@@ -116,7 +117,7 @@ function scrambleSessionPayload(fvbcPath, originalMapPath) {
                 }
             }
         }
-        else if (standardOpcode === opcodes_1.OpCode.PushFloat || standardOpcode === opcodes_1.OpCode.Call) { // PushFloat (8), Call (8)
+        else if (standardOpcode === opcodes_js_1.OpCode.PushFloat || standardOpcode === opcodes_js_1.OpCode.Call) { // PushFloat (8), Call (8)
             for (let j = 0; j < 8; j++) {
                 if (i < originalBytecode.length) {
                     newBytecode[i] = originalBytecode[i];
@@ -124,14 +125,14 @@ function scrambleSessionPayload(fvbcPath, originalMapPath) {
                 }
             }
         }
-        else if (standardOpcode === opcodes_1.OpCode.PushInt || // PushInt
-            standardOpcode === opcodes_1.OpCode.PushBool || // PushBool
-            standardOpcode === opcodes_1.OpCode.LoadLocal || // LoadLocal
-            standardOpcode === opcodes_1.OpCode.StoreLocal || // StoreLocal
-            standardOpcode === opcodes_1.OpCode.Jump || // Jump
-            standardOpcode === opcodes_1.OpCode.JumpIf || // JumpIf
-            standardOpcode === opcodes_1.OpCode.JumpIfNot || // JumpIfNot
-            standardOpcode === opcodes_1.OpCode.CallNative // CallNative
+        else if (standardOpcode === opcodes_js_1.OpCode.PushInt || // PushInt
+            standardOpcode === opcodes_js_1.OpCode.PushBool || // PushBool
+            standardOpcode === opcodes_js_1.OpCode.LoadLocal || // LoadLocal
+            standardOpcode === opcodes_js_1.OpCode.StoreLocal || // StoreLocal
+            standardOpcode === opcodes_js_1.OpCode.Jump || // Jump
+            standardOpcode === opcodes_js_1.OpCode.JumpIf || // JumpIf
+            standardOpcode === opcodes_js_1.OpCode.JumpIfNot || // JumpIfNot
+            standardOpcode === opcodes_js_1.OpCode.CallNative // CallNative
         ) {
             for (let j = 0; j < 4; j++) {
                 if (i < originalBytecode.length) {
