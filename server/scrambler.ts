@@ -95,7 +95,7 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
                     i++;
                 }
             }
-        } else if (standardOpcode === OpCode.PushFloat || standardOpcode === OpCode.Call) { // PushFloat (8), Call (8)
+        } else if (standardOpcode === OpCode.PushFloat || standardOpcode === OpCode.CallNative || standardOpcode === OpCode.Call) { // PushFloat (8), CallNative (8), Call (8)
             for (let j = 0; j < 8; j++) {
                 if (i < originalBytecode.length) {
                     newBytecode[i] = originalBytecode[i];
@@ -110,7 +110,7 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
             standardOpcode === OpCode.Jump || // Jump
             standardOpcode === OpCode.JumpIf || // JumpIf
             standardOpcode === OpCode.JumpIfNot || // JumpIfNot
-            standardOpcode === OpCode.CallNative    // CallNative
+            standardOpcode === OpCode.JumpAndMul // JumpAndMul
         ) {
             for (let j = 0; j < 4; j++) {
                 if (i < originalBytecode.length) {

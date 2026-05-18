@@ -124,7 +124,7 @@ function scrambleSessionPayload(fvbcPath, originalMapPath, providedSessionKey) {
                 }
             }
         }
-        else if (standardOpcode === opcodes_js_1.OpCode.PushFloat || standardOpcode === opcodes_js_1.OpCode.Call) { // PushFloat (8), Call (8)
+        else if (standardOpcode === opcodes_js_1.OpCode.PushFloat || standardOpcode === opcodes_js_1.OpCode.CallNative || standardOpcode === opcodes_js_1.OpCode.Call) { // PushFloat (8), CallNative (8), Call (8)
             for (let j = 0; j < 8; j++) {
                 if (i < originalBytecode.length) {
                     newBytecode[i] = originalBytecode[i];
@@ -139,7 +139,7 @@ function scrambleSessionPayload(fvbcPath, originalMapPath, providedSessionKey) {
             standardOpcode === opcodes_js_1.OpCode.Jump || // Jump
             standardOpcode === opcodes_js_1.OpCode.JumpIf || // JumpIf
             standardOpcode === opcodes_js_1.OpCode.JumpIfNot || // JumpIfNot
-            standardOpcode === opcodes_js_1.OpCode.CallNative // CallNative
+            standardOpcode === opcodes_js_1.OpCode.JumpAndMul // JumpAndMul
         ) {
             for (let j = 0; j < 4; j++) {
                 if (i < originalBytecode.length) {
