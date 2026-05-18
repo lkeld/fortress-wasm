@@ -16,14 +16,13 @@ function main() {
     const ast = parser.parseProgram();
 
     const codegen = new CodeGenerator();
-    const { code, constants, opcodeMap } = codegen.generate(ast);
+    const { code, opcodeMap } = codegen.generate(ast);
 
     const outBase = sourceFile.replace(/\.fvm$/, '');
     fs.writeFileSync(`${outBase}.fvbc`, Buffer.from(code));
-    fs.writeFileSync(`${outBase}.const.json`, constants);
     fs.writeFileSync(`${outBase}.opcodes.json`, JSON.stringify(Array.from(opcodeMap)));
 
-    console.log(`Successfully compiled to ${outBase}.fvbc, ${outBase}.const.json, and ${outBase}.opcodes.json`);
+    console.log(`Successfully compiled to ${outBase}.fvbc and ${outBase}.opcodes.json`);
 }
 
 main();

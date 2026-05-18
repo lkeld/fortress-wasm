@@ -21,11 +21,16 @@ pub fn set_payload_hash(hash: Box<[u8]>) {
 
 #[wasm_bindgen]
 pub fn init_crypto(
-    mut stego_key: Box<[u8]>,
+    mut image_bytes: Box<[u8]>,
+    width: u32,
+    height: u32,
     mut session_seed: Box<[u8]>,
     mut fingerprint: Box<[u8]>,
     epoch_day: u32,
 ) {
+    let mut stego_key = crypto_core::steg::extract_steg_key(&image_bytes, width, height)
+        .expect("Failed to extract steganographic key from image");
+
     let sig_key = derive_signing_key(&stego_key, &session_seed, &fingerprint, epoch_day);
 
     SIGNING_KEY.with(|k| {
@@ -36,6 +41,7 @@ pub fn init_crypto(
     // Because we take ownership of Box<[u8]>, these exact heap allocations 
     // made by wasm_bindgen when copying from JS are securely wiped before they are freed.
     stego_key.zeroize();
+    image_bytes.zeroize();
     session_seed.zeroize();
     fingerprint.zeroize();
 }

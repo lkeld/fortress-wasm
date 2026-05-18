@@ -97,6 +97,8 @@ export class FortressHost {
 
     private checkAutomation(): any {
         const navigatorAny = navigator as any;
+        const windowAny = window as any;
+        const documentAny = document as any;
         
         const isNative = (fn: any, name: string) => {
             try {
@@ -110,16 +112,23 @@ export class FortressHost {
         const tampered = 
             !isNative(document.createElement, 'createElement') ||
             !isNative(WebGLRenderingContext.prototype.getParameter, 'getParameter') ||
-            !isNative(HTMLCanvasElement.prototype.getContext, 'getContext');
+            !isNative(HTMLCanvasElement.prototype.getContext, 'getContext') ||
+            !isNative(Function.prototype.toString, 'toString');
+
+        const hardwareConcurrency = navigator.hardwareConcurrency || 0;
+        const deviceMemory = navigatorAny.deviceMemory || 0;
 
         return {
             webdriver: navigator.webdriver || false,
-            // @ts-ignore
-            cdc_adoQpoasnfa76pfcZLmcfl: window.cdc_adoQpoasnfa76pfcZLmcfl_ !== undefined,
-            // @ts-ignore
-            document_selenium: document.$cdc_asdjflasutopfhvcZLmcfl_ !== undefined,
+            cdc_adoQpoasnfa76pfcZLmcfl: windowAny.cdc_adoQpoasnfa76pfcZLmcfl_ !== undefined,
+            document_selenium: documentAny.$cdc_asdjflasutopfhvcZLmcfl_ !== undefined,
+            phantom: windowAny.callPhantom !== undefined || windowAny._phantom !== undefined,
+            nightmare: windowAny.__nightmare !== undefined,
+            domAutomation: windowAny.domAutomation !== undefined || windowAny.domAutomationController !== undefined,
             languages_match: navigator.languages && navigator.languages[0] === navigator.language,
             plugins_empty: navigator.plugins.length === 0,
+            hardwareConcurrency,
+            deviceMemory,
             prototype_tampered: tampered
         };
     }

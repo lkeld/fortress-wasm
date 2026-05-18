@@ -21,5 +21,8 @@
   "dependencies": {
     "jimp": "^1.6.1",
     "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/pngjs": "^6.0.5"
   }
 }

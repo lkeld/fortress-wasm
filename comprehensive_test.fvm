@@ -1,9 +1,9 @@
 let greeting = "Hello, ";
 let target = "World";
-let message = greeting + target; // String concatenation
+let message = concat(greeting, target); // String concatenation via dedicated opcode
 
 let arr = [1, 2, 3];
-arr[0] = arr[0] + 10; // Array mutation
+arr[0] = arr[0] + 10; // Array mutation (Polynomial MBA should be active on integer '+')
 
 let i = 0;
 let sum = 0;

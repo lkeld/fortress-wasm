@@ -7,7 +7,7 @@ self.onmessage = async (e: MessageEvent) => {
 
     if (type === 'INIT') {
         try {
-            const { vmCoreBytes, stegoKeyHex, sessionSeedHex, fingerprintHex, epochDay } = payload;
+            const { vmCoreBytes, stegoImageBytes, imageWidth, imageHeight, sessionSeedHex, fingerprintHex, epochDay } = payload;
             
             // Initialize Core Module
             await initCore({ module_or_path: new Uint8Array(vmCoreBytes) });
@@ -17,7 +17,9 @@ self.onmessage = async (e: MessageEvent) => {
             
             // Initialize crypto within the WASM memory (key never leaves WASM)
             init_crypto(
-                hexToBytes(stegoKeyHex), 
+                new Uint8Array(stegoImageBytes),
+                imageWidth,
+                imageHeight,
                 hexToBytes(sessionSeedHex), 
                 hexToBytes(fingerprintHex), 
                 epochDay

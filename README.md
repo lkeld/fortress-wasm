@@ -3,71 +3,51 @@
 > **Looking for the developer guide?** 
 > If you are a developer looking to integrate Fortress WASM into your project to secure your requests, please read the [**Integration & Deployment Guide (`INTEGRATION_GUIDE.md`)**](./INTEGRATION_GUIDE.md).
 
-Fortress WASM is a hardened, standalone bytecode virtual machine implemented in Rust and compiled to WebAssembly. Its primary objective is to facilitate secure, heavily obfuscated execution of application logic and to generate cryptographic request signatures within a protected memory sandbox. This architecture mitigates reverse-engineering, dynamic tampering, and automated bot attacks originating from the JavaScript host environment.
+Fortress WASM is a hardened, standalone bytecode virtual machine implemented in Rust and compiled to WebAssembly. Its primary objective is to facilitate secure, heavily obfuscated execution of application logic and to generate cryptographic request signatures within a protected memory sandbox. 
 
-## 1. Compiler Pipeline & Payload Formatting
+## The Evolution of Fortress WASM: An 8-Phase Research-Driven Hardening Arc
 
-The TypeScript compiler (`compiler/`) translates a custom Javascript-like AST into a highly obfuscated proprietary bytecode format. The compilation pipeline employs two advanced dynamic mutation strategies to prevent static signature generation.
+Fortress WASM was continuously evolved against state-of-the-art academic attacks targeting virtualization obfuscators. The VM implements countermeasures targeting tracing, symbolic execution, and machine learning decompilation.
 
-### 1.1 True Server-Side Polymorphism (Opcode Decoupling)
-The Instruction Set Architecture (ISA) mapping is strictly dynamic and completely decoupled from the binary payload.
-- During compilation, the compiler generates a cryptographically random 256-byte translation map.
-- This map dictates the arbitrary binary byte values representing internal VM opcodes (e.g., `OpCode::Push` may be `0x4A` in build A, but `0xF1` in build B).
-- The bytecode payload (`.fvbc`) is emitted using these randomized instructions.
-- **CRITICAL:** The translation map is *not* prepended to the bytecode. It is exported separately (`opcode_map.json`). In a production environment, the server dynamically injects this map into a heavily obfuscated Javascript variable on the HTML page. An attacker must successfully de-obfuscate the JS environment to obtain the key before they can even begin analyzing the bytecode.
+### Phase 1: Data-Level Hardening
+We eliminated static `constants.json` pools. All strings and constants are now dynamically XOR-encrypted using a rolling key embedded directly into the bytecode stream, preventing static memory scrapers from extracting cryptographic keys or telemetry structure.
 
-### 1.2 Constant Pool Obfuscation
-String literals and numeric constants are extracted into a serialized JSON constant pool.
-- A randomized 1-byte XOR key is generated per compilation.
-- The constant pool is fully XOR-obfuscated using this dynamic key.
-- The XOR key is prepended to the obfuscated JSON string as a hex-encoded byte, guaranteeing that identical logic will produce wildly differing string payloads across unique builds.
+### Phase 2: Mixed Boolean-Arithmetic (MBA) Injection
+To disguise mathematical signatures (e.g. hash algorithms), we replaced standard arithmetic operators with Linear Mixed Boolean-Arithmetic substitutions (e.g., `(x ^ y) + 2*(x & y)`).
 
-## 2. Virtual Machine Architecture (ISA)
+### Phase 3: Bogus Control Flow & Opaque Predicates
+To induce path explosion in constraint solvers and symbolic execution engines, the compiler injects dead code branches guarded by opaque predicates (`(x * x + x) & 1 == 0`), forcing attackers to symbolically explore infinitely branching unreachable paths.
 
-The VM (`crates/vm-core/`) operates as a stack-based machine executing the polymorphic bytecode. 
+### Phase 4: LSB Steganography & Sliding Window Encryption
+Inspired by the *TrustSig* architecture, the bytecode payload is decrypted Just-In-Time using a 256-byte sliding window. Rather than appending the 32-byte rolling XOR key to the payload, we mathematically encoded it into the Least Significant Bits (LSB) of the first 256 pixels' Red channel of a seemingly flawless PNG image (`key.png`), heavily obfuscating the delivery layer.
 
-### 2.1 Execution Bounding & Resilience
-To prevent host-induced Denial-of-Service via payload tampering, the engine implements strict execution bounding:
-- **Stack Depth Limit:** Hard-capped at 1024 elements. Triggering `StackOverflow` aborts execution gracefully.
-- **Recursion Limit:** The `CallFrame` stack is limited to a maximum depth of 64. Triggering `CallStackOverflow` prevents WASM heap exhaustion.
-- **Instruction Bounds Checking:** The `read_byte` and `read_u32` internal macros strictly validate `Program Counter (PC)` bounds against the bytecode array length to prevent `panic!` termination during execution of malformed payloads.
-- **Proof-of-Work Loop Support:** The VM natively supports math loops and string indexing, allowing the server to enforce computationally expensive cryptographic challenges (e.g., hash generation) on the client before proceeding.
+### Phase 5: VPC Fragmentation & VirtSC Checksumming (Defeating PUSHAN)
+To combat *PUSHAN*'s constraint-free symbolic emulation which relies on Virtual Program Counter (VPC) tracking:
+- **VPC Fragmentation**: The VPC `pc` was split into interacting `pc_base` and `pc_offset` registers. Sequential updates are dynamically distributed across these variables to destroy PUSHAN's sequential memory load heuristics.
+- **VirtSC Integrity Checking**: We integrated runtime memory hashing. The VM verifies the *encrypted* bytecode array against its expected digest. If tracing tools attempt to patch the bytecode, the session key is silently corrupted, yielding garbage execution.
 
-### 2.2 Memory Model & Serialization
-Variables and complex types (Lists, Objects) utilize Rust's `Rc<RefCell<...>>` smart pointers. This enables full reference semantics within the VM stack, allowing shared object mutation across localized scope frames without allocating extraneous heap clones.
-The VM now natively supports `OpCode::JSONStringify`, which safely leverages `serde_json` to parse complex heap reference structures back into compliant, minified JSON strings inside the sandbox.
+### Phase 6: Polynomial MBA & Domain Expansion (Defeating SiMBA & gMBA)
+*SiMBA* and *MBA-Blast* trivially simplify linear MBAs by solving signature vectors. Neural approaches like *gMBA* bypass syntactic complexity via truth-table sampling.
+- **Polynomial Upgrade**: Linear MBAs were upgraded to polynomial expressions.
+- **Domain Expansion**: We inject data-dependent dummy variables fetched from the local environment into the polynomial expressions. This artificially and exponentially expands the truth-table input domain size, rendering semantic extraction computationally intractable.
 
-## 3. Cryptographic Integrations
+### Phase 7: AST Path Distribution Pollution (Defeating WasmWalker)
+*WasmWalker* trains ML classifiers on AST structural paths. Pure random junk bytes (e.g., `Push; Pop`) are easily flagged as anomalous. Our compiler's `emitJunk()` now synthesizes context-aware, semantically valid dummy AST sequences—mimicking real logic and local variable usage to seamlessly blend into legitimate structural signatures.
 
-### 3.1 AES-GCM Telemetry Encryption
-To prevent Data-in-Transit interception within the browser environment, all data payloads generated by the VM are encrypted prior to being returned to Javascript.
-- The VM features a native `OpCode::EncryptAES`.
-- When called, the VM generates a 96-bit cryptographically secure random nonce.
-- The plaintext payload is encrypted using a 256-bit symmetric session key via AES-GCM.
-- The opcode returns a secure hex-encoded ciphertext block (`nonce + ciphertext + MAC`) that is mathematically impossible for the JS environment or an intercepting extension to decrypt.
+### Phase 8: Dispatcher Decentralization (Defeating Tracers)
+A centralized massive `switch` or `match` block is the universal structural fingerprint of a VM. To shatter this profile:
+- We shattered the monolithic `match` dispatcher into a tiered hierarchy of sub-dispatchers.
+- Opcode routing is structurally fragmented via `if/else` boundaries, destroying the 1:1 opcode-to-handler relationship and obfuscating the fetch-decode-execute loop.
 
-### 3.2 HKDF Signing Key Derivation
-Upon worker initialization, the engine consumes three input vectors: `stego_key`, `session_seed`, and `fingerprint`.
-- **Key Passing:** Vectors are transferred across the WASM boundary strictly as `Box<[u8]>`. This transfers memory ownership to Rust and maps directly to the precise heap allocation instantiated by `wasm_bindgen`.
-- **Expansion:** HKDF-SHA512 derives a 32-byte master signing key bound to the current `epoch_day`.
-- **Cryptographic Zeroization:** Immediately following derivation, the `Box<[u8]>` inputs and the intermediate `ikm` and `salt` buffers are mathematically zeroized using the `zeroize` crate, eradicating the master key vectors from WASM linear memory prior to deallocation.
+## Cryptographic Integrations
 
-## 4. Environment Hardening & Anti-Tamper
+### AES-GCM Telemetry Encryption
+To prevent Data-in-Transit interception within the browser environment, all data payloads generated by the VM are encrypted using AES-GCM (with a 96-bit random nonce) via a native `OpCode::EncryptAES`.
 
-Fortress WASM guarantees the integrity of both the execution logic and the Javascript host environment.
+### HKDF Signing Key Derivation
+Upon worker initialization, the engine derives a 32-byte master signing key using HKDF-SHA512. Immediately following derivation, intermediate vectors are mathematically zeroized from linear memory using the `zeroize` crate to thwart snapshot dumping.
 
-### 4.1 Payload Cryptographic Checksumming
-- During `execute()`, the VM computes a SHA-256 digest of the combined polymorphic bytecode and the obfuscated constants array.
-- This digest is stored securely within a thread-local execution context.
-- During `sign_request()`, the engine appends the hex-encoded payload hash to the normalized request message body before applying the HMAC-SHA256 cipher.
-- **Result:** An attacker modifying a single byte of the execution payload (e.g., swapping a `JumpIf` to a `Jump`) intrinsically alters the `PAYLOAD_HASH`, generating a mathematically invalid backend signature without terminating the client.
-
-### 4.2 Prototype Integrity Checking
-The host JS bridge evaluates critical browser prototypes to detect DOM hooking.
-- An attacker overriding `document.createElement` or `WebGLRenderingContext.prototype.getParameter` via Javascript `Proxy` objects or getters will be instantly identified.
-- The bridge utilizes `Function.prototype.toString.call()` to explicitly verify the native code signature, passing a `tampered` flag directly into the encrypted WASM telemetry payload.
-
-## 5. Build Deployment
+## Build Deployment
 
 ```bash
 # Compile the secure Rust engine

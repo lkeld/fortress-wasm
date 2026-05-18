@@ -5,44 +5,54 @@ use crate::value::Value;
 // No wee_alloc for now to keep dependencies simple
 
 #[wasm_bindgen]
-pub fn execute(bytecode: &[u8], constants_json: &str, input_json: &str, opcode_map: &[u8]) -> String {
-    let mut parsed_constants = Vec::new();
-
+pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map: &[u8]) -> String {
     // Compute payload hash and set it for verify_bridge
     let mut payload_data = Vec::new();
     payload_data.extend_from_slice(bytecode);
-    payload_data.extend_from_slice(constants_json.as_bytes());
     use sha2::{Sha256, Digest};
     let mut hasher = Sha256::new();
     hasher.update(&payload_data);
     let hash = hasher.finalize();
     let hash_arr: [u8; 32] = hash.into();
     crate::verify_bridge::set_payload_hash(Box::new(hash_arr));
-    
-    // Simple XOR decryption using the prepended random key
-    let decrypted_json = if constants_json.starts_with('[') {
-        constants_json.to_string()
-    } else if constants_json.len() >= 2 {
-        let xor_key = u8::from_str_radix(&constants_json[0..2], 16).unwrap_or(0x42);
-        let bytes = (2..constants_json.len())
-            .step_by(2)
-            .filter_map(|i| u8::from_str_radix(&constants_json[i..i + 2], 16).ok())
-            .map(|b| b ^ xor_key)
-            .collect::<Vec<u8>>();
-        String::from_utf8(bytes).unwrap_or_else(|_| "[]".to_string())
-    } else {
-        "[]".to_string()
-    };
 
-    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&decrypted_json) {
-        if let Some(arr) = json_val.as_array() {
-            for v in arr {
-                parsed_constants.push(json_to_value(v));
-            }
+    let mut session_key = [0u8; 32];
+    if image_rgba.len() >= 1024 { // 256 pixels * 4 channels
+        let primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
+        
+        let mut pixel_offset = 0;
+        
+        // Decode byte 0 with fixed stride 17
+        let mut byte0 = 0u8;
+        for bit in 0..8 {
+            pixel_offset = (pixel_offset + 17) % 256;
+            let channel = bit % 3;
+            let data_idx = pixel_offset * 4 + channel;
+            let bit_val = image_rgba[data_idx] & 1;
+            byte0 |= bit_val << bit;
         }
+        session_key[0] = byte0;
+        
+        let stride = primes[(byte0 as usize) % primes.len()];
+
+        // Decode remaining 31 bytes with dynamic stride
+        for i in 1..32 {
+            let mut byte = 0u8;
+            for bit in 0..8 {
+                pixel_offset = (pixel_offset + stride) % 256;
+                let channel = (i + bit) % 3;
+                let data_idx = pixel_offset * 4 + channel;
+                let bit_val = image_rgba[data_idx] & 1;
+                byte |= bit_val << bit;
+            }
+            session_key[i] = byte;
+        }
+        println!("Wrapper Session Key: {:?}", session_key);
     }
 
-    let mut vm = Vm::new(bytecode.to_vec(), parsed_constants, opcode_map.to_vec());
+    let bytecode_payload = bytecode;
+
+    let mut vm = Vm::new(bytecode_payload.to_vec(), opcode_map.to_vec(), session_key);
     
     // Load input_json into locals
     if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(input_json) {
@@ -57,8 +67,8 @@ pub fn execute(bytecode: &[u8], constants_json: &str, input_json: &str, opcode_m
         Ok(result) => {
             value_to_json(&result).to_string()
         },
-        Err(_) => {
-            r#"{"status": false, "error": "execution_failed"}"#.to_string()
+        Err(e) => {
+            format!(r#"{{"status": false, "error": "{:?}"}}"#, e)
         }
     }
 }

@@ -1,47 +1,9 @@
 import { Program, Statement, Expression, Node } from './parser';
 
-export enum OpCode {
-    Push        = 0x01,
-    Pop         = 0x02,
-    Dup         = 0x03,
-    LoadLocal   = 0x10,
-    StoreLocal  = 0x11,
-    Add         = 0x20,
-    Sub         = 0x21,
-    Mul         = 0x22,
-    Div         = 0x23,
-    Eq          = 0x30,
-    Neq         = 0x31,
-    Lt          = 0x32,
-    Gt          = 0x33,
-    Lte         = 0x34,
-    Gte         = 0x35,
-    And         = 0x40,
-    Or          = 0x41,
-    Not         = 0x42,
-    Jump        = 0x50,
-    JumpIf      = 0x51,
-    JumpIfNot   = 0x52,
-    NewObject   = 0x60,
-    SetField    = 0x61,
-    GetField    = 0x62,
-    NewList     = 0x63,
-    ListPush    = 0x64,
-    GetMember   = 0x65,
-    SetMember   = 0x66,
-    Length      = 0x67,
-    Hash256     = 0x68,
-    EncryptAES  = 0x69,
-    JSONStringify = 0x6A,
-    Call        = 0x70,
-    Return      = 0x71,
-    CallNative  = 0x80,
-    Halt        = 0xFF,
-}
+import { OpCode } from './opcodes';
 
 export class CodeGenerator {
     private code: number[] = [];
-    private constants: any[] = [];
     private locals: Map<string, number> = new Map();
     private functions: Map<string, number> = new Map();
     private functionBodies: Statement[] = [];
@@ -49,7 +11,7 @@ export class CodeGenerator {
     private opcodeMap: Uint8Array = new Uint8Array(256);
     private invertedMap: Uint8Array = new Uint8Array(256);
 
-    public generate(program: Program): { code: Uint8Array, constants: string, opcodeMap: Uint8Array } {
+    public generate(program: Program): { code: Uint8Array, opcodeMap: Uint8Array } {
         // Generate random OpCode mapping
         for (let i = 0; i < 256; i++) {
             this.opcodeMap[i] = i;
@@ -63,6 +25,10 @@ export class CodeGenerator {
         for (let i = 0; i < 256; i++) {
             this.invertedMap[this.opcodeMap[i]] = i;
         }
+
+        // Initialize _mba_dummy variable for polynomial domain expansion
+        this.emit(OpCode.PushInt, 42);
+        this.emit(OpCode.StoreLocal, this.resolveLocal('_mba_dummy'));
 
         for (const stmt of program.body) {
             if (stmt.type === 'FunctionDeclaration') {
@@ -90,17 +56,10 @@ export class CodeGenerator {
             this.patchJump(call.offset, target);
         }
         
-        const constantsJsonStr = JSON.stringify(this.constants);
-        const xorKey = Math.floor(Math.random() * 256);
-        const obfuscatedConstants = Array.from(constantsJsonStr)
-            .map(char => (char.charCodeAt(0) ^ xorKey).toString(16).padStart(2, '0'))
-            .join('');
-            
-        const finalPayload = xorKey.toString(16).padStart(2, '0') + obfuscatedConstants;
-            
         const finalCode = new Uint8Array(this.code.length);
         finalCode.set(this.code, 0);
-        return { code: finalCode, constants: finalPayload, opcodeMap: this.invertedMap };
+
+        return { code: finalCode, opcodeMap: this.invertedMap };
     }
 
     private emit(op: OpCode, ...operands: number[]) {
@@ -115,11 +74,37 @@ export class CodeGenerator {
         }
     }
 
-    private addConstant(value: any): number {
-        const idx = this.constants.findIndex(c => c === value);
-        if (idx !== -1) return idx;
-        this.constants.push(value);
-        return this.constants.length - 1;
+    private emitFloat(value: number) {
+        this.code.push(this.opcodeMap[OpCode.PushFloat]);
+        const arr = new Float64Array(1);
+        arr[0] = value;
+        const bytes = new Uint8Array(arr.buffer);
+        for (let i = 0; i < 8; i++) {
+            this.code.push(bytes[i]);
+        }
+    }
+
+    private emitString(value: string) {
+        this.code.push(this.opcodeMap[OpCode.PushString]);
+        const encoder = new TextEncoder();
+        const bytes = encoder.encode(value);
+        
+        // Emit 4-byte random nonce
+        const nonce = new Uint8Array(4);
+        for (let i = 0; i < 4; i++) {
+            nonce[i] = Math.floor(Math.random() * 256);
+            this.code.push(nonce[i]);
+        }
+        
+        this.code.push(bytes.length & 0xFF);
+        this.code.push((bytes.length >> 8) & 0xFF);
+        this.code.push((bytes.length >> 16) & 0xFF);
+        this.code.push((bytes.length >> 24) & 0xFF);
+        
+        // Write string bytes in plaintext (scrambler.ts will XOR-encrypt them using the 32-byte session key)
+        for (let i = 0; i < bytes.length; i++) {
+            this.code.push(bytes[i]);
+        }
     }
 
     private resolveLocal(name: string): number {
@@ -129,7 +114,65 @@ export class CodeGenerator {
         return this.locals.get(name)!;
     }
 
+    private getDummyVariable(): string {
+        return '_mba_dummy';
+    }
+
+    private emitJunk() {
+        if (Math.random() > 0.3) return; // 30% chance to emit junk
+        
+        // Phase 7: AST Path Distribution Pollution (Defeating WasmWalker)
+        // Inserting context-aware, semantically valid structures mimicking actual logic 
+        // (rather than pure anomaly Push/Pop sequences) poisons WasmWalker's ML classifier.
+        const dummy = this.getDummyVariable();
+        
+        // Opaque predicate: (x * x + x) & 1 == 0 is always true
+        const x = Math.floor(Math.random() * 100);
+        this.emit(OpCode.PushInt, x);
+        this.emit(OpCode.Dup);
+        this.emit(OpCode.Dup);
+        
+        this.emit(OpCode.Mul);
+        this.emit(OpCode.Add);
+        this.emit(OpCode.PushInt, 1);
+        this.emit(OpCode.BitAnd);
+        
+        this.emit(OpCode.PushInt, 0);
+        this.emit(OpCode.Eq);
+        
+        const jumpIfOff = this.code.length;
+        this.emit(OpCode.JumpIf, 0); // Jump past junk if true (always)
+        
+        // Dead code block (Context-aware AST path targeting rare opcodes)
+        if (dummy) {
+            const dummyIdx = this.resolveLocal(dummy);
+            this.emit(OpCode.LoadLocal, dummyIdx);
+            this.emit(OpCode.PushInt, Math.floor(Math.random() * 256));
+            
+            // Actively target underrepresented opcodes to flatten the ML distribution profile
+            const rareOps = [
+                OpCode.BitXor, OpCode.BitOr, OpCode.Shr, OpCode.Shl, 
+                OpCode.Gt, OpCode.Lt, OpCode.Eq, OpCode.Neq
+            ];
+            const rareOp = rareOps[Math.floor(Math.random() * rareOps.length)];
+            this.emit(rareOp);
+            
+            this.emit(OpCode.StoreLocal, dummyIdx); // Fake store back (never executes)
+        } else {
+            // Fake arithmetic targeting List and hashing ops which are statistically rare
+            this.emit(OpCode.NewList);
+            this.emit(OpCode.PushInt, 456);
+            this.emit(OpCode.ListPush);
+            this.emit(OpCode.Hash256);
+            this.emit(OpCode.Pop);
+        }
+        
+        this.patchJump(jumpIfOff + 1, this.code.length);
+    }
+
     private visitStatement(stmt: Statement) {
+        this.emitJunk();
+
         switch (stmt.type) {
             case 'LetStatement':
                 this.visitExpression(stmt.value);
@@ -145,7 +188,7 @@ export class CodeGenerator {
                         this.visitExpression(stmt.left.property);
                     } else {
                         const propName = (stmt.left.property as any).name;
-                        this.emit(OpCode.Push, this.addConstant(propName));
+                        this.emitString(propName);
                     }
                     this.visitExpression(stmt.value);
                     this.emit(OpCode.SetMember);
@@ -160,7 +203,7 @@ export class CodeGenerator {
                 if (stmt.value) {
                     this.visitExpression(stmt.value);
                 } else {
-                    this.emit(OpCode.Push, this.addConstant(null));
+                    this.emit(OpCode.PushNull);
                 }
                 this.emit(OpCode.Return);
                 break;
@@ -238,12 +281,13 @@ export class CodeGenerator {
                 
                 // Ensure a return at the end of the function if not present
                 if (this.code[this.code.length - 1] !== OpCode.Return) {
-                    this.emit(OpCode.Push, this.addConstant(null));
+                    this.emit(OpCode.PushNull);
                     this.emit(OpCode.Return);
                 }
                 break;
         }
     }
+
 
     private patchJump(offset: number, target: number) {
         this.code[offset] = target & 0xFF;
@@ -255,29 +299,120 @@ export class CodeGenerator {
     private visitExpression(expr: Expression) {
         switch (expr.type) {
             case 'Literal':
-                const constIdx = this.addConstant(expr.value);
-                this.emit(OpCode.Push, constIdx);
+                if (typeof expr.value === 'number') {
+                    if (Number.isInteger(expr.value)) {
+                        this.emit(OpCode.PushInt, expr.value);
+                    } else {
+                        this.emitFloat(expr.value);
+                    }
+                } else if (typeof expr.value === 'string') {
+                    this.emitString(expr.value);
+                } else if (typeof expr.value === 'boolean') {
+                    this.emit(OpCode.PushBool, expr.value ? 1 : 0);
+                } else if (expr.value === null) {
+                    this.emit(OpCode.PushNull);
+                }
                 break;
             case 'Identifier':
                 this.emit(OpCode.LoadLocal, this.resolveLocal(expr.name));
                 break;
             case 'BinaryExpression':
-                this.visitExpression(expr.left);
-                this.visitExpression(expr.right);
-                switch (expr.operator) {
-                    case '+': this.emit(OpCode.Add); break;
-                    case '-': this.emit(OpCode.Sub); break;
-                    case '*': this.emit(OpCode.Mul); break;
-                    case '/': this.emit(OpCode.Div); break;
-                    case '==': this.emit(OpCode.Eq); break;
-                    case '<': this.emit(OpCode.Lt); break;
-                    case '>': this.emit(OpCode.Gt); break;
-                    case '<=': this.emit(OpCode.Lte); break;
-                    case '>=': this.emit(OpCode.Gte); break;
-                    case '!=': this.emit(OpCode.Neq); break;
-                    case '&&': this.emit(OpCode.And); break;
-                    case '||': this.emit(OpCode.Or); break;
-                    default: throw new Error(`Unsupported operator ${expr.operator}`);
+                if (expr.operator === '+' || expr.operator === '-') {
+                    this.visitExpression(expr.left);
+                    this.visitExpression(expr.right);
+                    
+                    const tmpRight = `_mba_r_${Math.floor(Math.random() * 1000000)}`;
+                    const tmpLeft = `_mba_l_${Math.floor(Math.random() * 1000000)}`;
+                    
+                    this.emit(OpCode.StoreLocal, this.resolveLocal(tmpRight));
+                    this.emit(OpCode.StoreLocal, this.resolveLocal(tmpLeft));
+                    
+                    const dummy = this.getDummyVariable();
+                    
+                    if (expr.operator === '+') {
+                        // Phase 6: Polynomial MBA & Domain Expansion
+                        // Defeats SiMBA (linear solver) by injecting polynomial terms (z*z).
+                        // Defeats gMBA (truth-table neural extraction) by artificially expanding the 
+                        // truth table domain size via data-dependent dummy variables.
+                        
+                        // (x ^ y)
+                        this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                        this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                        this.emit(OpCode.BitXor);
+                        
+                        // ((x & y) << 1)
+                        this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                        this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                        this.emit(OpCode.BitAnd);
+                        this.emit(OpCode.PushInt, 1);
+                        this.emit(OpCode.Shl);
+                        
+                        this.emit(OpCode.Add);
+                        
+                        if (dummy) {
+                            // + ((z * z + z) & 1) * x  ==> Adds 0, but creates polynomial data dependency on 'z'
+                            this.emit(OpCode.LoadLocal, this.resolveLocal(dummy));
+                            this.emit(OpCode.Dup);
+                            this.emit(OpCode.LoadLocal, this.resolveLocal(dummy));
+                            this.emit(OpCode.Mul); // z * z
+                            this.emit(OpCode.Add); // z * z + z
+                            this.emit(OpCode.PushInt, 1);
+                            this.emit(OpCode.BitAnd); // (z * z + z) & 1 -> 0
+                            
+                            this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                            this.emit(OpCode.Mul); // 0 * x -> 0
+                            this.emit(OpCode.Add); // Add 0 to result
+                        }
+                    } else if (expr.operator === '-') {
+                        // x - y == (x ^ ~y) + 2 * (x & ~y) + 1
+                        this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                        this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                        this.emit(OpCode.BitNot);
+                        this.emit(OpCode.BitXor);
+                        
+                        this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                        this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                        this.emit(OpCode.BitNot);
+                        this.emit(OpCode.BitAnd);
+                        this.emit(OpCode.PushInt, 1);
+                        this.emit(OpCode.Shl);
+                        
+                        this.emit(OpCode.Add);
+                        
+                        this.emit(OpCode.PushInt, 1);
+                        this.emit(OpCode.Add);
+                        
+                        if (dummy) {
+                            // - ((z * z + z) & 1) * y  ==> Subtracts 0, polynomial domain expansion
+                            this.emit(OpCode.LoadLocal, this.resolveLocal(dummy));
+                            this.emit(OpCode.Dup);
+                            this.emit(OpCode.LoadLocal, this.resolveLocal(dummy));
+                            this.emit(OpCode.Mul); // z * z
+                            this.emit(OpCode.Add); // z * z + z
+                            this.emit(OpCode.PushInt, 1);
+                            this.emit(OpCode.BitAnd); // 0
+                            
+                            this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                            this.emit(OpCode.Mul); // 0 * y -> 0
+                            this.emit(OpCode.Sub); // Sub 0 from result
+                        }
+                    }
+                } else {
+                    this.visitExpression(expr.left);
+                    this.visitExpression(expr.right);
+                    switch (expr.operator) {
+                        case '*': this.emit(OpCode.Mul); break;
+                        case '/': this.emit(OpCode.Div); break;
+                        case '==': this.emit(OpCode.Eq); break;
+                        case '<': this.emit(OpCode.Lt); break;
+                        case '>': this.emit(OpCode.Gt); break;
+                        case '<=': this.emit(OpCode.Lte); break;
+                        case '>=': this.emit(OpCode.Gte); break;
+                        case '!=': this.emit(OpCode.Neq); break;
+                        case '&&': this.emit(OpCode.And); break;
+                        case '||': this.emit(OpCode.Or); break;
+                        default: throw new Error(`Unsupported operator ${expr.operator}`);
+                    }
                 }
                 break;
             case 'CallExpression':
@@ -293,6 +428,9 @@ export class CodeGenerator {
                     } else if (expr.callee.name === 'hash256') {
                         // expects 1 argument
                         this.emit(OpCode.Hash256);
+                    } else if (expr.callee.name === 'concat') {
+                        // expects 2 arguments
+                        this.emit(OpCode.Concat);
                     } else if (expr.callee.name === 'encrypt_aes') {
                         // expects 2 arguments
                         this.emit(OpCode.EncryptAES);
@@ -329,7 +467,7 @@ export class CodeGenerator {
                 this.emit(OpCode.NewObject);
                 for (const prop of expr.properties) {
                     const keyName = prop.key.type === 'Identifier' ? prop.key.name : prop.key.value;
-                    this.emit(OpCode.Push, this.addConstant(keyName));
+                    this.emitString(keyName);
                     this.visitExpression(prop.value);
                     this.emit(OpCode.SetMember);
                 }
@@ -340,7 +478,7 @@ export class CodeGenerator {
                     this.visitExpression(expr.property);
                 } else {
                     const propName = (expr.property as any).name;
-                    this.emit(OpCode.Push, this.addConstant(propName));
+                    this.emitString(propName);
                 }
                 this.emit(OpCode.GetMember);
                 break;
@@ -350,7 +488,7 @@ export class CodeGenerator {
                 // we'll implement it as ++i semantics (returns new value) for simplicity since we don't have temporary registers
                 if (expr.argument.type === 'Identifier') {
                     this.emit(OpCode.LoadLocal, this.resolveLocal(expr.argument.name));
-                    this.emit(OpCode.Push, this.addConstant(1));
+                    this.emit(OpCode.PushInt, 1);
                     this.emit(expr.operator === '++' ? OpCode.Add : OpCode.Sub);
                     this.emit(OpCode.Dup); // keep value on stack
                     this.emit(OpCode.StoreLocal, this.resolveLocal(expr.argument.name));
