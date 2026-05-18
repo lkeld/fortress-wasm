@@ -131,7 +131,7 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
     let pixelOffset = 0;
 
     // Embed all 32 bytes into RGB channels non-sequentially using dynamic stride.
-    // The extraction stride is derived dynamically from the randomized R channel of the first pixel,
+    // The extraction stride is derived dynamically from the randomised R channel of the first pixel,
     // removing any fixed mathematical anchor for an attacker.
     for (let i = 0; i < 32; i++) {
         for (let bit = 0; bit < 8; bit++) {

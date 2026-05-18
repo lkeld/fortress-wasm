@@ -33,7 +33,7 @@ graph TD
     end
 ```
 
-The system separates the compilation of canonical opcodes from their runtime execution. The **Compiler Pipeline** translates high-level code into a custom, non-standard ISA that is randomized on every build. The **Scrambler Layer** intercepts the payload on the server, encrypts it, generates a totally fresh translation map for that specific session, and hides the 32-byte cryptographic session key inside a PNG image using a dynamically derived LSB stride. The **VM Interpreter** runs in the browser, extracts the key, and uses a JIT sliding decryption window to execute the logic without the payload ever residing fully decrypted in memory.
+The system separates the compilation of canonical opcodes from their runtime execution. The **Compiler Pipeline** translates high-level code into a custom, non-standard ISA that is randomised on every build. The **Scrambler Layer** intercepts the payload on the server, encrypts it, generates a totally fresh translation map for that specific session, and hides the 32-byte cryptographic session key inside a PNG image using a dynamically derived LSB stride. The **VM Interpreter** runs in the browser, extracts the key, and uses a JIT sliding decryption window to execute the logic without the payload ever residing fully decrypted in memory.
 
 ## Security Model
 
@@ -43,7 +43,7 @@ This system implements targeted defences against the following state-of-the-art 
 |---|---|---|---|
 | Linear MBA Solvers | Phase 2 | Linear MBA substitution | Cryptic Bytes |
 | ML AST Classification | Phase 7 | AST Path Distribution Pollution | WasmWalker |
-| VPC-Sensitive Symbolic Emulation | Phase 5, Phase 8 | VPC Fragmentation & Dispatcher Decentralization | PUSHAN |
+| VPC-Sensitive Symbolic Emulation | Phase 5, Phase 8 | VPC Fragmentation & Dispatcher Decentralisation | PUSHAN |
 | Polynomial MBA Reduction | Phase 6 | Polynomial MBA & Domain Expansion | MBA-Blast, SiMBA, gMBA |
 | Program Synthesis | Phase 10 | Superoperator Fusion | Loki |
 | Neurosymbolic Decompilation | Phase 11 | LLM Stack Poisoning | StackSight |
@@ -90,13 +90,13 @@ The complete research methodology, including the threat model, the detailed arch
 5. Liu et al. — *MBA-Blast: Unveiling and Simplifying Mixed Boolean-Arithmetic Obfuscation* (USENIX Security 2021) — usenix.org/conference/usenixsecurity21/presentation/liu-binbin
 6. Reichenwallner et al. — *SiMBA: Efficient Deobfuscation of Linear Mixed Boolean-Arithmetic Expressions* (2022) — arxiv.org/abs/2209.06335
 7. Roh, Paik, Kwon & Cho — *gMBA: Expression Semantic Guided Mixed Boolean-Arithmetic Deobfuscation Using Transformer Architectures* (ACL 2025) — arxiv.org/abs/2506.23634
-8. Authors of PUSHAN — *Pushan: Trace-Free Deobfuscation of Virtualization-Obfuscated Binaries* (2026) — arxiv.org/abs/2603.18355
-9. Zou et al. — *XuanJia: A Comprehensive Virtualization-Based Code Obfuscator for Binary Protection* (2026) — arxiv.org/abs/2601.10261
-10. Ahmadvand et al. — *VirtSC: Combining Virtualization Obfuscation with Self-Checksumming* (2019) — arxiv.org/abs/1909.11404
+8. Authors of PUSHAN — *Pushan: Trace-Free Deobfuscation of Virtualisation-Obfuscated Binaries* (2026) — arxiv.org/abs/2603.18355
+9. Zou et al. — *XuanJia: A Comprehensive Virtualisation-Based Code Obfuscator for Binary Protection* (2026) — arxiv.org/abs/2601.10261
+10. Ahmadvand et al. — *VirtSC: Combining Virtualisation Obfuscation with Self-Checksumming* (2019) — arxiv.org/abs/1909.11404
 11. Authors of WasmWalker — *WasmWalker: Path-based Code Representations for Improved WebAssembly Program Analysis* (2024) — arxiv.org/abs/2410.08517
 12. Authors of Wasm Decompilation Study — *Is This the Same Code? A Comprehensive Study of Decompilation Techniques for WebAssembly Binaries* (2024) — arxiv.org/abs/2411.02278
 13. Schloegel et al. — *Loki: Hardening Code Obfuscation Against Automated Attacks* (USENIX Security 2022) — arxiv.org/abs/2106.08913
-14. Authors of Static VM Detection — *Static Detection of Core Structures in Tigress Virtualization-Based Obfuscation Using an LLVM Pass* (2026) — arxiv.org/abs/2601.12916
+14. Authors of Static VM Detection — *Static Detection of Core Structures in Tigress Virtualisation-Based Obfuscation Using an LLVM Pass* (2026) — arxiv.org/abs/2601.12916
 15. Fang, Zhou, He & Wang — *StackSight: Unveiling WebAssembly through Large Language Models and Neurosymbolic Chain-of-Thought Decompilation* (ICML 2024) — arxiv.org/abs/2406.04568
 16. Abrath et al. — *Code Renewability for Native Software Protection* (Ghent University, 2020) — arxiv.org/abs/2003.00916
 17. Tim Blazytko & Nicolò Altamura — *Breaking Mixed Boolean-Arithmetic Obfuscation in Real-World Applications* (Recon 2025) — recon.cx/cfp.recon.cx/recon-2025/talk/BKBQ37/index.html

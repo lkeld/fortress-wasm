@@ -8,7 +8,7 @@ use crate::value::Value;
 pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map: &[u8]) -> String {
     // VirtSC Verification Step 1: Compute the payload hash at the exact moment of ingestion.
     // This hash is stored globally and verified inside the VM loop. If the payload is patched, the VM silently corrupts the key.
-    // See VirtSC: Combining Virtualization Obfuscation with Self-Checksumming, arxiv.org/abs/1909.11404.
+    // See VirtSC: Combining Virtualisation Obfuscation with Self-Checksumming, arxiv.org/abs/1909.11404.
     let mut payload_data = Vec::new();
     payload_data.extend_from_slice(bytecode);
     use sha2::{Sha256, Digest};
@@ -21,7 +21,7 @@ pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map:
     let mut session_key = [0u8; 32];
     if image_rgba.len() >= 1024 { // 256 pixels * 4 channels
         // Dynamic LSB Steganography Extraction
-        // By deriving the extraction stride directly from the randomized R channel of the very first pixel,
+        // By deriving the extraction stride directly from the randomised R channel of the very first pixel,
         // we eliminate any fixed mathematical anchor. Without knowing this derivation, linear statistical extraction fails.
         let primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
         let stride = primes[(image_rgba[0] as usize) % primes.len()];

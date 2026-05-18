@@ -10,7 +10,7 @@ const OPCODES = [
 ];
 
 // Phase 12: Code Renewability
-// We use a Fisher-Yates shuffle to randomize the canonical ISA bytes from 0-255 on every build.
+// We use a Fisher-Yates shuffle to randomise the canonical ISA bytes from 0-255 on every build.
 // This completely destroys the viability of static decompilation tools that map bytes to standard instructions.
 // See Code Renewability for Native Software Protection, arxiv.org/abs/2003.00916.
 const bytes = Array.from({length: 256}, (_, i) => i);

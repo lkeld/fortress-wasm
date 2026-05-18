@@ -1,6 +1,6 @@
 # Contributing to Fortress WASM
 
-This is a highly specialized piece of defensive engineering. If you're contributing, you need to understand the architecture deeply. Read `RESEARCH.md` and `ARCHITECTURE.md` before touching the compiler or the VM.
+This is a highly specialised piece of defensive engineering. If you're contributing, you need to understand the architecture deeply. Read `RESEARCH.md` and `ARCHITECTURE.md` before touching the compiler or the VM.
 
 ## Build Pipeline Dependencies
 
@@ -21,7 +21,7 @@ npm run build
 ```
 
 What this actually does:
-1. `build:isa`: Runs `scripts/generate_isa.js`. This is the most critical step. It performs a Fisher-Yates shuffle to generate a randomized canonical ISA and dynamically writes the Enums into the TypeScript compiler and the Rust VM, and builds the Function Pointer Array for `dispatch_table.rs`.
+1. `build:isa`: Runs `scripts/generate_isa.js`. This is the most critical step. It performs a Fisher-Yates shuffle to generate a randomised canonical ISA and dynamically writes the Enums into the TypeScript compiler and the Rust VM, and builds the Function Pointer Array for `dispatch_table.rs`.
 2. `build:compiler`: Compiles the TypeScript compiler (`tsc`).
 3. `build:server`: Compiles the Node.js scrambler module (`tsc`).
 4. `build:wasm-node` & `build:wasm-web`: Uses `wasm-pack` to build the Rust interpreter into Node and Web targets.

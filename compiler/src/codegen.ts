@@ -28,7 +28,7 @@ export class CodeGenerator {
             this.invertedMap[this.opcodeMap[i]] = i;
         }
 
-        // Initialize array of diversified dummy variables to defeat taint tracking
+        // Initialise array of diversified dummy variables to defeat taint tracking
         for (let i = 0; i < 7; i++) {
             const name = `_mba_dummy_${i}`;
             this.dummyVariables.push(name);
@@ -69,7 +69,7 @@ export class CodeGenerator {
     }
 
     private emit(op: OpCode, ...operands: number[]) {
-        // Map the internal opcode to the randomized byte
+        // Map the internal opcode to the randomised byte
         this.code.push(this.opcodeMap[op]);
         for (const operand of operands) {
             // operand is always 32-bit little endian
@@ -125,7 +125,7 @@ export class CodeGenerator {
     }
 
     private emitJunk() {
-        if (Math.random() > this.currentJunkThreshold) return; // Randomized chance per function
+        if (Math.random() > this.currentJunkThreshold) return; // Randomised chance per function
         
         // AST Path Distribution Pollution
         // Inserting context-aware, semantically valid structures mimicking actual logic 
@@ -276,7 +276,7 @@ export class CodeGenerator {
             case 'FunctionDeclaration':
                 // Record the function's start address
                 this.functions.set(stmt.name.name, this.code.length);
-                // Randomize junk emission rate per function (10% to 50%) to defeat statistical profiling
+                // Randomise junk emission rate per function (10% to 50%) to defeat statistical profiling
                 this.currentJunkThreshold = 0.1 + Math.random() * 0.4;
                 
                 // Assign parameters to locals
@@ -420,7 +420,7 @@ export class CodeGenerator {
                             } else {
                                 this.emit(OpCode.Mul);
                                 // Structural Linear MBA Padding
-                                // While not a full polynomial substitution, deriving the +0 padding from a randomized dummy slot 
+                                // While not a full polynomial substitution, deriving the +0 padding from a randomised dummy slot 
                                 // pollutes static taint tracking by artificially linking the operation to a disjoint memory region.
                                 const dummy = this.getDummyVariable();
                                 this.emit(OpCode.LoadLocal, this.resolveLocal(dummy));
