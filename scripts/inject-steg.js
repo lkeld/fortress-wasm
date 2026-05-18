@@ -1,3 +1,8 @@
+// NOTE: This script implements an alternative SHA256-PRNG based steganography 
+// injection mechanism. It is currently retained for the signing verification 
+// flow but is separate from the primary prime-stride LSB payload steganography 
+// used in the main compilation pipeline (scrambler.ts).
+
 const fs = require('fs');
 const path = require('path');
 const { Jimp } = require('jimp');

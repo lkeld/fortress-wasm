@@ -12,10 +12,11 @@ export class FortressHost {
         const importObject = {
             env: {
                 native_call: (id: number, argsPtr: number, argsLen: number): number => {
-                    // For a real production host, we'd read string from memory
+                    // CallNative is not yet fully implemented in the browser host environment.
+                    // For a real production host, we'd read string pointers from WASM memory.
                     // Since our Rust execute() wrapper is doing string passing differently right now, 
-                    // we'll simulate the native_call handling directly.
-                    return 0; 
+                    // this will throw to prevent silent failures if a script attempts a native call.
+                    throw new Error("CallNative is not currently supported in the browser host");
                 }
             }
         };

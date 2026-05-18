@@ -1,3 +1,8 @@
+// NOTE: This file implements an alternative SHA256-PRNG based steganography 
+// extraction mechanism. It is currently retained for the signing verification 
+// flow in verify_bridge.rs but is separate from the primary prime-stride 
+// LSB payload steganography used in wrapper.rs and scrambler.ts.
+
 use sha2::{Sha256, Digest};
 use std::collections::HashSet;
 

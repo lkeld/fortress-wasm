@@ -40,15 +40,15 @@ self.onmessage = async (e: MessageEvent) => {
         try {
             const { bytecode, constants, input } = payload;
             
-            // Format constants as a JSON string and apply basic XOR obfuscation matching the compiler
-            const constantsJsonStr = JSON.stringify(constants);
-            const obfuscatedConstants = Array.from(constantsJsonStr)
-                .map(char => (char.charCodeAt(0) ^ 0x42).toString(16).padStart(2, '0'))
-                .join('');
+            // Obsolete constants system from Phase 1.
+            // const constantsJsonStr = JSON.stringify(constants);
+            // const obfuscatedConstants = Array.from(constantsJsonStr)
+            //     .map(char => (char.charCodeAt(0) ^ 0x42).toString(16).padStart(2, '0'))
+            //     .join('');
             
             const resultJson = execute(
                 new Uint8Array(bytecode), 
-                obfuscatedConstants,
+                new Uint8Array(), // Obsolete: was obfuscatedConstants, now unused/replaced
                 JSON.stringify(input || [])
             );
             self.postMessage({ type: 'EXECUTE_SUCCESS', result: resultJson });

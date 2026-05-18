@@ -38,7 +38,6 @@ pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map:
             }
             session_key[i] = byte;
         }
-        println!("Wrapper Session Key: {:?}", session_key);
     }
 
     let bytecode_payload = bytecode;
