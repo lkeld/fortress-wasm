@@ -1,6 +1,6 @@
 {
   "name": "@lkeld/fortress-wasm",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Hardened WASM Virtual Machine and Compiler",
   "main": "index.js",
   "publishConfig": {
