@@ -2,9 +2,21 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
-## [1.0.2] - 2026-05-19
+## [1.0.3] - 2026-05-19
+
+### Added
+- **Comprehensive Test Suite**:
+  - Implemented a complete end-to-end integration harness validating the full "Compile → Scramble → Execute" pipeline.
+  - Built comprehensive Rust unit tests covering 47 individual paths, validating all mathematical semantics and error paths (e.g., call stack overflows, integer bounds, zero divisions).
+  - Built TypeScript compiler tests covering tokenization, AST generation, and `CodeGenerator` logic.
+  - Validated Session Renewability by asserting that distinct steganographic keys and dynamically shifted opcodes are generated continuously for identical source scripts.
+  - Enforced Environment Security boundaries to ensure `DEV` and `PROD` payloads are mutually exclusive and crash safely.
 
 ### Fixed
+- **Phase 10 Superoperator Handlers**: The superoperators (`CompareAndAdd`, `SwapAndMul`, `JumpAndMul`, `Swap`, `Rotate`, `Drop2`) were previously present in the ISA but lacked concrete stack manipulation logic. Implemented their exact semantics and removed unused imports orphaned from the dispatch table refactor.
+- **Strict Verification Bar**: Reached a 100% test pass rate with zero remaining Rust compiler warnings.
+
+## [1.0.2] - 2026-05-19
 - **Post-Implementation Functional Correctness Audit**:
   - *ABI Mismatch*: Fixed a critical bug where `worker.ts` passed 3 arguments to the VM instead of the required 4. Fully traced and integrated the dynamic `opcodeMap` into the Web Worker execution payload.
   - *Integer Truncation Vulnerability*: Identified and fixed a 32-bit WASM integer truncation bug where 64-bit array indices larger than `u32::MAX` silently truncated to `0`, bypassing bounds checks. Replaced unsafe `as usize` casts with checked `try_from`, properly propagating `IndexOutOfBounds` errors.
