@@ -507,7 +507,8 @@ pub fn op_return(vm: &mut Vm) -> Result<bool, VmError> {
 }
 
 pub fn op_callnative(vm: &mut Vm) -> Result<bool, VmError> {
-    let _id = vm.read_u32()?;
+    #[allow(unused_variables)]
+    let id = vm.read_u32()?;
     let arg_count = vm.read_u32()? as usize;
     let mut args = Vec::new();
     for _ in 0..arg_count {
@@ -521,7 +522,8 @@ pub fn op_callnative(vm: &mut Vm) -> Result<bool, VmError> {
             arr.push(crate::wrapper::value_to_json(&arg));
         }
     }
-    let _args_json = json_arr.to_string();
+    #[allow(unused_variables)]
+    let args_json = json_arr.to_string();
     
     #[cfg(target_arch = "wasm32")]
     let res_str = crate::vm::native_call(id, &args_json);

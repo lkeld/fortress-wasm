@@ -170,6 +170,10 @@ impl Vm {
     pub fn run(&mut self) -> Result<Value, VmError> {
         #[cfg(target_arch = "wasm32")]
         {
+            use std::collections::HashMap;
+            use std::rc::Rc;
+            use std::cell::RefCell;
+            
             let global = js_sys::global();
             use wasm_bindgen::JsCast;
             let perf = global.clone().dyn_into::<web_sys::Window>().ok().and_then(|w| w.performance())
