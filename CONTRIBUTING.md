@@ -28,11 +28,21 @@ What this actually does:
 
 ## Running Tests
 
-The test suite validates the bitwise operations, the cryptographic thunks, and the renewability logic.
+The test suite validates the bitwise operations, the cryptographic thunks, the renewability logic, and the end-to-end integration pipeline.
 
 ```bash
-# Run the Rust unit tests and integration tests
-npm test
+# Run the Rust unit tests, TypeScript compiler tests, and Integration tests
+npm run test:full
+```
+
+**CRITICAL RULE:** All tests must pass on BOTH Dev and Prod builds before merging. The test harness verifies `DEV_MODE` isolation. Ensure you run:
+
+```bash
+npm run build:dev
+npm run test:full
+
+npm run build:prod
+npm run test:full
 ```
 
 ## Making Changes

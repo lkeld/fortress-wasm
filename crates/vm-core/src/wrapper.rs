@@ -6,6 +6,10 @@ use crate::value::Value;
 
 #[wasm_bindgen]
 pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map: &[u8]) -> String {
+    if bytecode.is_empty() {
+        return r#"{"status": false, "error": "UnexpectedEndOfCode"}"#.to_string();
+    }
+
     // VirtSC Verification Step 1: Compute the payload hash at the exact moment of ingestion.
     // This hash is stored globally and verified inside the VM loop. If the payload is patched, the VM silently corrupts the key.
     // See VirtSC: Combining Virtualisation Obfuscation with Self-Checksumming, arxiv.org/abs/1909.11404.
@@ -103,12 +107,43 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
             let arr = list.borrow().iter().map(value_to_json).collect();
             serde_json::Value::Array(arr)
         },
-        Value::Object(map) => {
-            let mut obj = serde_json::Map::new();
-            for (k, v) in map.borrow().iter() {
-                obj.insert(k.clone(), value_to_json(v));
+        Value::Object(obj_rc) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in obj_rc.borrow().iter() {
+                map.insert(k.clone(), value_to_json(v));
             }
-            serde_json::Value::Object(obj)
+            serde_json::Value::Object(map)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_execute_empty_bytecode() {
+        let result = execute(&[], &[], "[]", &[]);
+        // An empty bytecode payload should not panic, it should return an UnexpectedEndOfCode error or similar
+        // because the PC will immediately go out of bounds.
+        assert!(result.contains(r#"{"status": false, "error":"#));
+    }
+
+    #[test]
+    fn test_execute_empty_image_and_map() {
+        // Construct a minimal valid bytecode using identity map (PushInt(42), Halt)
+        // PushInt = 0, operand = 42 (0x2A 00 00 00), Halt = 43
+        // Actually, we must provide it via JIT, but if session_key is all 0s, cipher is identity!
+        let mut bytecode = vec![0; 256]; // Need 256 bytes for JIT page
+        bytecode[0] = 0; // PushInt
+        bytecode[1] = 42;
+        bytecode[2] = 0;
+        bytecode[3] = 0;
+        bytecode[4] = 0;
+        bytecode[5] = 43; // Halt
+
+        let result = execute(&bytecode, &[], "[]", &[]);
+        // Should execute successfully and return 42
+        assert_eq!(result, "42");
     }
 }

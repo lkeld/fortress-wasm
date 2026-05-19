@@ -8,7 +8,7 @@ use std::cell::RefCell;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-pub fn op_invalid(vm: &mut Vm) -> Result<bool, VmError> {
+pub fn op_invalid(_vm: &mut Vm) -> Result<bool, VmError> {
     // Return true to halt? No, we return Err for invalid
     Err(VmError::InvalidOpCode(0)) // Wait, the dispatch table doesn't pass the opcode byte, so we just return a generic error or just return true (halt).
     // Actually, in the monolithic dispatcher it printed and returned InvalidOpCode.
@@ -340,8 +340,12 @@ pub fn op_getmember(vm: &mut Vm) -> Result<bool, VmError> {
             if let Value::Int(i) = key {
                 let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
                 let vec = vec_rc.borrow();
-                let val = vec.get(idx).cloned().unwrap_or(Value::Null);
-                vm.stack.push(val)?;
+                if idx < vec.len() {
+                    let val = vec.get(idx).cloned().unwrap_or(Value::Null);
+                    vm.stack.push(val)?;
+                } else {
+                    return Err(VmError::IndexOutOfBounds);
+                }
             } else {
                 return Err(VmError::TypeError);
             }
@@ -503,7 +507,7 @@ pub fn op_return(vm: &mut Vm) -> Result<bool, VmError> {
 }
 
 pub fn op_callnative(vm: &mut Vm) -> Result<bool, VmError> {
-    let id = vm.read_u32()?;
+    let _id = vm.read_u32()?;
     let arg_count = vm.read_u32()? as usize;
     let mut args = Vec::new();
     for _ in 0..arg_count {
@@ -517,7 +521,7 @@ pub fn op_callnative(vm: &mut Vm) -> Result<bool, VmError> {
             arr.push(crate::wrapper::value_to_json(&arg));
         }
     }
-    let args_json = json_arr.to_string();
+    let _args_json = json_arr.to_string();
     
     #[cfg(target_arch = "wasm32")]
     let res_str = crate::vm::native_call(id, &args_json);
@@ -533,7 +537,7 @@ pub fn op_callnative(vm: &mut Vm) -> Result<bool, VmError> {
     Ok(false)
 }
 
-pub fn op_halt(vm: &mut Vm) -> Result<bool, VmError> {
+pub fn op_halt(_vm: &mut Vm) -> Result<bool, VmError> {
     Ok(true)
 }
 
@@ -552,22 +556,51 @@ pub fn op_concat(vm: &mut Vm) -> Result<bool, VmError> {
     Ok(false)
 }
 
-// Stubs for superoperators that were missing
+// Superoperators that combine multiple basic operations to defeat pattern matching
 pub fn op_compareandadd(vm: &mut Vm) -> Result<bool, VmError> {
+    // Compare top two values
+    op_eq(vm)?;
+    // Save the boolean result
+    let bool_val = vm.stack.pop()?;
+    // Add the next two values
+    op_add(vm)?;
+    // Push the boolean result back on top
+    vm.stack.push(bool_val)?;
     Ok(false)
 }
+
 pub fn op_swapandmul(vm: &mut Vm) -> Result<bool, VmError> {
+    op_swap(vm)?;
+    op_mul(vm)?;
     Ok(false)
 }
+
 pub fn op_jumpandmul(vm: &mut Vm) -> Result<bool, VmError> {
+    op_jumpif(vm)?;
+    op_mul(vm)?;
     Ok(false)
 }
+
 pub fn op_swap(vm: &mut Vm) -> Result<bool, VmError> {
+    let b = vm.stack.pop()?;
+    let a = vm.stack.pop()?;
+    vm.stack.push(b)?;
+    vm.stack.push(a)?;
     Ok(false)
 }
+
 pub fn op_rotate(vm: &mut Vm) -> Result<bool, VmError> {
+    let c = vm.stack.pop()?;
+    let b = vm.stack.pop()?;
+    let a = vm.stack.pop()?;
+    vm.stack.push(b)?;
+    vm.stack.push(c)?;
+    vm.stack.push(a)?;
     Ok(false)
 }
+
 pub fn op_drop2(vm: &mut Vm) -> Result<bool, VmError> {
+    vm.stack.pop()?;
+    vm.stack.pop()?;
     Ok(false)
 }

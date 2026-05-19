@@ -22,8 +22,8 @@ pub fn set_payload_hash(hash: Box<[u8]>) {
 #[wasm_bindgen]
 pub fn init_crypto(
     mut image_bytes: Box<[u8]>,
-    width: u32,
-    height: u32,
+    _width: u32,
+    _height: u32,
     mut session_seed: Box<[u8]>,
     mut fingerprint: Box<[u8]>,
     epoch_day: u32,

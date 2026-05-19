@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "cargo test --manifest-path crates/vm-core/Cargo.toml",
+    "test:full": "npm run test && npx tsc compiler/tests/compiler.test.ts --esModuleInterop && node --test compiler/tests/compiler.test.js tests/integration.test.js",
     "build:isa:dev": "DEV_MODE=true node scripts/generate_isa.js",
     "build:isa:prod": "node scripts/generate_isa.js",
     "build:compiler": "tsc -p compiler/tsconfig.json",

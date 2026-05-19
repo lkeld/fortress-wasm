@@ -1,9 +1,5 @@
-use crate::opcodes::OpCode;
 use crate::stack::{Stack, VmError};
 use crate::value::Value;
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(module = "env")]
@@ -219,3 +215,5 @@ impl Vm {
         Ok(self.stack.pop().unwrap_or(Value::Null))
     }
 }
+
+include!("vm_tests.rs");
