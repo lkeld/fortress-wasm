@@ -22,7 +22,7 @@ pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map:
         let expected_hash = crate::verify_bridge::PAYLOAD_HASH.with(|h| *h.borrow());
         if let Some(expected) = expected_hash {
             if hash_arr != expected {
-                panic!("VirtSC Check Failed: Payload Hash Mismatch! (DEV_MODE enabled)");
+                return r#"{"status": false, "error": "Dev mode VirtSC hash mismatch"}"#.to_string();
             }
         }
     }

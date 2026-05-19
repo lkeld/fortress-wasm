@@ -112,10 +112,14 @@ export class Lexer {
             }
         }
 
-        if (/[0-9]/.test(c)) {
+        if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(this.peek()))) {
             let num = c;
-            while (/[0-9.]/.test(this.peek())) {
-                num += this.advance();
+            while (/[0-9.eE]/.test(this.peek())) {
+                const nextChar = this.advance();
+                num += nextChar;
+                if ((nextChar === 'e' || nextChar === 'E') && (this.peek() === '+' || this.peek() === '-')) {
+                    num += this.advance();
+                }
             }
             return { type: TokenType.Number, value: num, line: this.line };
         }
@@ -123,7 +127,16 @@ export class Lexer {
         if (c === '"') {
             let str = '';
             while (this.peek() !== '"' && !this.isAtEnd()) {
-                str += this.advance();
+                const nextChar = this.advance();
+                if (nextChar === '\\' && !this.isAtEnd()) {
+                    const esc = this.advance();
+                    if (esc === 'n') str += '\n';
+                    else if (esc === 't') str += '\t';
+                    else if (esc === 'r') str += '\r';
+                    else str += esc;
+                } else {
+                    str += nextChar;
+                }
             }
             this.advance(); // consume closing quote
             return { type: TokenType.String, value: str, line: this.line };

@@ -1,3 +1,9 @@
+/**
+ * @deprecated 2026-05-19: fortress-host.ts is obsolete and bypassed by the newer wasm_bindgen setup.
+ * All WebAssembly execution and integration should now occur through the dedicated Web Worker path 
+ * in js-runtime/src/worker.ts to ensure proper memory allocation and non-blocking main thread execution.
+ * Do not use or maintain this file.
+ */
 export class FortressHost {
     private wasmInstance: WebAssembly.Instance | null = null;
     

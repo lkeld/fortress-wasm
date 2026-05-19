@@ -338,7 +338,7 @@ pub fn op_getmember(vm: &mut Vm) -> Result<bool, VmError> {
         }
         Value::List(vec_rc) => {
             if let Value::Int(i) = key {
-                let idx = i as usize;
+                let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
                 let vec = vec_rc.borrow();
                 let val = vec.get(idx).cloned().unwrap_or(Value::Null);
                 vm.stack.push(val)?;
@@ -348,7 +348,7 @@ pub fn op_getmember(vm: &mut Vm) -> Result<bool, VmError> {
         }
         Value::Str(s) => {
             if let Value::Int(i) = key {
-                let idx = i as usize;
+                let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
                 if idx < s.len() {
                     let ch = s.chars().nth(idx).unwrap_or('\0').to_string();
                     vm.stack.push(Value::Str(std::sync::Arc::new(ch)))?;
@@ -379,7 +379,7 @@ pub fn op_setmember(vm: &mut Vm) -> Result<bool, VmError> {
         }
         Value::List(ref vec_rc) => {
             if let Value::Int(i) = key {
-                let idx = i as usize;
+                let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
                 let mut vec = vec_rc.borrow_mut();
                 if idx < vec.len() {
                     vec[idx] = val;

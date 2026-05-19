@@ -402,6 +402,14 @@ export class Parser {
                 }
                 this.expect(TokenType.RBrace);
                 return { type: 'ObjectExpression', properties };
+            case TokenType.Minus:
+                this.nextToken();
+                return { 
+                    type: 'BinaryExpression', 
+                    operator: '-', 
+                    left: { type: 'Literal', value: 0, raw: '0' }, 
+                    right: this.parseExpression(this.getPrecedence(TokenType.Minus))
+                };
             default:
                 throw new Error(`Unexpected prefix token ${token.type} (${TokenType[token.type]}) at line ${token.line}`);
         }

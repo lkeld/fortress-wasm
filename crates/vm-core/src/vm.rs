@@ -176,10 +176,8 @@ impl Vm {
         {
             let global = js_sys::global();
             use wasm_bindgen::JsCast;
-            let perf = global.dyn_into::<web_sys::Window>()
-                .map(|w| w.performance().unwrap())
-                .or_else(|global| global.dyn_into::<web_sys::WorkerGlobalScope>().map(|w| w.performance().unwrap()))
-                .ok();
+            let perf = global.clone().dyn_into::<web_sys::Window>().ok().and_then(|w| w.performance())
+                .or_else(|| global.dyn_into::<web_sys::WorkerGlobalScope>().ok().and_then(|w| w.performance()));
             let start = perf.as_ref().map(|p| p.now()).unwrap_or_else(|| js_sys::Date::now());
             let mut dummy = 0;
             for _ in 0..10_000 {

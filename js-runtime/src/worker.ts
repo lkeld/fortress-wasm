@@ -1,6 +1,7 @@
 import initCore, { execute, init_crypto, sign_request } from '../../pkg/vm-core/vm_core.js';
 
 let isReady = false;
+let globalStegoImage: Uint8Array | null = null;
 
 self.onmessage = async (e: MessageEvent) => {
     const { type, payload } = e.data;
@@ -25,6 +26,7 @@ self.onmessage = async (e: MessageEvent) => {
                 epochDay
             );
             
+            globalStegoImage = new Uint8Array(stegoImageBytes);
             isReady = true;
             
             self.postMessage({ type: 'INIT_SUCCESS' });
@@ -38,18 +40,13 @@ self.onmessage = async (e: MessageEvent) => {
             return;
         }
         try {
-            const { bytecode, constants, input } = payload;
-            
-            // Obsolete constants system from Phase 1.
-            // const constantsJsonStr = JSON.stringify(constants);
-            // const obfuscatedConstants = Array.from(constantsJsonStr)
-            //     .map(char => (char.charCodeAt(0) ^ 0x42).toString(16).padStart(2, '0'))
-            //     .join('');
+            const { bytecode, opcodeMap, input } = payload;
             
             const resultJson = execute(
                 new Uint8Array(bytecode), 
-                new Uint8Array(), // Obsolete: was obfuscatedConstants, now unused/replaced
-                JSON.stringify(input || [])
+                globalStegoImage!,
+                JSON.stringify(input || []),
+                new Uint8Array(opcodeMap)
             );
             self.postMessage({ type: 'EXECUTE_SUCCESS', result: resultJson });
         } catch (err: any) {
