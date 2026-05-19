@@ -125,6 +125,7 @@ export class CodeGenerator {
     }
 
     private emitJunk() {
+        if (process.env.DEV_MODE === 'true') return;
         if (Math.random() > this.currentJunkThreshold) return; // Randomised chance per function
         
         // AST Path Distribution Pollution
@@ -331,6 +332,11 @@ export class CodeGenerator {
                     this.visitExpression(expr.left);
                     this.visitExpression(expr.right);
                     
+                    if (process.env.DEV_MODE === 'true') {
+                        this.emit(expr.operator === '+' ? OpCode.Add : OpCode.Sub);
+                        return;
+                    }
+                    
                     const tmpRight = `_mba_r_${Math.floor(Math.random() * 1000000)}`;
                     const tmpLeft = `_mba_l_${Math.floor(Math.random() * 1000000)}`;
                     
@@ -412,7 +418,9 @@ export class CodeGenerator {
                     this.visitExpression(expr.right);
                     switch (expr.operator) {
                         case '*': 
-                            if (Math.random() > 0.5) {
+                            if (process.env.DEV_MODE === 'true') {
+                                this.emit(OpCode.Mul);
+                            } else if (Math.random() > 0.5) {
                                 this.emit(OpCode.SwapAndMul);
                             } else if (Math.random() > 0.5) {
                                 this.emit(OpCode.PushInt, 0); // false condition
@@ -431,12 +439,14 @@ export class CodeGenerator {
                             break;
                         case '/': 
                             this.emit(OpCode.Div);
-                            // Linear MBA: Add 0
-                            const dummyDiv = this.getDummyVariable();
-                            this.emit(OpCode.LoadLocal, this.resolveLocal(dummyDiv));
-                            this.emit(OpCode.Dup);
-                            this.emit(OpCode.Sub);
-                            this.emit(OpCode.Add);
+                            if (process.env.DEV_MODE !== 'true') {
+                                // Linear MBA: Add 0
+                                const dummyDiv = this.getDummyVariable();
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(dummyDiv));
+                                this.emit(OpCode.Dup);
+                                this.emit(OpCode.Sub);
+                                this.emit(OpCode.Add);
+                            }
                             break;
                         case '==': this.emit(OpCode.Eq); break;
                         case '<': this.emit(OpCode.Lt); break;

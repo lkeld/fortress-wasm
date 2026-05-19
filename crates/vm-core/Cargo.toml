@@ -22,3 +22,5 @@ png = "0.17"
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
+[features]
+dev = []

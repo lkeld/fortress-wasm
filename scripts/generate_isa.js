@@ -14,11 +14,13 @@ const OPCODES = [
 // This completely destroys the viability of static decompilation tools that map bytes to standard instructions.
 // See Code Renewability for Native Software Protection, arxiv.org/abs/2003.00916.
 const bytes = Array.from({length: 256}, (_, i) => i);
-for (let i = 255; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const temp = bytes[i];
-    bytes[i] = bytes[j];
-    bytes[j] = temp;
+if (process.env.DEV_MODE !== 'true') {
+    for (let i = 255; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const temp = bytes[i];
+        bytes[i] = bytes[j];
+        bytes[j] = temp;
+    }
 }
 
 const opcodeValues = {};

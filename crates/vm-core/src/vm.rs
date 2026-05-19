@@ -98,12 +98,25 @@ impl Vm {
         }
 
         let start_addr = page_id as usize * 256;
-        for i in 0..256 {
-            if start_addr + i < self.code.len() {
-                let key_byte = self.session_key[(start_addr + i) % 32];
-                self.ves[i] = self.code[start_addr + i] ^ key_byte;
-            } else {
-                self.ves[i] = 0;
+        #[cfg(feature = "dev")]
+        {
+            for i in 0..256 {
+                if start_addr + i < self.code.len() {
+                    self.ves[i] = self.code[start_addr + i];
+                } else {
+                    self.ves[i] = 0;
+                }
+            }
+        }
+        #[cfg(not(feature = "dev"))]
+        {
+            for i in 0..256 {
+                if start_addr + i < self.code.len() {
+                    let key_byte = self.session_key[(start_addr + i) % 32];
+                    self.ves[i] = self.code[start_addr + i] ^ key_byte;
+                } else {
+                    self.ves[i] = 0;
+                }
             }
         }
         self.current_page_id = page_id as i32;

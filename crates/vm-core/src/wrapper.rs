@@ -16,6 +16,17 @@ pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map:
     hasher.update(&payload_data);
     let hash = hasher.finalize();
     let hash_arr: [u8; 32] = hash.into();
+    
+    #[cfg(feature = "dev")]
+    {
+        let expected_hash = crate::verify_bridge::PAYLOAD_HASH.with(|h| *h.borrow());
+        if let Some(expected) = expected_hash {
+            if hash_arr != expected {
+                panic!("VirtSC Check Failed: Payload Hash Mismatch! (DEV_MODE enabled)");
+            }
+        }
+    }
+    
     crate::verify_bridge::set_payload_hash(Box::new(hash_arr));
 
     let mut session_key = [0u8; 32];

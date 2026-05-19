@@ -155,10 +155,16 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
     
     const pngBuffer = PNG.sync.write(png);
 
-    // 6. XOR encrypt the final payload with 32-byte rolling key
+    // 6. XOR encrypt the final payload with 32-byte rolling key (unless DEV_MODE)
     const encryptedBytecode = new Uint8Array(newBytecode.length);
-    for (let i = 0; i < newBytecode.length; i++) {
-        encryptedBytecode[i] = newBytecode[i] ^ sessionKey[i % 32];
+    if (process.env.DEV_MODE === 'true') {
+        for (let i = 0; i < newBytecode.length; i++) {
+            encryptedBytecode[i] = newBytecode[i];
+        }
+    } else {
+        for (let i = 0; i < newBytecode.length; i++) {
+            encryptedBytecode[i] = newBytecode[i] ^ sessionKey[i % 32];
+        }
     }
 
     return {

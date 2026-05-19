@@ -4,8 +4,8 @@ use zeroize::Zeroize;
 use std::cell::RefCell;
 
 thread_local! {
-    static SIGNING_KEY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
-    static PAYLOAD_HASH: RefCell<Option<[u8; 32]>> = RefCell::new(None);
+    pub static SIGNING_KEY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
+    pub static PAYLOAD_HASH: RefCell<Option<[u8; 32]>> = RefCell::new(None);
 }
 
 #[wasm_bindgen]
