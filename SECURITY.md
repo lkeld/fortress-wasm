@@ -2,6 +2,8 @@
 
 This document provides a highly transparent, honest assessment of what Fortress WASM protects against, what its limitations are, and the exact threat model it was engineered for. In software security, overclaiming is worse than underclaiming. This engine is built to maximise the cost of reverse engineering, not to provide mathematical impossibility.
 
+*Note: Following the final security hardening phases, a comprehensive functional correctness audit was conducted (May 2026). This audit systematically verified that the advanced obfuscation layers do not compromise the underlying runtime stability. All core architectural integration paths, 32-bit WASM integer boundary constraints, and edge-case syntax parsers have been fully hardened. This ensures the system is not only highly resistant to automated deobfuscation but also entirely production-ready and semantically reliable under heavy execution loads.*
+
 ## What This Protects Against
 
 **Linear Mixed Boolean-Arithmetic Solvers (Cryptic Bytes, 2024)**

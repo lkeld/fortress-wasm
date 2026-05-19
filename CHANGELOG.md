@@ -2,6 +2,15 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.0.2] - 2026-05-19
+
+### Fixed
+- **Post-Implementation Functional Correctness Audit**:
+  - *ABI Mismatch*: Fixed a critical bug where `worker.ts` passed 3 arguments to the VM instead of the required 4. Fully traced and integrated the dynamic `opcodeMap` into the Web Worker execution payload.
+  - *Integer Truncation Vulnerability*: Identified and fixed a 32-bit WASM integer truncation bug where 64-bit array indices larger than `u32::MAX` silently truncated to `0`, bypassing bounds checks. Replaced unsafe `as usize` casts with checked `try_from`, properly propagating `IndexOutOfBounds` errors.
+  - *Compiler Edge Cases*: Upgraded the TypeScript `lexer.ts` and `parser.ts` to properly handle unary negative numbers (`-x`), scientific notation (`1e3`), leading-dot floating points (`.5`), and complex string escape sequences (`\"`, `\n`).
+  - *Panic Hardening*: Hardened `vm.rs` against silent JS environment crashes by replacing `.unwrap()` on the host performance timer with a safe `.and_then()` fallback, and removed `panic!` calls in development bridges.
+
 ## [1.0.0] - 2026-05-19
 
 ### Added
