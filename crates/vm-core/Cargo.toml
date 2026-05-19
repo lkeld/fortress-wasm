@@ -16,6 +16,7 @@ hmac = "0.12"
 sha2 = "0.10"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 web-sys = { version = "0.3", features = ["Window", "WorkerGlobalScope", "Performance"] }
+getrandom = { version = "0.2", features = ["js"] }
 
 png = "0.17"
 

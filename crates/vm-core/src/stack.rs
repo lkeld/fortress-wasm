@@ -16,6 +16,7 @@ pub enum VmError {
     UnexpectedEndOfCode,
     IndexOutOfBounds,
     ExecutionLimitExceeded,
+    InvalidShiftAmount,
 }
 
 pub struct Stack {

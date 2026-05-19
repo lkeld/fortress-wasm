@@ -475,6 +475,7 @@ name = "vm-core"
 version = "0.1.0"
 dependencies = [
  "crypto-core",
+ "getrandom",
  "hmac",
  "js-sys",
  "png",
