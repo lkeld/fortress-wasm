@@ -15,8 +15,8 @@
     "build:server": "tsc -p server/tsconfig.json",
     "build:wasm-node:dev": "wasm-pack build crates/vm-core --target nodejs --out-dir ../../pkg-node --features dev && rm -f pkg-node/.gitignore",
     "build:wasm-node:prod": "wasm-pack build crates/vm-core --target nodejs --out-dir ../../pkg-node && rm -f pkg-node/.gitignore",
-    "build:wasm-web:dev": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web --features dev && rm -f pkg-web/.gitignore && sed -i '' 's/import { native_call } from '\\''env'\\'';/const native_call = (arg0, arg1) => (typeof window !== '\\''undefined'\\'' \\&\\& typeof window.native_call === '\\''function'\\'') ? window.native_call(arg0, arg1) : \"\";/g' pkg-web/vm_core.js",
-    "build:wasm-web:prod": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web && rm -f pkg-web/.gitignore && sed -i '' 's/import { native_call } from '\\''env'\\'';/const native_call = (arg0, arg1) => (typeof window !== '\\''undefined'\\'' \\&\\& typeof window.native_call === '\\''function'\\'') ? window.native_call(arg0, arg1) : \"\";/g' pkg-web/vm_core.js",
+    "build:wasm-web:dev": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web --features dev && rm -f pkg-web/.gitignore && node scripts/patch_web.js",
+    "build:wasm-web:prod": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web && rm -f pkg-web/.gitignore && node scripts/patch_web.js",
     "build:dev": "npm run build:isa:dev && DEV_MODE=true npm run build:compiler && npm run build:server && npm run build:wasm-node:dev && npm run build:wasm-web:dev",
     "build:prod": "npm run build:isa:prod && npm run build:compiler && npm run build:server && npm run build:wasm-node:prod && npm run build:wasm-web:prod",
     "build": "npm run build:prod"
