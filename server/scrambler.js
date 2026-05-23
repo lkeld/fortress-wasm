@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.scrambleSessionPayload = scrambleSessionPayload;
 const fs = __importStar(require("fs"));
 const pngjs_1 = require("pngjs");
+const crypto = __importStar(require("crypto"));
 // @ts-ignore
 const opcodes_js_1 = require("../compiler/dist/opcodes.js");
 /**
@@ -64,7 +65,7 @@ function scrambleSessionPayload(fvbcPath, originalMapPath, providedSessionKey) {
     // See Code Renewability for Native Software Protection, arxiv.org/abs/2003.00916.
     const newMap = Array.from({ length: 256 }, (_, i) => i);
     for (let i = 255; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
+        const j = crypto.randomBytes(4).readUInt32LE(0) % (i + 1);
         const temp = newMap[i];
         newMap[i] = newMap[j];
         newMap[j] = temp;
@@ -82,9 +83,7 @@ function scrambleSessionPayload(fvbcPath, originalMapPath, providedSessionKey) {
         }
     }
     else {
-        for (let i = 0; i < 32; i++) {
-            sessionKey[i] = Math.floor(Math.random() * 256);
-        }
+        sessionKey = new Uint8Array(crypto.randomBytes(32));
     }
     // 4. Translate the payload
     const newBytecode = new Uint8Array(originalBytecode.length);
@@ -97,11 +96,10 @@ function scrambleSessionPayload(fvbcPath, originalMapPath, providedSessionKey) {
         i++;
         if (standardOpcode === opcodes_js_1.OpCode.PushString) { // PushString
             // 4 byte nonce
-            const nonce = new Uint8Array(4);
+            const nonce = new Uint8Array(crypto.randomBytes(4));
             for (let j = 0; j < 4; j++) {
                 if (i < originalBytecode.length) {
-                    nonce[j] = originalBytecode[i];
-                    newBytecode[i] = originalBytecode[i];
+                    newBytecode[i] = nonce[j];
                     i++;
                 }
             }
@@ -114,12 +112,30 @@ function scrambleSessionPayload(fvbcPath, originalMapPath, providedSessionKey) {
                     i++;
                 }
             }
-            // string bytes: encrypt using session key and nonce
+            // Generate keystream of length `len` using SHA-256
+            const keystream = new Uint8Array(len);
+            {
+                let offset = 0;
+                let blockIndex = 0;
+                while (offset < len) {
+                    const hasher = crypto.createHash('sha256');
+                    hasher.update(sessionKey);
+                    hasher.update(nonce);
+                    const blockBuf = Buffer.alloc(4);
+                    blockBuf.writeUInt32LE(blockIndex);
+                    hasher.update(blockBuf);
+                    const block = hasher.digest();
+                    for (let k = 0; k < block.length && offset < len; k++) {
+                        keystream[offset++] = block[k];
+                    }
+                    blockIndex++;
+                }
+            }
+            // string bytes: encrypt using SHA-256 keystream
             for (let j = 0; j < len; j++) {
                 if (i < originalBytecode.length) {
                     const plaintext = originalBytecode[i];
-                    const keyByte = sessionKey[(nonce[j % 4] + j) % 32];
-                    newBytecode[i] = plaintext ^ keyByte;
+                    newBytecode[i] = plaintext ^ keystream[j];
                     i++;
                 }
             }
@@ -152,11 +168,12 @@ function scrambleSessionPayload(fvbcPath, originalMapPath, providedSessionKey) {
     // Phase 4: LSB Steganographic Key Delivery
     // We encode the 32-byte session key into the PNG's Least Significant Bits.
     const png = new pngjs_1.PNG({ width: 16, height: 16 });
+    const padding = crypto.randomBytes(256 * 3);
     for (let i = 0; i < 256; i++) {
         const idx = i * 4;
-        png.data[idx] = Math.floor(Math.random() * 256); // R
-        png.data[idx + 1] = Math.floor(Math.random() * 256); // G
-        png.data[idx + 2] = Math.floor(Math.random() * 256); // B
+        png.data[idx] = padding[i * 3]; // R
+        png.data[idx + 1] = padding[i * 3 + 1]; // G
+        png.data[idx + 2] = padding[i * 3 + 2]; // B
         png.data[idx + 3] = 255; // Alpha is always 255 now! No longer an anomaly
     }
     const primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];

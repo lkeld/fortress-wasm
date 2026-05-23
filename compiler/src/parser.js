@@ -253,6 +253,18 @@ var Parser = /** @class */ (function () {
                     left: { type: 'Literal', value: 0, raw: '0' },
                     right: this.parseExpression(this.getPrecedence(lexer_1.TokenType.Minus))
                 };
+            case lexer_1.TokenType.Not:
+                this.nextToken();
+                return {
+                    type: 'UnaryExpression',
+                    operator: '!',
+                    argument: this.parseExpression(8)
+                };
+            case lexer_1.TokenType.LParen:
+                this.nextToken();
+                var expr = this.parseExpression(0);
+                this.expect(lexer_1.TokenType.RParen);
+                return expr;
             default:
                 throw new Error("Unexpected prefix token ".concat(token.type, " (").concat(lexer_1.TokenType[token.type], ") at line ").concat(token.line));
         }

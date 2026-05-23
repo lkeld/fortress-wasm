@@ -5,6 +5,7 @@ import { OpCode } from './opcodes';
 export class CodeGenerator {
     private code: number[] = [];
     private locals: Map<string, number> = new Map();
+    private localTypes: Map<string, 'int' | 'float' | 'any'> = new Map();
     private functions: Map<string, number> = new Map();
     private functionBodies: Statement[] = [];
     private unresolvedCalls: { offset: number, name: string }[] = [];
@@ -14,6 +15,13 @@ export class CodeGenerator {
     private dummyVariables: string[] = [];
 
     public generate(program: Program): { code: Uint8Array, opcodeMap: Uint8Array } {
+        this.code = [];
+        this.locals = new Map();
+        this.localTypes = new Map();
+        this.functions = new Map();
+        this.functionBodies = [];
+        this.unresolvedCalls = [];
+        this.dummyVariables = [];
         // Generate random OpCode mapping
         for (let i = 0; i < 256; i++) {
             this.opcodeMap[i] = i;
@@ -120,6 +128,36 @@ export class CodeGenerator {
         return this.locals.get(name)!;
     }
 
+    private isFloatExpression(expr: Expression): boolean {
+        if (!expr) return false;
+        if (expr.type === 'Literal') {
+            return typeof expr.value === 'number' && (expr.raw.includes('.') || !Number.isInteger(expr.value));
+        }
+        if (expr.type === 'Identifier') {
+            const type = this.localTypes.get(expr.name);
+            return type === 'float';
+        }
+        if (expr.type === 'BinaryExpression') {
+            return this.isFloatExpression(expr.left) || this.isFloatExpression(expr.right);
+        }
+        return false;
+    }
+
+    private isIntExpression(expr: Expression): boolean {
+        if (!expr) return false;
+        if (expr.type === 'Literal') {
+            return typeof expr.value === 'number' && Number.isInteger(expr.value) && !expr.raw?.includes('.');
+        }
+        if (expr.type === 'Identifier') {
+            const type = this.localTypes.get(expr.name);
+            return type === 'int';
+        }
+        if (expr.type === 'BinaryExpression') {
+            return this.isIntExpression(expr.left) && this.isIntExpression(expr.right);
+        }
+        return false;
+    }
+
     private getDummyVariable(): string {
         return this.dummyVariables[Math.floor(Math.random() * this.dummyVariables.length)];
     }
@@ -184,11 +222,13 @@ export class CodeGenerator {
         switch (stmt.type) {
             case 'LetStatement':
                 this.visitExpression(stmt.value);
+                this.localTypes.set(stmt.name.name, this.isFloatExpression(stmt.value) ? 'float' : (this.isIntExpression(stmt.value) ? 'int' : 'any'));
                 this.emit(OpCode.StoreLocal, this.resolveLocal(stmt.name.name));
                 break;
             case 'AssignStatement':
                 if (stmt.left.type === 'Identifier') {
                     this.visitExpression(stmt.value);
+                    this.localTypes.set(stmt.left.name, this.isFloatExpression(stmt.value) ? 'float' : (this.isIntExpression(stmt.value) ? 'int' : 'any'));
                     this.emit(OpCode.StoreLocal, this.resolveLocal(stmt.left.name));
                 } else if (stmt.left.type === 'MemberExpression') {
                     this.visitExpression(stmt.left.object);
@@ -275,14 +315,39 @@ export class CodeGenerator {
                 }
                 break;
             case 'FunctionDeclaration':
-                // Record the function's start address
+                // Emit a Jump past the function body to avoid execution fall-through
+                const jumpPastOffset = this.code.length;
+                this.emit(OpCode.Jump, 0);
+
+                // Record the function's start address after the jump
                 this.functions.set(stmt.name.name, this.code.length);
                 // Randomise junk emission rate per function (10% to 50%) to defeat statistical profiling
                 this.currentJunkThreshold = 0.1 + Math.random() * 0.4;
                 
+                // Save and isolate scope
+                const savedLocals = this.locals;
+                const savedLocalTypes = this.localTypes;
+                this.locals = new Map();
+                this.localTypes = new Map();
+                
                 // Assign parameters to locals
+                const numParams = stmt.params.length;
                 stmt.params.forEach((param, index) => {
                     this.locals.set(param.name, index);
+                    this.localTypes.set(param.name, 'any');
+                });
+                
+                // Map dummy variables starting from numParams to avoid collision and make them local
+                this.dummyVariables.forEach((name, index) => {
+                    this.locals.set(name, numParams + index);
+                    this.localTypes.set(name, 'int');
+                });
+                
+                // Initialize dummy variables at the beginning of each function declaration frame
+                this.dummyVariables.forEach((name) => {
+                    const slot = this.locals.get(name)!;
+                    this.emit(OpCode.PushInt, Math.floor(Math.random() * 256));
+                    this.emit(OpCode.StoreLocal, slot);
                 });
                 
                 // We emit the function body
@@ -291,10 +356,18 @@ export class CodeGenerator {
                 }
                 
                 // Ensure a return at the end of the function if not present
-                if (this.code[this.code.length - 1] !== OpCode.Return) {
+                const hasExplicitReturn = stmt.body.body.length > 0 && stmt.body.body[stmt.body.body.length - 1].type === 'ReturnStatement';
+                if (!hasExplicitReturn) {
                     this.emit(OpCode.PushNull);
                     this.emit(OpCode.Return);
                 }
+                
+                // Patch the Jump to point past the entire function body (including its return sequence)
+                this.patchJump(jumpPastOffset + 1, this.code.length);
+
+                // Restore scope
+                this.locals = savedLocals;
+                this.localTypes = savedLocalTypes;
                 break;
         }
     }
@@ -332,13 +405,15 @@ export class CodeGenerator {
                     this.visitExpression(expr.left);
                     this.visitExpression(expr.right);
                     
-                    if (process.env.DEV_MODE === 'true') {
+                    const isIntMath = this.isIntExpression(expr.left) && this.isIntExpression(expr.right);
+                    const useMba = process.env.DEV_MODE !== 'true' && isIntMath;
+                    if (!useMba) {
                         this.emit(expr.operator === '+' ? OpCode.Add : OpCode.Sub);
                         return;
                     }
                     
-                    const tmpRight = `_mba_r_${Math.floor(Math.random() * 1000000)}`;
-                    const tmpLeft = `_mba_l_${Math.floor(Math.random() * 1000000)}`;
+                    const tmpRight = `_mba_temp_r`;
+                    const tmpLeft = `_mba_temp_l`;
                     
                     this.emit(OpCode.StoreLocal, this.resolveLocal(tmpRight));
                     this.emit(OpCode.StoreLocal, this.resolveLocal(tmpLeft));
@@ -416,30 +491,107 @@ export class CodeGenerator {
                 } else {
                     this.visitExpression(expr.left);
                     this.visitExpression(expr.right);
+                    const isFloatMath = this.isFloatExpression(expr.left) || this.isFloatExpression(expr.right);
                     switch (expr.operator) {
                         case '*': 
-                            if (process.env.DEV_MODE === 'true') {
+                            if (process.env.DEV_MODE === 'true' || isFloatMath) {
                                 this.emit(OpCode.Mul);
-                            } else if (Math.random() > 0.5) {
-                                this.emit(OpCode.SwapAndMul);
-                            } else if (Math.random() > 0.5) {
-                                this.emit(OpCode.PushInt, 0); // false condition
-                                this.emit(OpCode.JumpAndMul, 0); // dummy target
                             } else {
+                                /*
+                                 * Mathematical Equivalence Proof:
+                                 *
+                                 * We prove that:
+                                 * x * y = (x & y) * (x | y) + (x & ~y) * (~x & y)
+                                 *
+                                 * For any two bitwise integers x and y, we can partition x and y into bitwise disjoint components:
+                                 * x = (x & y) + (x & ~y)
+                                 * y = (x & y) + (~x & y)
+                                 *
+                                 * Substituting these into the product x * y:
+                                 * x * y = ((x & y) + (x & ~y)) * ((x & y) + (~x & y))
+                                 *
+                                 * Expanding the terms algebraically:
+                                 * x * y = (x & y)*(x & y) + (x & y)*(~x & y) + (x & ~y)*(x & y) + (x & ~y)*(~x & y)
+                                 *
+                                 * Factorizing (x & y) from the first three terms:
+                                 * x * y = (x & y) * [(x & y) + (~x & y) + (x & ~y)] + (x & ~y)*(~x & y)
+                                 *
+                                 * Since (x & y), (~x & y), and (x & ~y) are pairwise bitwise disjoint:
+                                 * (x & y) + (~x & y) + (x & ~y) = (x & y) | (~x & y) | (x & ~y) = x | y
+                                 *
+                                 * Substituting this back:
+                                 * x * y = (x & y) * (x | y) + (x & ~y) * (~x & y)
+                                 *
+                                 * This completes the proof.
+                                 */
+                                const tmpRight = `_mba_temp_r`;
+                                const tmpLeft = `_mba_temp_l`;
+                                
+                                this.emit(OpCode.StoreLocal, this.resolveLocal(tmpRight));
+                                this.emit(OpCode.StoreLocal, this.resolveLocal(tmpLeft));
+                                
+                                // (x & y)
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                                this.emit(OpCode.BitAnd);
+                                
+                                // (x | y)
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                                this.emit(OpCode.BitOr);
+                                
                                 this.emit(OpCode.Mul);
-                                // Structural Linear MBA Padding
-                                // While not a full polynomial substitution, deriving the +0 padding from a randomised dummy slot 
-                                // pollutes static taint tracking by artificially linking the operation to a disjoint memory region.
-                                const dummy = this.getDummyVariable();
-                                this.emit(OpCode.LoadLocal, this.resolveLocal(dummy));
-                                this.emit(OpCode.Dup);
-                                this.emit(OpCode.Sub); // dummy - dummy = 0
-                                this.emit(OpCode.Add); // val + 0
+                                
+                                // (x & ~y)
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                                this.emit(OpCode.BitNot);
+                                this.emit(OpCode.BitAnd);
+                                
+                                // (~x & y)
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                                this.emit(OpCode.BitNot);
+                                this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                                this.emit(OpCode.BitAnd);
+                                
+                                this.emit(OpCode.Mul);
+                                
+                                this.emit(OpCode.Add);
                             }
                             break;
                         case '/': 
                             this.emit(OpCode.Div);
-                            if (process.env.DEV_MODE !== 'true') {
+                            if (process.env.DEV_MODE !== 'true' && !isFloatMath) {
+                                /*
+                                 * Proposing a Polynomial MBA Model for Division:
+                                 *
+                                 * 1. Mathematical Limitations:
+                                 *    Unlike addition, subtraction, and multiplication, integer division (x / y)
+                                 *    cannot be cleanly distributed or partitioned over bitwise components.
+                                 *    Specifically, division is non-distributive over bitwise partitioning:
+                                 *      (a & b) / c !== (a / c) & (b / c)
+                                 *    and it does not associate or commute with bitwise operators.
+                                 *    Furthermore, division is not a polynomial mapping over the ring Z/2^nZ.
+                                 *    Only odd elements in Z/2^nZ have multiplicative inverses (making division by
+                                 *    an odd element equivalent to multiplication by its modular inverse),
+                                 *    whereas division by even integers cannot be inverted or represented algebraically
+                                 *    in this ring without loss of information.
+                                 *
+                                 * 2. Newton-Raphson Approximation Model:
+                                 *    For divisions by an odd divisor y, we can compute the modular inverse y^-1
+                                 *    using the Newton-Raphson division iteration:
+                                 *      z_{k+1} = z_k * (2 - y * z_k) (mod 2^n)
+                                 *    Starting with a simple initial guess z_0 (e.g., matching the lower bits),
+                                 *    this iteration quadratically converges to the modular inverse y^-1 in n/2 steps.
+                                 *    For 32-bit integers, 5 iterations are sufficient to get the exact inverse.
+                                 *    Since the iterations involve only subtraction and multiplication, they can
+                                 *    be obfuscated using standard linear and polynomial MBA identities.
+                                 *    For even divisors, we can factorize the divisor into y = d * 2^s, where d is
+                                 *    odd, compute the modular inverse of d, multiply, and shift right:
+                                 *      x / y = (x * d^-1) >> s
+                                 *    This decomposes division into multiplication, modular inversion (obfuscated via
+                                 *    Newton-Raphson), and bitwise shifts, enabling a robust polynomial MBA representation.
+                                 */
                                 // Linear MBA: Add 0
                                 const dummyDiv = this.getDummyVariable();
                                 this.emit(OpCode.LoadLocal, this.resolveLocal(dummyDiv));
@@ -565,6 +717,14 @@ export class CodeGenerator {
                     throw new Error("Update expressions on members are currently unsupported.");
                 } else {
                     throw new Error("Invalid left-hand side expression in update operation");
+                }
+                break;
+            case 'UnaryExpression':
+                if (expr.operator === '!') {
+                    this.visitExpression(expr.argument);
+                    this.emit(OpCode.Not);
+                } else {
+                    throw new Error(`Unsupported unary operator ${expr.operator}`);
                 }
                 break;
         }

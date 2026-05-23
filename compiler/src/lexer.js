@@ -75,6 +75,20 @@ var Lexer = /** @class */ (function () {
                 while (!this.isAtEnd() && this.peek() !== '\n')
                     this.advance();
             }
+            else if (c === '/' && this.source[this.position + 1] === '*') {
+                this.advance(); // consume '/'
+                this.advance(); // consume '*'
+                while (!this.isAtEnd()) {
+                    if (this.peek() === '*' && this.source[this.position + 1] === '/') {
+                        this.advance(); // consume '*'
+                        this.advance(); // consume '/'
+                        break;
+                    }
+                    if (this.advance() === '\n') {
+                        this.line++;
+                    }
+                }
+            }
             else {
                 break;
             }

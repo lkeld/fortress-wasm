@@ -75,6 +75,7 @@ export interface ForStatement {
 
 export type Expression = 
     | BinaryExpression
+    | UnaryExpression
     | Literal
     | Identifier
     | CallExpression
@@ -82,6 +83,12 @@ export type Expression =
     | ObjectExpression
     | MemberExpression
     | UpdateExpression;
+
+export interface UnaryExpression {
+    type: 'UnaryExpression';
+    operator: string;
+    argument: Expression;
+}
 
 export interface BinaryExpression {
     type: 'BinaryExpression';
@@ -410,6 +417,18 @@ export class Parser {
                     left: { type: 'Literal', value: 0, raw: '0' }, 
                     right: this.parseExpression(this.getPrecedence(TokenType.Minus))
                 };
+            case TokenType.Not:
+                this.nextToken();
+                return {
+                    type: 'UnaryExpression',
+                    operator: '!',
+                    argument: this.parseExpression(8)
+                };
+            case TokenType.LParen:
+                this.nextToken();
+                const expr = this.parseExpression(0);
+                this.expect(TokenType.RParen);
+                return expr;
             default:
                 throw new Error(`Unexpected prefix token ${token.type} (${TokenType[token.type]}) at line ${token.line}`);
         }

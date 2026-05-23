@@ -1,0 +1,19 @@
+[package]
+name = "fortress-wasm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+vm-core = { path = "../crates/vm-core" }
+sha2 = "0.10"
+serde_json = "1.0"
+
+[[bin]]
+name = "vm_fuzz"
+path = "fuzz_targets/vm_fuzz.rs"
+test = false
+doc = false

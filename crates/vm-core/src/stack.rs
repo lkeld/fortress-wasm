@@ -17,6 +17,8 @@ pub enum VmError {
     IndexOutOfBounds,
     ExecutionLimitExceeded,
     InvalidShiftAmount,
+    BorrowError,
+    OutOfGas,
 }
 
 pub struct Stack {

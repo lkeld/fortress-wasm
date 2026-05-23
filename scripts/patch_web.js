@@ -6,7 +6,7 @@ const filePath = path.join(__dirname, '..', 'pkg-web', 'vm_core.js');
 if (fs.existsSync(filePath)) {
     let content = fs.readFileSync(filePath, 'utf8');
     const search = "import { native_call } from 'env';";
-    const replace = "const native_call = (arg0, arg1) => (typeof window !== 'undefined' && typeof window.native_call === 'function') ? window.native_call(arg0, arg1) : \"\";";
+    const replace = "const native_call = (arg0, arg1) => (typeof self !== 'undefined' && typeof self.native_call === 'function') ? self.native_call(arg0, arg1) : (typeof window !== 'undefined' && typeof window.native_call === 'function') ? window.native_call(arg0, arg1) : \"\";";
     
     if (content.includes(search)) {
         content = content.replace(search, replace);

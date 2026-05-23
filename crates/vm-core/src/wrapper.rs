@@ -34,9 +34,28 @@ pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map:
     crate::verify_bridge::set_payload_hash(Box::new(hash_arr));
 
     let mut session_key = [0u8; 32];
-    if let Some(key) = crate::steg_extract::extract_prime_stride(image_rgba) {
-        session_key = key;
+    let mut has_session_key = false;
+    crate::verify_bridge::SESSION_KEY.with(|k| {
+        if let Some(key) = *k.borrow() {
+            session_key = key;
+            has_session_key = true;
+        }
+    });
+
+    if !has_session_key {
+        if let Some(key) = crate::steg_extract::extract_prime_stride(image_rgba) {
+            session_key = key;
+            has_session_key = true;
+        }
     }
+
+    #[cfg(all(not(feature = "dev"), not(test)))]
+    {
+        if !has_session_key {
+            return r#"{"status": false, "error": "MissingSessionKey"}"#.to_string();
+        }
+    }
+    let _ = has_session_key;
 
     let bytecode_payload = bytecode;
 
@@ -51,14 +70,21 @@ pub fn execute(bytecode: &[u8], image_rgba: &[u8], input_json: &str, opcode_map:
         }
     }
     
-    match vm.run() {
+    let res = match vm.run() {
         Ok(result) => {
             value_to_json(&result).to_string()
         },
         Err(e) => {
-            format!(r#"{{"status": false, "error": "{:?}"}}"#, e)
+            let err_str = match e {
+                crate::stack::VmError::OutOfGas => "ExecutionLimitExceeded".to_string(),
+                _ => format!("{:?}", e),
+            };
+            format!(r#"{{"status": false, "error": "{}"}}"#, err_str)
         }
-    }
+    };
+    use zeroize::Zeroize;
+    session_key.zeroize();
+    res
 }
 
 // Helpers to convert between our Value enum and serde_json::Value
@@ -91,6 +117,12 @@ pub fn json_to_value(v: &serde_json::Value) -> Value {
 }
 
 pub fn value_to_json(v: &Value) -> serde_json::Value {
+    use std::collections::HashSet;
+    let mut visited = HashSet::new();
+    value_to_json_inner(v, &mut visited)
+}
+
+fn value_to_json_inner(v: &Value, visited: &mut std::collections::HashSet<usize>) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
@@ -104,15 +136,47 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         },
         Value::Str(s) => serde_json::Value::String(s.to_string()),
         Value::List(list) => {
-            let arr = list.borrow().iter().map(value_to_json).collect();
-            serde_json::Value::Array(arr)
+            let ptr_val = std::rc::Rc::as_ptr(list) as usize;
+            if visited.contains(&ptr_val) {
+                return serde_json::Value::String("<cycle>".to_string());
+            }
+            visited.insert(ptr_val);
+            
+            let res = match list.try_borrow() {
+                Ok(borrowed_vec) => {
+                    let arr = borrowed_vec.iter().map(|item| value_to_json_inner(item, visited)).collect();
+                    serde_json::Value::Array(arr)
+                }
+                Err(_) => {
+                    serde_json::Value::String("<borrowed>".to_string())
+                }
+            };
+            
+            visited.remove(&ptr_val);
+            res
         },
         Value::Object(obj_rc) => {
-            let mut map = serde_json::Map::new();
-            for (k, v) in obj_rc.borrow().iter() {
-                map.insert(k.clone(), value_to_json(v));
+            let ptr_val = std::rc::Rc::as_ptr(obj_rc) as usize;
+            if visited.contains(&ptr_val) {
+                return serde_json::Value::String("<cycle>".to_string());
             }
-            serde_json::Value::Object(map)
+            visited.insert(ptr_val);
+            
+            let res = match obj_rc.try_borrow() {
+                Ok(borrowed_map) => {
+                    let mut map = serde_json::Map::new();
+                    for (k, v) in borrowed_map.iter() {
+                        map.insert(k.clone(), value_to_json_inner(v, visited));
+                    }
+                    serde_json::Value::Object(map)
+                }
+                Err(_) => {
+                    serde_json::Value::String("<borrowed>".to_string())
+                }
+            };
+            
+            visited.remove(&ptr_val);
+            res
         }
     }
 }
@@ -120,6 +184,7 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::opcodes::OpCode;
 
     #[test]
     fn test_execute_empty_bytecode() {
@@ -135,14 +200,19 @@ mod tests {
         // PushInt = 0, operand = 42 (0x2A 00 00 00), Halt = 43
         // Actually, we must provide it via JIT, but if session_key is all 0s, cipher is identity!
         let mut bytecode = vec![0; 256]; // Need 256 bytes for JIT page
-        bytecode[0] = 0; // PushInt
+        bytecode[0] = OpCode::PushInt as u8;
         bytecode[1] = 42;
         bytecode[2] = 0;
         bytecode[3] = 0;
         bytecode[4] = 0;
-        bytecode[5] = 43; // Halt
+        bytecode[5] = OpCode::Halt as u8;
 
-        let result = execute(&bytecode, &[], "[]", &[]);
+        let mut opcode_map = [0u8; 256];
+        for i in 0..256 {
+            opcode_map[i] = i as u8;
+        }
+
+        let result = execute(&bytecode, &[], "[]", &opcode_map);
         // Should execute successfully and return 42
         assert_eq!(result, "42");
     }

@@ -7,7 +7,7 @@ mod tests {
     
     
 
-    fn setup_vm(bytecode: Vec<u8>) -> Vm {
+    fn setup_vm(mut bytecode: Vec<u8>) -> Vm {
         // Identity map for tests
         let mut opcode_map = [0u8; 256];
         for i in 0..256 {
@@ -17,6 +17,55 @@ mod tests {
         // Zero session key means XOR cipher is an identity operation, 
         // allowing us to write plaintext test bytecode safely without decryption mangling it
         let session_key = [0u8; 32];
+
+        // Encrypt any PushString literals in the bytecode with SHA-256 keystream derived from zero session key
+        let mut i = 0;
+        while i < bytecode.len() {
+            let op = bytecode[i];
+            i += 1;
+            if op == OpCode::PushString as u8 {
+                if i + 8 <= bytecode.len() {
+                    let mut nonce = [0u8; 4];
+                    nonce.copy_from_slice(&bytecode[i..i+4]);
+                    i += 4;
+                    
+                    let mut len_bytes = [0u8; 4];
+                    len_bytes.copy_from_slice(&bytecode[i..i+4]);
+                    let len = u32::from_le_bytes(len_bytes) as usize;
+                    i += 4;
+                    
+                    if i + len <= bytecode.len() {
+                        // Generate keystream
+                        let mut keystream = Vec::with_capacity(len);
+                        let mut block_index = 0u32;
+                        while keystream.len() < len {
+                            use sha2::{Sha256, Digest};
+                            let mut hasher = Sha256::new();
+                            hasher.update(&session_key);
+                            hasher.update(&nonce);
+                            hasher.update(&block_index.to_le_bytes());
+                            let block = hasher.finalize();
+                            
+                            let bytes_to_add = (len - keystream.len()).min(block.len());
+                            keystream.extend_from_slice(&block[..bytes_to_add]);
+                            block_index += 1;
+                        }
+                        
+                        // Encrypt plaintext bytes in-place in the bytecode
+                        for j in 0..len {
+                            bytecode[i + j] ^= keystream[j];
+                        }
+                        i += len;
+                    }
+                }
+            } else if op == OpCode::PushFloat as u8 || op == OpCode::CallNative as u8 || op == OpCode::Call as u8 {
+                i = (i + 8).min(bytecode.len());
+            } else if op == OpCode::PushInt as u8 || op == OpCode::PushBool as u8 || op == OpCode::LoadLocal as u8 ||
+                      op == OpCode::StoreLocal as u8 || op == OpCode::Jump as u8 || op == OpCode::JumpIf as u8 ||
+                      op == OpCode::JumpIfNot as u8 || op == OpCode::JumpAndMul as u8 {
+                i = (i + 4).min(bytecode.len());
+            }
+        }
         
         // Compute correct hash so VirtSC doesn't corrupt the session key
         use sha2::{Sha256, Digest};
@@ -670,7 +719,8 @@ mod tests {
             OpCode::Jump as u8, 0, 0, 0, 0
         ];
         let mut vm = setup_vm(bytecode);
-        assert!(matches!(vm.run(), Err(VmError::ExecutionLimitExceeded)));
+        vm.set_gas_limit(10);
+        assert!(matches!(vm.run(), Err(VmError::OutOfGas)));
     }
 
     #[test]
@@ -681,4 +731,318 @@ mod tests {
         let mut vm = setup_vm(bytecode);
         assert!(matches!(vm.run(), Err(VmError::UnexpectedEndOfCode)));
     }
+
+    #[test]
+    #[cfg(not(feature = "dev"))]
+    fn test_secure_pushstring_decryption() {
+        let session_key = [0x55u8; 32];
+        let nonce = [0xAAu8; 4];
+        let text = b"secure_cryptography_layer";
+        let len = text.len();
+        
+        let mut keystream = Vec::with_capacity(len);
+        let mut block_index = 0u32;
+        while keystream.len() < len {
+            use sha2::{Sha256, Digest};
+            let mut hasher = Sha256::new();
+            hasher.update(&session_key);
+            hasher.update(&nonce);
+            hasher.update(&block_index.to_le_bytes());
+            let block = hasher.finalize();
+            
+            let bytes_to_add = (len - keystream.len()).min(block.len());
+            keystream.extend_from_slice(&block[..bytes_to_add]);
+            block_index += 1;
+        }
+        
+        let mut encrypted_text = Vec::with_capacity(len);
+        for j in 0..len {
+            encrypted_text.push(text[j] ^ keystream[j]);
+        }
+        
+        let mut bytecode = vec![OpCode::PushString as u8];
+        bytecode.extend_from_slice(&nonce);
+        bytecode.extend_from_slice(&(len as u32).to_le_bytes());
+        bytecode.extend_from_slice(&encrypted_text);
+        bytecode.push(OpCode::Halt as u8);
+
+        #[cfg(not(feature = "dev"))]
+        {
+            for i in 0..bytecode.len() {
+                bytecode[i] ^= session_key[i % 32];
+            }
+        }
+        
+        let mut opcode_map = [0u8; 256];
+        for i in 0..256 {
+            opcode_map[i] = i as u8;
+        }
+        
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytecode);
+        let hash: [u8; 32] = hasher.finalize().into();
+        
+        let mut vm = Vm::new(bytecode, opcode_map.to_vec(), session_key, hash);
+        let result = vm.run().unwrap();
+        match result {
+            Value::Str(s) => assert_eq!(&*s, "secure_cryptography_layer"),
+            _ => panic!("Expected decrypted Str"),
+        }
+    }
+
+    #[test]
+    fn test_manual_partial_eq() {
+        use std::collections::HashMap;
+        use std::rc::Rc;
+        use std::cell::RefCell;
+        
+        // Equal pointer check
+        let obj_inner = Rc::new(RefCell::new(HashMap::new()));
+        let val1 = Value::Object(obj_inner.clone());
+        let val2 = Value::Object(obj_inner.clone());
+        assert_eq!(val1, val2);
+        
+        // Different pointer check (should be false, as pointer equality is checked)
+        let obj_inner2 = Rc::new(RefCell::new(HashMap::new()));
+        let val3 = Value::Object(obj_inner2);
+        assert_ne!(val1, val3);
+    }
+
+    #[test]
+    fn test_gas_limits() {
+        let bytecode = vec![
+            OpCode::PushInt as u8, 42, 0, 0, 0,
+            OpCode::PushInt as u8, 1, 0, 0, 0,
+            OpCode::Add as u8,
+            OpCode::Halt as u8
+        ];
+        let mut vm = setup_vm(bytecode);
+        vm.set_gas_limit(2); // very low limit (need 1 + 1 + 2 + 1 = 5 gas)
+        assert!(matches!(vm.run(), Err(VmError::OutOfGas)));
+    }
+
+    #[test]
+    fn test_value_to_json_cycle() {
+        use std::collections::HashMap;
+        use std::rc::Rc;
+        use std::cell::RefCell;
+        
+        // Cyclic list
+        let list_inner = Rc::new(RefCell::new(Vec::new()));
+        let list_val = Value::List(list_inner.clone());
+        list_inner.borrow_mut().push(list_val.clone());
+        
+        let json_res = crate::wrapper::value_to_json(&list_val);
+        assert_eq!(json_res, serde_json::Value::Array(vec![serde_json::Value::String("<cycle>".to_string())]));
+
+        // Cyclic object
+        let obj_inner = Rc::new(RefCell::new(HashMap::new()));
+        let obj_val = Value::Object(obj_inner.clone());
+        obj_inner.borrow_mut().insert("self".to_string(), obj_val.clone());
+        
+        let json_res2 = crate::wrapper::value_to_json(&obj_val);
+        assert_eq!(json_res2.get("self").unwrap(), &serde_json::Value::String("<cycle>".to_string()));
+    }
+
+    #[test]
+    fn test_clear_crypto() {
+        let expected_hash = [0x11u8; 32];
+        crate::verify_bridge::set_payload_hash(Box::new(expected_hash));
+        
+        // Initialize static variables
+        crate::verify_bridge::PAYLOAD_HASH.with(|h| {
+            assert!(h.borrow().is_some());
+        });
+
+        crate::verify_bridge::clear_crypto();
+
+        crate::verify_bridge::PAYLOAD_HASH.with(|h| {
+            assert!(h.borrow().is_none());
+        });
+        crate::verify_bridge::SIGNING_KEY.with(|k| {
+            assert!(k.borrow().is_none());
+        });
+    }
+
+    #[test]
+    fn test_pushstring_len_too_large() {
+        // len is larger than limit (65536)
+        let mut bytecode = vec![OpCode::PushString as u8];
+        bytecode.extend_from_slice(&[0, 0, 0, 0]); // nonce
+        bytecode.extend_from_slice(&encode_u32(65537)); // length too large
+        bytecode.push(OpCode::Halt as u8);
+        
+        let mut vm = setup_vm(bytecode);
+        assert!(matches!(vm.run(), Err(VmError::UnexpectedEndOfCode)));
+    }
+
+    #[test]
+    fn test_pushstring_len_exceeds_bytecode() {
+        // len is within limit but exceeds remaining bytecode
+        let mut bytecode = vec![OpCode::PushString as u8];
+        bytecode.extend_from_slice(&[0, 0, 0, 0]); // nonce
+        bytecode.extend_from_slice(&encode_u32(100)); // length 100, but bytecode terminates immediately
+        
+        let mut vm = setup_vm(bytecode);
+        assert!(matches!(vm.run(), Err(VmError::UnexpectedEndOfCode)));
+    }
+
+    #[test]
+    fn test_call_arg_count_too_large() {
+        let bytecode = vec![
+            OpCode::PushInt as u8, 42, 0, 0, 0,
+            OpCode::Call as u8, 0, 0, 0, 0, 1, 1, 0, 0, // target = 0, arg_count = 257 (> 256)
+            OpCode::Halt as u8
+        ];
+        let mut vm = setup_vm(bytecode);
+        assert!(matches!(vm.run(), Err(VmError::InvalidLocalSlot)));
+    }
+
+    #[test]
+    fn test_get_member_str_unicode() {
+        // Test unicode multi-byte string member indexing
+        // String: "🦀🤖" (chars: '🦀', '🤖')
+        // Crab: 4 bytes, Robot: 4 bytes. Total chars = 2
+        let s = "🦀🤖";
+        let mut bytecode = vec![OpCode::PushString as u8, 0, 0, 0, 0];
+        bytecode.extend_from_slice(&encode_u32(s.len() as u32));
+        bytecode.extend_from_slice(s.as_bytes());
+        
+        // Push index 1 ('🤖')
+        bytecode.push(OpCode::PushInt as u8);
+        bytecode.extend_from_slice(&encode_u32(1));
+        bytecode.push(OpCode::GetMember as u8);
+        bytecode.push(OpCode::Halt as u8);
+        
+        let mut vm = setup_vm(bytecode);
+        let result = vm.run().unwrap();
+        match result {
+            Value::Str(ch) => assert_eq!(&*ch, "🤖"),
+            _ => panic!("Expected Robot emoji string"),
+        }
+
+        // Test out of bounds index (index 2)
+        let mut bytecode2 = vec![OpCode::PushString as u8, 0, 0, 0, 0];
+        bytecode2.extend_from_slice(&encode_u32(s.len() as u32));
+        bytecode2.extend_from_slice(s.as_bytes());
+        bytecode2.push(OpCode::PushInt as u8);
+        bytecode2.extend_from_slice(&encode_u32(2)); // index 2 is out of bounds
+        bytecode2.push(OpCode::GetMember as u8);
+        bytecode2.push(OpCode::Halt as u8);
+
+        let mut vm2 = setup_vm(bytecode2);
+        assert!(matches!(vm2.run(), Err(VmError::IndexOutOfBounds)));
+    }
+
+    #[test]
+    fn test_pushstring_huge_length_no_oom() {
+        // len is extremely large: 0xFFFFFFFF
+        let mut bytecode = vec![OpCode::PushString as u8];
+        bytecode.extend_from_slice(&[0, 0, 0, 0]); // nonce
+        bytecode.extend_from_slice(&encode_u32(0xFFFFFFFF));
+        bytecode.push(OpCode::Halt as u8);
+        
+        let mut vm = setup_vm(bytecode);
+        assert!(matches!(vm.run(), Err(VmError::UnexpectedEndOfCode)));
+    }
+
+    #[test]
+    fn test_call_arg_count_limits_no_panic() {
+        // Test different large arg counts: 257, 1000, 0xFFFFFFFF
+        for invalid_count in [257, 1000, 0xFFFFFFFF] {
+            let mut bytecode = vec![
+                OpCode::PushInt as u8, 42, 0, 0, 0,
+                OpCode::Call as u8, 0, 0, 0, 0,
+            ];
+            bytecode.extend_from_slice(&encode_u32(invalid_count));
+            bytecode.push(OpCode::Halt as u8);
+            
+            let mut vm = setup_vm(bytecode);
+            assert!(matches!(vm.run(), Err(VmError::InvalidLocalSlot)));
+        }
+    }
+
+    #[test]
+    fn test_get_member_complex_unicode_indexing() {
+        // Complex unicode characters: surrogate pairs, multi-byte, emojis
+        // String: "A𠜎B🇨🇳C👨‍👩‍👧‍👦D"
+        // 'A' : 1 byte, 1 char
+        // '𠜎' : 4 bytes (surrogate pair range/supplementary plane), 1 char
+        // 'B' : 1 byte, 1 char
+        // '🇨🇳' : 8 bytes (Regional Indicator Symbol Letter C + N), 2 chars
+        // 'C' : 1 byte, 1 char
+        // '👨‍👩‍👧‍👦' : 25 bytes (Family emoji: Man + ZWJ + Woman + ZWJ + Girl + ZWJ + Boy), 7 chars
+        // 'D' : 1 byte, 1 char
+        // Let's verify total character count and correct character-by-character indexing
+        let s = "A𠜎B🇨🇳C👨‍👩‍👧‍👦D";
+        let chars_list: Vec<String> = s.chars().map(|c| c.to_string()).collect();
+        let char_count = chars_list.len();
+
+        for i in 0..char_count {
+            let mut bytecode = vec![OpCode::PushString as u8, 0, 0, 0, 0];
+            bytecode.extend_from_slice(&encode_u32(s.len() as u32));
+            bytecode.extend_from_slice(s.as_bytes());
+            bytecode.push(OpCode::PushInt as u8);
+            bytecode.extend_from_slice(&encode_u32(i as u32));
+            bytecode.push(OpCode::GetMember as u8);
+            bytecode.push(OpCode::Halt as u8);
+
+            let mut vm = setup_vm(bytecode);
+            let result = vm.run().unwrap();
+            match result {
+                Value::Str(ch) => {
+                    assert_eq!(*ch, chars_list[i]);
+                    // Verify it is not null-byte or empty
+                    assert!(!ch.is_empty());
+                    assert_ne!(*ch, "\0");
+                }
+                _ => panic!("Expected Str at index {}", i),
+            }
+        }
+
+        // Test out of bounds indexing (exactly char_count and beyond)
+        for out_idx in [char_count as u32, char_count as u32 + 1, 1000] {
+            let mut bytecode = vec![OpCode::PushString as u8, 0, 0, 0, 0];
+            bytecode.extend_from_slice(&encode_u32(s.len() as u32));
+            bytecode.extend_from_slice(s.as_bytes());
+            bytecode.push(OpCode::PushInt as u8);
+            bytecode.extend_from_slice(&encode_u32(out_idx));
+            bytecode.push(OpCode::GetMember as u8);
+            bytecode.push(OpCode::Halt as u8);
+
+            let mut vm = setup_vm(bytecode);
+            assert!(matches!(vm.run(), Err(VmError::IndexOutOfBounds)));
+        }
+
+        // Test negative index
+        let mut bytecode = vec![OpCode::PushString as u8, 0, 0, 0, 0];
+        bytecode.extend_from_slice(&encode_u32(s.len() as u32));
+        bytecode.extend_from_slice(s.as_bytes());
+        bytecode.push(OpCode::PushInt as u8);
+        bytecode.extend_from_slice(&(-1i32 as u32).to_le_bytes()); // -1
+        bytecode.push(OpCode::GetMember as u8);
+        bytecode.push(OpCode::Halt as u8);
+
+        let mut vm = setup_vm(bytecode);
+        assert!(matches!(vm.run(), Err(VmError::IndexOutOfBounds)));
+    }
+
+    #[test]
+    fn test_pushstring_invalid_utf8_no_panic() {
+        // [0xFF, 0xFF, 0xFF] is invalid UTF-8
+        let mut bytecode = vec![OpCode::PushString as u8];
+        bytecode.extend_from_slice(&[0, 0, 0, 0]); // nonce
+        bytecode.extend_from_slice(&encode_u32(3)); // length 3
+        bytecode.extend_from_slice(&[0xFF, 0xFF, 0xFF]);
+        bytecode.push(OpCode::Halt as u8);
+        
+        let mut vm = setup_vm(bytecode);
+        let result = vm.run().unwrap();
+        match result {
+            Value::Str(s) => assert_eq!(&*s, "INVALID_STR"),
+            _ => panic!("Expected Str"),
+        }
+    }
 }
+

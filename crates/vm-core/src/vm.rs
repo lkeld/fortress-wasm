@@ -26,6 +26,9 @@ pub struct Vm {
     pub(crate) session_key: [u8; 32],
     pub(crate) current_page_id: i32,
     pub(crate) ves: [u8; 256],
+    pub(crate) prng_state: u64,
+    pub(crate) gas_limit: u64,
+    pub(crate) gas_used: u64,
 }
 
 impl Vm {
@@ -38,6 +41,13 @@ impl Vm {
             for i in 0..256 {
                 opcode_map[i] = i as u8;
             }
+        }
+        
+        let mut seed_bytes = [0u8; 8];
+        let _ = getrandom::getrandom(&mut seed_bytes);
+        let mut seed = u64::from_le_bytes(seed_bytes);
+        if seed == 0 {
+            seed = 0xDEADC0DE;
         }
         
         Self {
@@ -53,6 +63,9 @@ impl Vm {
             session_key,
             current_page_id: -1,
             ves: [0u8; 256],
+            prng_state: seed,
+            gas_limit: 1_000_000,
+            gas_used: 0,
         }
     }
 
@@ -66,11 +79,31 @@ impl Vm {
         self.pc_base.wrapping_add(self.pc_offset)
     }
 
+    fn next_random(&mut self) -> u64 {
+        let mut x = self.prng_state;
+        x ^= x << 12;
+        x ^= x >> 25;
+        x ^= x << 27;
+        self.prng_state = x;
+        x
+    }
+
+    pub fn set_gas_limit(&mut self, limit: u64) {
+        self.gas_limit = limit;
+    }
+
+    pub(crate) fn charge_gas(&mut self, amount: u64) -> Result<(), VmError> {
+        self.gas_used = self.gas_used.saturating_add(amount);
+        if self.gas_used > self.gas_limit {
+            return Err(VmError::OutOfGas);
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_pc(&mut self, new_pc: usize) {
-        let mut rand_buf = [0u8; 1];
-        let _ = getrandom::getrandom(&mut rand_buf);
+        let rand_val = self.next_random();
         let base_amount = if new_pc > 0 {
-            (rand_buf[0] as usize) % new_pc
+            (rand_val as usize) % new_pc
         } else {
             0
         };
@@ -80,9 +113,8 @@ impl Vm {
     }
 
     pub(crate) fn advance_pc(&mut self, amount: usize) {
-        let mut rand_buf = [0u8; 1];
-        let _ = getrandom::getrandom(&mut rand_buf);
-        if rand_buf[0] % 2 == 0 {
+        let rand_val = self.next_random();
+        if rand_val % 2 == 0 {
             self.pc_base = self.pc_base.wrapping_add(amount);
         } else {
             self.pc_offset = self.pc_offset.wrapping_add(amount);
@@ -131,11 +163,44 @@ impl Vm {
             }
         }
         self.current_page_id = page_id as i32;
+
+        #[cfg(not(feature = "dev"))]
+        {
+            if self.code.len() % 288 == 0 && self.code.len() > 0 {
+                let num_pages = self.code.len() / 288;
+                let hash_start = (num_pages * 256) + page_id as usize * 32;
+                if hash_start + 32 <= self.code.len() {
+                    let mut expected_page_hash = [0u8; 32];
+                    expected_page_hash.copy_from_slice(&self.code[hash_start..hash_start + 32]);
+                    
+                    use sha2::{Sha256, Digest};
+                    let mut hasher = Sha256::new();
+                    hasher.update(&self.ves);
+                    let actual_page_hash: [u8; 32] = hasher.finalize().into();
+                    
+                    if actual_page_hash != expected_page_hash {
+                        self.session_key[0] ^= 0xFF;
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn read_byte(&mut self) -> Result<u8, VmError> {
         let pc = self.get_pc();
-        if pc >= self.code.len() {
+        let limit = if self.code.len() % 288 == 0 {
+            #[cfg(feature = "dev")]
+            {
+                self.code.len()
+            }
+            #[cfg(not(feature = "dev"))]
+            {
+                (self.code.len() / 288) * 256
+            }
+        } else {
+            self.code.len()
+        };
+        if pc >= limit {
             return Err(VmError::UnexpectedEndOfCode);
         }
         
@@ -201,12 +266,62 @@ impl Vm {
                 return Err(VmError::ExecutionLimitExceeded);
             }
 
-            if self.get_pc() >= self.code.len() {
+            let limit = if self.code.len() % 288 == 0 {
+                #[cfg(feature = "dev")]
+                {
+                    self.code.len()
+                }
+                #[cfg(not(feature = "dev"))]
+                {
+                    (self.code.len() / 288) * 256
+                }
+            } else {
+                self.code.len()
+            };
+            if self.get_pc() >= limit {
                 break;
             }
 
             let raw_instruction = self.read_byte()?;
             let opcode_val_translated = self.opcode_map[raw_instruction as usize];
+
+            let gas_cost = match crate::opcodes::OpCode::try_from(opcode_val_translated) {
+                Ok(crate::opcodes::OpCode::PushInt) | Ok(crate::opcodes::OpCode::Pop) | Ok(crate::opcodes::OpCode::Dup) | Ok(crate::opcodes::OpCode::PushFloat) |
+                Ok(crate::opcodes::OpCode::PushBool) | Ok(crate::opcodes::OpCode::PushNull) | Ok(crate::opcodes::OpCode::Swap) | Ok(crate::opcodes::OpCode::Rotate) |
+                Ok(crate::opcodes::OpCode::Drop2) => 1,
+                
+                Ok(crate::opcodes::OpCode::Add) | Ok(crate::opcodes::OpCode::Sub) | Ok(crate::opcodes::OpCode::Mul) | Ok(crate::opcodes::OpCode::Div) |
+                Ok(crate::opcodes::OpCode::Eq) | Ok(crate::opcodes::OpCode::Neq) | Ok(crate::opcodes::OpCode::Lt) | Ok(crate::opcodes::OpCode::Gt) |
+                Ok(crate::opcodes::OpCode::Lte) | Ok(crate::opcodes::OpCode::Gte) | Ok(crate::opcodes::OpCode::And) | Ok(crate::opcodes::OpCode::Or) |
+                Ok(crate::opcodes::OpCode::Not) | Ok(crate::opcodes::OpCode::BitAnd) | Ok(crate::opcodes::OpCode::BitOr) | Ok(crate::opcodes::OpCode::BitXor) |
+                Ok(crate::opcodes::OpCode::BitNot) | Ok(crate::opcodes::OpCode::Shl) | Ok(crate::opcodes::OpCode::Shr) => 2,
+                
+                Ok(crate::opcodes::OpCode::LoadLocal) | Ok(crate::opcodes::OpCode::StoreLocal) => 2,
+                
+                Ok(crate::opcodes::OpCode::Jump) | Ok(crate::opcodes::OpCode::JumpIf) | Ok(crate::opcodes::OpCode::JumpIfNot) |
+                Ok(crate::opcodes::OpCode::Call) | Ok(crate::opcodes::OpCode::Return) => 5,
+                
+                Ok(crate::opcodes::OpCode::NewObject) | Ok(crate::opcodes::OpCode::NewList) | Ok(crate::opcodes::OpCode::ListPush) |
+                Ok(crate::opcodes::OpCode::GetMember) | Ok(crate::opcodes::OpCode::SetMember) | Ok(crate::opcodes::OpCode::Length) => 10,
+                
+                Ok(crate::opcodes::OpCode::PushString) | Ok(crate::opcodes::OpCode::Concat) => 5,
+                
+                Ok(crate::opcodes::OpCode::JSONStringify) => 10,
+                
+                Ok(crate::opcodes::OpCode::CompareAndAdd) | Ok(crate::opcodes::OpCode::SwapAndMul) | Ok(crate::opcodes::OpCode::JumpAndMul) => 5,
+                
+                Ok(crate::opcodes::OpCode::Hash256) => 50,
+                
+                Ok(crate::opcodes::OpCode::EncryptAES) => 250,
+                
+                Ok(crate::opcodes::OpCode::CallNative) => 50,
+                
+                Ok(crate::opcodes::OpCode::Halt) => 1,
+                
+                _ => 1,
+            };
+            self.charge_gas(gas_cost)?;
+
             let handler = dispatch_table[opcode_val_translated as usize];
             
             match handler(self) {
@@ -217,6 +332,15 @@ impl Vm {
         }
 
         Ok(self.stack.pop().unwrap_or(Value::Null))
+    }
+}
+
+impl Drop for Vm {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.session_key.zeroize();
+        self.ves.zeroize();
+        self.code.zeroize();
     }
 }
 

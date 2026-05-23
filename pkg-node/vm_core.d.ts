@@ -1,9 +1,13 @@
 /* tslint:disable */
 /* eslint-disable */
 
+export function clear_crypto(): void;
+
 export function execute(bytecode: Uint8Array, image_rgba: Uint8Array, input_json: string, opcode_map: Uint8Array): string;
 
-export function init_crypto(image_bytes: Uint8Array, width: number, height: number, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;
+export function init_crypto(image_bytes: Uint8Array, _width: number, _height: number, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;
+
+export function init_crypto_with_key(stego_key_bytes: Uint8Array, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;
 
 export function set_payload_hash(hash: Uint8Array): void;
 

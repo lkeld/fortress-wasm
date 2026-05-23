@@ -1,6 +1,11 @@
 /* @ts-self-types="./vm_core.d.ts" */
 const { native_call } = require(`env`);
 
+function clear_crypto() {
+    wasm.clear_crypto();
+}
+exports.clear_crypto = clear_crypto;
+
 /**
  * @param {Uint8Array} bytecode
  * @param {Uint8Array} image_rgba
@@ -36,22 +41,39 @@ exports.execute = execute;
 
 /**
  * @param {Uint8Array} image_bytes
- * @param {number} width
- * @param {number} height
+ * @param {number} _width
+ * @param {number} _height
  * @param {Uint8Array} session_seed
  * @param {Uint8Array} fingerprint
  * @param {number} epoch_day
  */
-function init_crypto(image_bytes, width, height, session_seed, fingerprint, epoch_day) {
+function init_crypto(image_bytes, _width, _height, session_seed, fingerprint, epoch_day) {
     const ptr0 = passArray8ToWasm0(image_bytes, wasm.__wbindgen_export2);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArray8ToWasm0(session_seed, wasm.__wbindgen_export2);
     const len1 = WASM_VECTOR_LEN;
     const ptr2 = passArray8ToWasm0(fingerprint, wasm.__wbindgen_export2);
     const len2 = WASM_VECTOR_LEN;
-    wasm.init_crypto(ptr0, len0, width, height, ptr1, len1, ptr2, len2, epoch_day);
+    wasm.init_crypto(ptr0, len0, _width, _height, ptr1, len1, ptr2, len2, epoch_day);
 }
 exports.init_crypto = init_crypto;
+
+/**
+ * @param {Uint8Array} stego_key_bytes
+ * @param {Uint8Array} session_seed
+ * @param {Uint8Array} fingerprint
+ * @param {number} epoch_day
+ */
+function init_crypto_with_key(stego_key_bytes, session_seed, fingerprint, epoch_day) {
+    const ptr0 = passArray8ToWasm0(stego_key_bytes, wasm.__wbindgen_export2);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(session_seed, wasm.__wbindgen_export2);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(fingerprint, wasm.__wbindgen_export2);
+    const len2 = WASM_VECTOR_LEN;
+    wasm.init_crypto_with_key(ptr0, len0, ptr1, len1, ptr2, len2, epoch_day);
+}
+exports.init_crypto_with_key = init_crypto_with_key;
 
 /**
  * @param {Uint8Array} hash

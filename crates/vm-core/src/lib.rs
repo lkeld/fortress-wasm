@@ -12,4 +12,4 @@ pub use opcodes::OpCode;
 pub use value::Value;
 pub use stack::{Stack, VmError};
 pub use vm::Vm;
-pub use wrapper::execute;
+pub use wrapper::{execute, json_to_value, value_to_json};
