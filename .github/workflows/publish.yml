@@ -37,6 +37,12 @@ jobs:
       - name: Build Fortress WASM Pipeline
         run: npm run build
 
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Run Browser Tests
+        run: npm run test:browser
+
       - name: Publish to GitHub Packages
         run: npm publish
         env:

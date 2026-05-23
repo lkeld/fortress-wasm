@@ -53,41 +53,42 @@ pub fn init_crypto(
     let mut stego_key = [0u8; 32];
     let mut extracted = false;
 
-    // Decode PNG and extract raw pixels
-    let mut decoder = png::Decoder::new(&image_bytes[..]);
-    decoder.set_transformations(png::Transformations::EXPAND);
-    if let Ok(mut reader) = decoder.read_info() {
-        let width = reader.info().width;
-        let height = reader.info().height;
-        let mut pixels = vec![0; reader.output_buffer_size()];
-        if let Ok(_) = reader.next_frame(&mut pixels) {
-            let (color_type, _) = reader.output_color_type();
-            
-            // Normalize buffer to 4 channels (RGBA) if it is RGB
-            let mut rgba_pixels = match color_type {
-                png::ColorType::Rgb => {
-                    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
-                    for chunk in pixels.chunks_exact(3) {
-                        rgba.extend_from_slice(chunk);
-                        rgba.push(255); // Dummy alpha
-                    }
-                    rgba
-                }
-                _ => pixels,
-            };
-            
-            // Extract key using matching PRNG-based LSB steganography
-            if let Some(key) = crypto_core::steg::extract_steg_key(&rgba_pixels, width, height) {
-                stego_key = key;
-                extracted = true;
-            }
-            rgba_pixels.zeroize();
-        }
+    // Try primary prime-stride steganography first since scrambler targets use this format
+    if let Some(key) = crate::steg_extract::extract_prime_stride(&image_bytes) {
+        stego_key = key;
+        extracted = true;
     }
 
     if !extracted {
-        if let Some(key) = crate::steg_extract::extract_prime_stride(&image_bytes) {
-            stego_key = key;
+        // Decode PNG and extract raw pixels for alternative PRNG-based steganography
+        let mut decoder = png::Decoder::new(&image_bytes[..]);
+        decoder.set_transformations(png::Transformations::EXPAND);
+        if let Ok(mut reader) = decoder.read_info() {
+            let width = reader.info().width;
+            let height = reader.info().height;
+            let mut pixels = vec![0; reader.output_buffer_size()];
+            if let Ok(_) = reader.next_frame(&mut pixels) {
+                let (color_type, _) = reader.output_color_type();
+                
+                // Normalize buffer to 4 channels (RGBA) if it is RGB
+                let mut rgba_pixels = match color_type {
+                    png::ColorType::Rgb => {
+                        let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+                        for chunk in pixels.chunks_exact(3) {
+                            rgba.extend_from_slice(chunk);
+                            rgba.push(255); // Dummy alpha
+                        }
+                        rgba
+                    }
+                    _ => pixels,
+                };
+                
+                // Extract key using matching PRNG-based LSB steganography
+                if let Some(key) = crypto_core::steg::extract_steg_key(&rgba_pixels, width, height) {
+                    stego_key = key;
+                }
+                rgba_pixels.zeroize();
+            }
         }
     }
 

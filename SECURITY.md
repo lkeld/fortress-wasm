@@ -38,16 +38,18 @@ Wasm linear memory is vulnerable to scraping during VM execution, exposing keys 
 **Production FFI Execution Shortcutting**
 To prevent attackers from bypassing steganographic key extraction by executing plain canonical payloads directly in the production VM target, the interpreter FFI wrapper strictly checks for the presence of a steganographic session key when compiled under production (`not(feature = "dev")`) targets, immediately throwing a `MissingSessionKey` error if the key is absent.
 
+**V8 TurboFan JIT Optimisation (Polynomial Parity Locks)**
+Optimizing compilers (specifically V8 TurboFan) use aggressive Range Analysis, Type Feedback, Constant Folding, and Strength Reduction to optimize arithmetic structures. To prevent JIT engines from optimizing away our Mixed Boolean-Arithmetic (MBA) obfuscations, we implement Polynomial Parity Locks using non-linear math constraints:
+- **Parity Analysis Defeat**: The term `(z * z + z) & 1` is mathematically equivalent to `0` for any integer `z`. However, V8 TurboFan's range analysis only tracks integer boundaries ($[min, max]$) and is incapable of tracking parity properties (congruence modulo 2). Consequently, the compiler cannot statically fold this expression to `0` and is forced to generate native instructions for the multiplication, addition, and bitwise operations.
+- **Nesting Depth Expansion**: By nesting these locks to two levels using two distinct dummy variables (`z1` and `z2`), the JIT compiler's Graph of Nodes grows quadratically in complexity, resisting dead node collapsing.
+- **Deterministic Dummy Offsets**: Dummy variables are resolved deterministically using modulo index shifts (`z2Idx = (z1Idx + 1) % len`) from the initialized dummy variables array, avoiding runtime rejection sampling and ensuring deterministic execution that prevents test-suite hangs when `Math.random` is mocked.
+
+**Division Polynomial MBA Obfuscation**
+Integer division `/` is protected by non-linear polynomial MBA obfuscation. First, a quadratic domain-expansion term `((z * z + z) & 1) * x` is injected to introduce non-linear data dependencies on dummy variables. Second, the division result is XORed with a self-canceling term `result ^ (dummy1 & dummy2) ^ (dummy1 & dummy2)`. This wraps division in a non-linear domain expansion and prevents symbolic solvers or automated deobfuscators from trivially folding or isolating the operation.
+
 ---
 
 ## What This Does NOT Protect Against
-
-**Division Obfuscation (The Newton-Raphson Hardening Proposal)**
-While `Add`, `Sub`, and `Mul` are protected by full non-linear polynomial MBA transformations, integer division `/` is currently only protected by a structural, pseudo-data-dependent linear MBA pass (`val + (dummy - dummy)`). Since division is non-distributive over bitwise partitioning and has no direct modular inverse for even divisors, it remains an open hardening area. 
-
-To address this, we have proposed a modular division model: factorising the divisor into odd and even components ($y = d \cdot 2^{s}$), using Newton-Raphson division iteration to compute the modular inverse of the odd component $d^{-1}$ modulo $2^{n}$:
-$$z_{k+1} = z_k \cdot (2 - y \cdot z_k) \pmod{2^n}$$
-and then performing a bitwise shift ($x / y \rightarrow (x \cdot d^{-1}) \gg s$). This proposal will enable full polynomial MBA for division in future updates.
 
 **Algorithmic Obscurity of LSB Steganography**
 The 32-byte cryptographic session key is delivered via LSB steganography in a PNG pixel buffer. While we utilise a dynamic extraction stride generated from the `R` channel of the first pixel to defeat simple linear statistical scraping, the safety of this key relies partially on the attacker's ignorance of the specific extraction algorithm. If the attacker perfectly reverse-engineers the VM's extraction loop, the session key is compromised.

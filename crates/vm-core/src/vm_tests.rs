@@ -1044,5 +1044,28 @@ mod tests {
             _ => panic!("Expected Str"),
         }
     }
+
+    #[test]
+    fn test_load_local_oob() {
+        // LoadLocal slot 256 (OOB, limit is 256, so slot indices are 0..255)
+        let bytecode = vec![
+            OpCode::LoadLocal as u8, 0, 1, 0, 0, // 256 in little endian
+            OpCode::Halt as u8
+        ];
+        let mut vm = setup_vm(bytecode);
+        assert!(matches!(vm.run(), Err(VmError::InvalidLocalSlot)));
+    }
+
+    #[test]
+    fn test_store_local_oob() {
+        // StoreLocal slot 256 (OOB, limit is 256, so slot indices are 0..255)
+        let bytecode = vec![
+            OpCode::PushInt as u8, 42, 0, 0, 0,
+            OpCode::StoreLocal as u8, 0, 1, 0, 0, // 256 in little endian
+            OpCode::Halt as u8
+        ];
+        let mut vm = setup_vm(bytecode);
+        assert!(matches!(vm.run(), Err(VmError::InvalidLocalSlot)));
+    }
 }
 

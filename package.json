@@ -10,13 +10,14 @@
     "test": "cargo test --manifest-path crates/vm-core/Cargo.toml",
     "test:e2e": "node tests/e2e/runner.js",
     "test:full": "npm run build:compiler && npm run test && npx tsc compiler/tests/compiler.test.ts --esModuleInterop && node --test compiler/tests/compiler.test.js tests/integration.test.js",
+    "test:browser": "playwright test",
     "build:isa:dev": "DEV_MODE=true node scripts/generate_isa.js",
     "build:isa:prod": "node scripts/generate_isa.js",
     "build:compiler": "tsc -p compiler/tsconfig.json",
     "build:server": "tsc -p server/tsconfig.json",
-    "build:wasm-node:dev": "wasm-pack build crates/vm-core --target nodejs --out-dir ../../pkg-node --features dev && rm -f pkg-node/.gitignore",
+    "build:wasm-node:dev": "wasm-pack build crates/vm-core --target nodejs --out-dir ../../pkg-node -- --features dev && rm -f pkg-node/.gitignore",
     "build:wasm-node:prod": "wasm-pack build crates/vm-core --target nodejs --out-dir ../../pkg-node && rm -f pkg-node/.gitignore",
-    "build:wasm-web:dev": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web --features dev && rm -f pkg-web/.gitignore && node scripts/patch_web.js",
+    "build:wasm-web:dev": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web -- --features dev && rm -f pkg-web/.gitignore && node scripts/patch_web.js",
     "build:wasm-web:prod": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web && rm -f pkg-web/.gitignore && node scripts/patch_web.js",
     "build:dev": "npm run build:isa:dev && DEV_MODE=true npm run build:compiler && npm run build:server && npm run build:wasm-node:dev && npm run build:wasm-web:dev",
     "build:prod": "npm run build:isa:prod && npm run build:compiler && npm run build:server && npm run build:wasm-node:prod && npm run build:wasm-web:prod",
@@ -45,6 +46,7 @@
     "pngjs": "^7.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/node": "^20.0.0",
     "@types/pngjs": "^6.0.5",
     "typescript": "^5.0.0"

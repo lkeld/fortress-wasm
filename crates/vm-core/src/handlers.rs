@@ -606,7 +606,9 @@ pub fn op_callnative(vm: &mut Vm) -> Result<bool, VmError> {
     #[cfg(not(target_arch = "wasm32"))]
     let res_str = "{}".to_string(); // Mock for non-wasm targets
     
-    if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&res_str) {
+    if res_str.len() > 4096 {
+        vm.stack.push(Value::Str(std::sync::Arc::new("PayloadTooLarge".to_string())))?;
+    } else if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&res_str) {
         vm.stack.push(crate::wrapper::json_to_value(&json_val))?;
     } else {
         vm.stack.push(Value::Str(std::sync::Arc::new(res_str)))?;

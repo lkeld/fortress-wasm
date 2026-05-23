@@ -1,40 +1,13 @@
-import initCore, { execute, init_crypto, init_crypto_with_key, sign_request } from '../../pkg/vm-core/vm_core.js';
+import initCore, { execute, init_crypto, init_crypto_with_key, sign_request } from '../../pkg-web/vm_core.js';
+import { nativeCallRouter } from './router.js';
 
+const workerInitTime = performance.now();
 let isReady = false;
 let globalStegoImage: Uint8Array | null = null;
 let cachedNativeData: any = null;
 
 (self as any).native_call = (id: number, argsJson: string): string => {
-    if (!cachedNativeData) {
-        return "";
-    }
-    switch (id) {
-        case 1:
-            return cachedNativeData.webgl || "";
-        case 2:
-            return cachedNativeData.canvas || "";
-        case 3:
-            return JSON.stringify(cachedNativeData.automation || {});
-        case 4: {
-            let screenData = { ...(cachedNativeData.screen || {}) };
-            try {
-                const args = JSON.parse(argsJson);
-                if (Array.isArray(args) && args.length >= 2) {
-                    if (typeof args[0] === 'number') {
-                        screenData.width = args[0];
-                        screenData.availWidth = args[0];
-                    }
-                    if (typeof args[1] === 'number') {
-                        screenData.height = args[1];
-                        screenData.availHeight = args[1];
-                    }
-                }
-            } catch (e) {}
-            return JSON.stringify(screenData);
-        }
-        default:
-            return "";
-    }
+    return nativeCallRouter(id, argsJson, cachedNativeData, workerInitTime);
 };
 
 const randomHex = (len: number) => {
@@ -55,21 +28,22 @@ self.onmessage = async (e: MessageEvent) => {
             
             const t0 = performance.now();
             
+            const vmCoreBytesArray = vmCoreBytes instanceof Uint8Array ? vmCoreBytes : (ArrayBuffer.isView(vmCoreBytes) ? new Uint8Array(vmCoreBytes.buffer, vmCoreBytes.byteOffset, vmCoreBytes.byteLength) : new Uint8Array(vmCoreBytes));
+            const stegoImageBytesArray = stegoImageBytes instanceof Uint8Array ? stegoImageBytes : (ArrayBuffer.isView(stegoImageBytes) ? new Uint8Array(stegoImageBytes.buffer, stegoImageBytes.byteOffset, stegoImageBytes.byteLength) : new Uint8Array(stegoImageBytes));
+
             const checkTiming = () => {
                 const delta = performance.now() - t0;
                 if (devMode !== true && delta > 50) {
                     try {
-                        const arr = new Uint8Array(vmCoreBytes);
-                        const first = arr[0];
-                        if (arr.length > 0 && first !== undefined) {
-                            arr[0] = first ^ 0xFF;
+                        const first = vmCoreBytesArray[0];
+                        if (vmCoreBytesArray.length > 0 && first !== undefined) {
+                            vmCoreBytesArray[0] = first ^ 0xFF;
                         }
                     } catch (err) {}
                     try {
-                        const arr = new Uint8Array(stegoImageBytes);
-                        const first = arr[0];
-                        if (arr.length > 0 && first !== undefined) {
-                            arr[0] = first ^ 0xFF;
+                        const first = stegoImageBytesArray[0];
+                        if (stegoImageBytesArray.length > 0 && first !== undefined) {
+                            stegoImageBytesArray[0] = first ^ 0xFF;
                         }
                     } catch (err) {}
                     sessionSeedHex = randomHex(64);
@@ -82,7 +56,7 @@ self.onmessage = async (e: MessageEvent) => {
             checkTiming();
 
             // Initialize Core Module
-            await initCore({ module_or_path: new Uint8Array(vmCoreBytes) });
+            await initCore({ module_or_path: vmCoreBytesArray });
             
             checkTiming();
 
@@ -91,12 +65,12 @@ self.onmessage = async (e: MessageEvent) => {
             
             let seedBytes = hexToBytes(sessionSeedHex);
             let fpBytes = hexToBytes(fingerprintHex);
-            let stegoBytes = new Uint8Array(stegoImageBytes);
+            let stegoBytes = stegoImageBytesArray;
 
             if (checkTiming()) {
                 seedBytes = hexToBytes(sessionSeedHex);
                 fpBytes = hexToBytes(fingerprintHex);
-                stegoBytes = new Uint8Array(stegoImageBytes);
+                stegoBytes = stegoImageBytesArray;
             }
 
             if (websocketUrl) {

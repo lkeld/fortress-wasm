@@ -398,7 +398,10 @@ var CodeGenerator = /** @class */ (function () {
                     var tmpLeft = "_mba_temp_l";
                     this.emit(opcodes_1.OpCode.StoreLocal, this.resolveLocal(tmpRight));
                     this.emit(opcodes_1.OpCode.StoreLocal, this.resolveLocal(tmpLeft));
-                    var dummy = this.getDummyVariable();
+                    var z1 = this.getDummyVariable();
+                    var z1Idx = this.dummyVariables.indexOf(z1);
+                    var z2Idx = (z1Idx + 1) % this.dummyVariables.length;
+                    var z2 = this.dummyVariables[z2Idx];
                     if (expr.operator === '+') {
                         // Polynomial MBA & Domain Expansion
                         // We upgrade from linear MBA to Polynomial MBA to artificially expand the mathematical domain size via data-dependent dummy variables.
@@ -415,18 +418,29 @@ var CodeGenerator = /** @class */ (function () {
                         this.emit(opcodes_1.OpCode.PushInt, 1);
                         this.emit(opcodes_1.OpCode.Shl);
                         this.emit(opcodes_1.OpCode.Add);
-                        if (dummy) {
-                            // + ((z * z + z) & 1) * x  ==> Adds 0, but creates polynomial data dependency on 'z'
-                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummy));
+                        if (z1 && z2) {
+                            // Compute ((z1 * z1 + z1) & 1)
+                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z1));
                             this.emit(opcodes_1.OpCode.Dup);
-                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummy));
-                            this.emit(opcodes_1.OpCode.Mul); // z * z
-                            this.emit(opcodes_1.OpCode.Add); // z * z + z
+                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z1));
+                            this.emit(opcodes_1.OpCode.Mul); // z1 * z1
+                            this.emit(opcodes_1.OpCode.Add); // z1 * z1 + z1
                             this.emit(opcodes_1.OpCode.PushInt, 1);
-                            this.emit(opcodes_1.OpCode.BitAnd); // (z * z + z) & 1 -> 0
+                            this.emit(opcodes_1.OpCode.BitAnd); // (z1 * z1 + z1) & 1
+                            // Compute ((z2 * z2 + z2) & 1)
+                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z2));
+                            this.emit(opcodes_1.OpCode.Dup);
+                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z2));
+                            this.emit(opcodes_1.OpCode.Mul); // z2 * z2
+                            this.emit(opcodes_1.OpCode.Add); // z2 * z2 + z2
+                            this.emit(opcodes_1.OpCode.PushInt, 1);
+                            this.emit(opcodes_1.OpCode.BitAnd); // (z2 * z2 + z2) & 1
+                            // Multiply the two terms
+                            this.emit(opcodes_1.OpCode.Mul);
+                            // Multiply by x (tmpLeft) and add to the result
                             this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpLeft));
-                            this.emit(opcodes_1.OpCode.Mul); // 0 * x -> 0
-                            this.emit(opcodes_1.OpCode.Add); // Add 0 to result
+                            this.emit(opcodes_1.OpCode.Mul);
+                            this.emit(opcodes_1.OpCode.Add);
                         }
                     }
                     else if (expr.operator === '-') {
@@ -444,18 +458,29 @@ var CodeGenerator = /** @class */ (function () {
                         this.emit(opcodes_1.OpCode.Add);
                         this.emit(opcodes_1.OpCode.PushInt, 1);
                         this.emit(opcodes_1.OpCode.Add);
-                        if (dummy) {
-                            // - ((z * z + z) & 1) * y  ==> Subtracts 0, polynomial domain expansion
-                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummy));
+                        if (z1 && z2) {
+                            // Compute ((z1 * z1 + z1) & 1)
+                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z1));
                             this.emit(opcodes_1.OpCode.Dup);
-                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummy));
-                            this.emit(opcodes_1.OpCode.Mul); // z * z
-                            this.emit(opcodes_1.OpCode.Add); // z * z + z
+                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z1));
+                            this.emit(opcodes_1.OpCode.Mul); // z1 * z1
+                            this.emit(opcodes_1.OpCode.Add); // z1 * z1 + z1
                             this.emit(opcodes_1.OpCode.PushInt, 1);
-                            this.emit(opcodes_1.OpCode.BitAnd); // 0
+                            this.emit(opcodes_1.OpCode.BitAnd); // (z1 * z1 + z1) & 1
+                            // Compute ((z2 * z2 + z2) & 1)
+                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z2));
+                            this.emit(opcodes_1.OpCode.Dup);
+                            this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z2));
+                            this.emit(opcodes_1.OpCode.Mul); // z2 * z2
+                            this.emit(opcodes_1.OpCode.Add); // z2 * z2 + z2
+                            this.emit(opcodes_1.OpCode.PushInt, 1);
+                            this.emit(opcodes_1.OpCode.BitAnd); // (z2 * z2 + z2) & 1
+                            // Multiply the two terms
+                            this.emit(opcodes_1.OpCode.Mul);
+                            // Multiply by y (tmpRight) and subtract from the result
                             this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpRight));
-                            this.emit(opcodes_1.OpCode.Mul); // 0 * y -> 0
-                            this.emit(opcodes_1.OpCode.Sub); // Sub 0 from result
+                            this.emit(opcodes_1.OpCode.Mul);
+                            this.emit(opcodes_1.OpCode.Sub);
                         }
                     }
                 }
@@ -463,6 +488,15 @@ var CodeGenerator = /** @class */ (function () {
                     this.visitExpression(expr.left);
                     this.visitExpression(expr.right);
                     var isFloatMath = this.isFloatExpression(expr.left) || this.isFloatExpression(expr.right);
+                    if (expr.operator === '/') {
+                        var isIntDivision = this.isIntExpression(expr.left) && this.isIntExpression(expr.right) &&
+                            expr.left.type === 'Literal' && expr.right.type === 'Literal' &&
+                            typeof expr.left.value === 'number' && typeof expr.right.value === 'number' &&
+                            expr.right.value !== 0 && (expr.left.value % expr.right.value === 0);
+                        if (!isIntDivision) {
+                            isFloatMath = true;
+                        }
+                    }
                     switch (expr.operator) {
                         case '*':
                             if (process.env.DEV_MODE === 'true' || isFloatMath) {
@@ -523,47 +557,102 @@ var CodeGenerator = /** @class */ (function () {
                                 this.emit(opcodes_1.OpCode.Add);
                             }
                             break;
-                        case '/':
-                            this.emit(opcodes_1.OpCode.Div);
-                            if (process.env.DEV_MODE !== 'true' && !isFloatMath) {
+                        case '/': {
+                            var useMba = process.env.DEV_MODE !== 'true' && !isFloatMath;
+                            if (useMba) {
                                 /*
-                                 * Proposing a Polynomial MBA Model for Division:
+                                 * Mathematical Proof of Equivalence for Division Polynomial MBA Obfuscation:
                                  *
-                                 * 1. Mathematical Limitations:
-                                 *    Unlike addition, subtraction, and multiplication, integer division (x / y)
-                                 *    cannot be cleanly distributed or partitioned over bitwise components.
-                                 *    Specifically, division is non-distributive over bitwise partitioning:
-                                 *      (a & b) / c !== (a / c) & (b / c)
-                                 *    and it does not associate or commute with bitwise operators.
-                                 *    Furthermore, division is not a polynomial mapping over the ring Z/2^nZ.
-                                 *    Only odd elements in Z/2^nZ have multiplicative inverses (making division by
-                                 *    an odd element equivalent to multiplication by its modular inverse),
-                                 *    whereas division by even integers cannot be inverted or represented algebraically
-                                 *    in this ring without loss of information.
+                                 * 1. Term 1: Polynomial Domain Expansion
+                                 *    We add the term `((z * z + z) & 1) * x` to the left operand `x` (i.e. `_mba_temp_l`).
+                                 *    We show that for any integer `z`, the expression `(z * z + z)` is always even,
+                                 *    meaning `(z * z + z) & 1` evaluates to 0.
+                                 *    Proof:
+                                 *      - If `z` is even: `z = 2k` for some integer `k`.
+                                 *        Then `z * z + z = (2k)^2 + 2k = 4k^2 + 2k = 2(2k^2 + k)`, which is even.
+                                 *      - If `z` is odd: `z = 2k + 1` for some integer `k`.
+                                 *        Then `z * z + z = (2k + 1)^2 + (2k + 1) = 4k^2 + 4k + 1 + 2k + 1 = 4k^2 + 6k + 2 = 2(2k^2 + 3k + 1)`, which is even.
+                                 *    Since `(z * z + z)` is always even, its least significant bit is always 0.
+                                 *    Therefore, `(z * z + z) & 1 = 0`.
+                                 *    Multiplying by `x` yields `0 * x = 0`.
+                                 *    Hence, `x + ((z * z + z) & 1) * x = x + 0 = x`, preserving the value of the left operand.
                                  *
-                                 * 2. Newton-Raphson Approximation Model:
-                                 *    For divisions by an odd divisor y, we can compute the modular inverse y^-1
-                                 *    using the Newton-Raphson division iteration:
-                                 *      z_{k+1} = z_k * (2 - y * z_k) (mod 2^n)
-                                 *    Starting with a simple initial guess z_0 (e.g., matching the lower bits),
-                                 *    this iteration quadratically converges to the modular inverse y^-1 in n/2 steps.
-                                 *    For 32-bit integers, 5 iterations are sufficient to get the exact inverse.
-                                 *    Since the iterations involve only subtraction and multiplication, they can
-                                 *    be obfuscated using standard linear and polynomial MBA identities.
-                                 *    For even divisors, we can factorize the divisor into y = d * 2^s, where d is
-                                 *    odd, compute the modular inverse of d, multiply, and shift right:
-                                 *      x / y = (x * d^-1) >> s
-                                 *    This decomposes division into multiplication, modular inversion (obfuscated via
-                                 *    Newton-Raphson), and bitwise shifts, enabling a robust polynomial MBA representation.
+                                 * 2. Term 2: Self-Canceling XOR Term
+                                 *    We XOR the division result with `(dummy1 & dummy2) ^ (dummy1 & dummy2)`.
+                                 *    Proof:
+                                 *      Let `w = dummy1 & dummy2`.
+                                 *      Then the term is `w ^ w`.
+                                 *      For any bitwise integer `w`, `w ^ w = 0` holds due to the self-inverse property of XOR.
+                                 *      Therefore, `(division_result) ^ (w ^ w) = (division_result) ^ 0 = division_result`.
+                                 *      This preserves the value of the division result.
+                                 *
+                                 * 3. Non-Linear Variable Domain Expansion:
+                                 *    By including the variable `z` in a quadratic relationship `z^2 + z` and logic gate `& 1`,
+                                 *    we introduce non-linear dependency. Although the term algebraically simplifies to 0,
+                                 *    it maps the execution path to a larger variable domain (the state space of `z`, `dummy1`, and `dummy2`).
+                                 *    This prevents automated deobfuscators/SMT solvers from trivially linearizing the expression,
+                                 *    as they must model the quadratic term and the non-linear bitwise operations across multiple dummy variables.
                                  */
-                                // Linear MBA: Add 0
-                                var dummyDiv = this.getDummyVariable();
-                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummyDiv));
+                                var tmpRight = "_mba_temp_r";
+                                var tmpLeft = "_mba_temp_l";
+                                this.emit(opcodes_1.OpCode.StoreLocal, this.resolveLocal(tmpRight));
+                                this.emit(opcodes_1.OpCode.StoreLocal, this.resolveLocal(tmpLeft));
+                                var z = this.getDummyVariable();
+                                var zIdx = this.dummyVariables.indexOf(z);
+                                var d1Idx = (zIdx + 1) % this.dummyVariables.length;
+                                var d2Idx = (zIdx + 2) % this.dummyVariables.length;
+                                var dummy1 = this.dummyVariables[d1Idx];
+                                var dummy2 = this.dummyVariables[d2Idx];
+                                // Re-push left operand, and add ((z * z + z) & 1) * x to it:
+                                // Load left operand
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                                // Load z
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z));
+                                // Dup
                                 this.emit(opcodes_1.OpCode.Dup);
-                                this.emit(opcodes_1.OpCode.Sub);
+                                // Load z
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(z));
+                                // Mul
+                                this.emit(opcodes_1.OpCode.Mul);
+                                // Add
                                 this.emit(opcodes_1.OpCode.Add);
+                                // PushInt 1
+                                this.emit(opcodes_1.OpCode.PushInt, 1);
+                                // BitAnd
+                                this.emit(opcodes_1.OpCode.BitAnd);
+                                // Load _mba_temp_l (which is x)
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpLeft));
+                                // Mul
+                                this.emit(opcodes_1.OpCode.Mul);
+                                // Add
+                                this.emit(opcodes_1.OpCode.Add);
+                                // Re-push right operand
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpRight));
+                                // Emit OpCode.Div
+                                this.emit(opcodes_1.OpCode.Div);
+                                // XOR the division result with (dummy1 & dummy2) ^ (dummy1 & dummy2)
+                                // Load dummy1
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummy1));
+                                // Load dummy2
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummy2));
+                                // BitAnd
+                                this.emit(opcodes_1.OpCode.BitAnd);
+                                // Load dummy1
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummy1));
+                                // Load dummy2
+                                this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(dummy2));
+                                // BitAnd
+                                this.emit(opcodes_1.OpCode.BitAnd);
+                                // BitXor
+                                this.emit(opcodes_1.OpCode.BitXor);
+                                // BitXor
+                                this.emit(opcodes_1.OpCode.BitXor);
+                            }
+                            else {
+                                this.emit(opcodes_1.OpCode.Div);
                             }
                             break;
+                        }
                         case '==':
                             this.emit(opcodes_1.OpCode.Eq);
                             break;
