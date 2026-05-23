@@ -4,13 +4,15 @@ This document provides a highly transparent, honest assessment of what Fortress 
 
 *Note: Following the final security hardening phases, a comprehensive functional correctness audit was conducted (May 2026). This audit systematically verified that the advanced obfuscation layers do not compromise the underlying runtime stability. All core architectural integration paths, 32-bit WASM integer boundary constraints, and edge-case syntax parsers have been fully hardened. This ensures the system is not only highly resistant to automated deobfuscation but also entirely production-ready and semantically reliable under heavy execution loads.*
 
+---
+
 ## What This Protects Against
 
 **Linear Mixed Boolean-Arithmetic Solvers (Cryptic Bytes, 2024)**
 Early obfuscation heavily relied on linear MBA substitutions for `Add` and `Sub` operations. We upgraded the system to Polynomial MBA, which expands the mathematical domain using pseudo-data dependencies, defeating linear solvers like Z3.
 
 **ML AST Classification (WasmWalker, 2024)**
-Machine learning classifiers fingerprint WebAssembly binaries by analyzing the frequency of AST paths. Naive "junk code" (like pushing and popping variables) creates a glaring statistical anomaly. We defeat this via AST Path Distribution Pollution, injecting context-aware, semantically valid operations that mimic real algorithmic flow into dead code blocks, permanently poisoning the classifier's frequency dataset.
+Machine learning classifiers fingerprint WebAssembly binaries by analysing the frequency of AST paths. Naive "junk code" (like pushing and popping variables) creates a glaring statistical anomaly. We defeat this via AST Path Distribution Pollution, injecting context-aware, semantically valid operations that mimic real algorithmic flow into dead code blocks, permanently poisoning the classifier's frequency dataset.
 
 **VPC-Sensitive Symbolic Emulation (PUSHAN, 2026)**
 State-of-the-art trace-free deobfuscators like PUSHAN require a stable Virtual Program Counter (VPC) to symbolically emulate execution paths. We defeat this by fragmenting the program counter into `pc_base ^ pc_offset`, mutating the offset non-deterministically during execution to break emulation stability.
@@ -30,16 +32,30 @@ Static LLVM IR analysis easily identifies virtual machines by locating the centr
 **Payload Caching & Diffing (Code Renewability, 2020)**
 Attackers frequently diff payloads across sessions to isolate dynamic variables. The `scramblePayload()` module generates a mathematically distinct payload per-request, featuring a fresh 256-byte translation map, a rolling 32-byte session key, and a randomised LSB image stride. Differential analysis yields zero usable data.
 
+**Cryptographic Memory Scraping (Zeroize)**
+Wasm linear memory is vulnerable to scraping during VM execution, exposing keys and decrypted pages. We protect against this by wrapping the session key, JIT decrypted page buffers, and intermediate FFI signature arrays in the `zeroize` crate. All cryptographic materials are explicitly zeroed out the microsecond they go out of scope or upon interpreter termination.
+
+**Production FFI Execution Shortcutting**
+To prevent attackers from bypassing steganographic key extraction by executing plain canonical payloads directly in the production VM target, the interpreter FFI wrapper strictly checks for the presence of a steganographic session key when compiled under production (`not(feature = "dev")`) targets, immediately throwing a `MissingSessionKey` error if the key is absent.
+
+---
+
 ## What This Does NOT Protect Against
 
-**Full Polynomial Substitution on All Operations**
-While `Add` and `Sub` are protected by full non-linear polynomial MBA domain expansion, `Mul` and `Div` are currently only protected by a structural, pseudo-data-dependent linear MBA pass (`val + (dummy - dummy)`). While this successfully pollutes the static data flow graph by linking to random local slots, an advanced attacker explicitly targeting multiply-heavy logic could potentially isolate this linear pattern.
+**Division Obfuscation (The Newton-Raphson Hardening Proposal)**
+While `Add`, `Sub`, and `Mul` are protected by full non-linear polynomial MBA transformations, integer division `/` is currently only protected by a structural, pseudo-data-dependent linear MBA pass (`val + (dummy - dummy)`). Since division is non-distributive over bitwise partitioning and has no direct modular inverse for even divisors, it remains an open hardening area. 
+
+To address this, we have proposed a modular division model: factorising the divisor into odd and even components ($y = d \cdot 2^{s}$), using Newton-Raphson division iteration to compute the modular inverse of the odd component $d^{-1}$ modulo $2^{n}$:
+$$z_{k+1} = z_k \cdot (2 - y \cdot z_k) \pmod{2^n}$$
+and then performing a bitwise shift ($x / y \rightarrow (x \cdot d^{-1}) \gg s$). This proposal will enable full polynomial MBA for division in future updates.
 
 **Algorithmic Obscurity of LSB Steganography**
 The 32-byte cryptographic session key is delivered via LSB steganography in a PNG pixel buffer. While we utilise a dynamic extraction stride generated from the `R` channel of the first pixel to defeat simple linear statistical scraping, the safety of this key relies partially on the attacker's ignorance of the specific extraction algorithm. If the attacker perfectly reverse-engineers the VM's extraction loop, the session key is compromised.
 
 **White-Box Cryptography Limitations**
 Software-only protection cannot achieve the security of hardware enclaves. We rely on the JIT sliding decryption window to mitigate memory scraping, but as of 2026, there are no unbroken, practical white-box implementations of standard symmetric encryption. Given unlimited time, a dedicated nation-state or hyper-resourced attacker can physically step through the execution and dump memory page by page. 
+
+---
 
 ## Threat Model Assumptions
 

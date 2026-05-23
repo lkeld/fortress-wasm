@@ -1,6 +1,6 @@
 # Fortress WASM Architecture
 
-This document outlines the four primary architectural pillars of the Fortress WASM engine. The system is designed to provide comprehensive defence-in-depth against modern WebAssembly reverse engineering tools, specifically symbolic execution, constraint solvers, and LLM-assisted decompilers.
+This document outlines the architectural pillars of the Fortress WASM engine. The system is designed to provide comprehensive defence-in-depth against modern WebAssembly reverse engineering tools, specifically symbolic execution, constraint solvers, and LLM-assisted decompilers.
 
 ---
 
@@ -8,7 +8,7 @@ This document outlines the four primary architectural pillars of the Fortress WA
 
 ```mermaid
 graph TD
-    A[generate_isa.js] -->|Shuffles 0-255| B[Randomized OpCode Enums]
+    A[generate_isa.js] -->|Shuffles 0-255| B[Randomised OpCode Enums]
     B -->|Exports to| C(TypeScript Compiler)
     B -->|Exports to| D(Rust VM Core)
     B -->|Generates| E(dispatch_table.rs)
@@ -42,7 +42,7 @@ graph TD
     D -->|Read R Channel of Pixel 0| E[Derive Stride Modulus]
     E -->|Extract across RGB| F[Reconstruct 32-Byte Session Key]
     
-    F --> G[Initialize VM]
+    F --> G[Initialise VM]
     G --> H[VirtSC Hash Check]
     H -->|Match| I[Enter Trampoline Dispatcher]
     H -->|Mismatch| J[Silent Key Corruption]
@@ -81,11 +81,42 @@ graph TD
     A[Microscopic Trampoline Loop] --> B[Fetch Encrypted Byte]
     B --> C[Translate via opcode_map]
     C --> D[Index into Function Pointer Array]
-    D -->|O(1) Indirect Call| E[Handler Function]
+    D -->|Constant-time Indirect Call| E[Handler Function]
     E -->|Returns bool| A
 ```
 
 ### Architectural Rationale
 The traditional `switch-case` or `match` block is the universal structural fingerprint of a virtual machine. Static LLVM IR analysis tools (e.g., Authors of Static VM Detection, *Static Detection of Core Structures in Tigress Virtualisation-Based Obfuscation Using an LLVM Pass*, arxiv.org/abs/2601.12916) easily identify dispatchers by searching for the basic block with the highest number of successors.
 
-To utterly destroy this heuristic, we decentralised the dispatcher. The `generate_isa.js` script dynamically emits a flat, 256-element array of function pointers (`dispatch_table.rs`) mapping every randomised opcode byte to a statically isolated handler. The central loop is reduced to a microscopic trampoline that simply indexes into this array and performs an indirect call. The single, high-successor-count switch block no longer exists in the compiled binary.
+To utterly destroy this heuristic, we decentralised the dispatcher. The `generate_isa.js` script dynamically emits a flat, 256-element array of function pointers (`dispatch_table.rs`) mapping every randomised opcode byte to a statically isolated handler. The central loop is reduced to a microscopic trampoline that simply indexes into this array and performs an indirect call. The switch block no longer exists in the compiled binary.
+
+---
+
+## 5. End-to-End Variable Lifecycle Data Flow
+
+```mermaid
+flowchart TD
+    subgraph "Phase I: Compilation"
+        A["FVM Source Code: let x = a + b"] --> B["TypeScript Parser: AST Node"]
+        B --> C["AST Obfuscator: Polynomial MBA Identity"]
+        C --> D["Instruction Encoder: Canonical Opcode Bytecode"]
+        D --> E["ISA Randomiser: Dynamic Opcode Permutation"]
+    end
+
+    subgraph "Phase II: Scrambling & Transmission"
+        E --> F["Scrambler Module: Rolling 32-byte XOR Encryption"]
+        F --> G["Stego Encoder: Dynamic Modulus PNG Embedding"]
+        G --> H["HTTPS Payload Transmission"]
+    end
+
+    subgraph "Phase III: VM Decryption & Execution"
+        H --> I["Rust FFI: wrapper::execute"]
+        I --> J["steg_extract: Session Key Extraction"]
+        J --> K["JIT Page Decoder: Sliding Decryption Window"]
+        K --> L["VM Stack Interpreter: Step-by-Step Execution"]
+        L --> M["Result Stored in Local Slot x"]
+    end
+```
+
+### Architectural Rationale
+This fifth diagram outlines the entire lifecycle of a variable data flow under virtualisation. It illustrates how the high-level semantic logic is systematically decomposed, obfuscated algebraically, encrypted cryptographically, hidden steganographically, and executed incrementally on a stack machine. This process ensures that the variable's true mathematical value is never exposed in a plain or unprotected format at any point during its transit or execution in the browser memory.
