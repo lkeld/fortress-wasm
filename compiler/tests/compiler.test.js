@@ -11,12 +11,7 @@ var codegen_1 = require("../src/codegen");
 var opcodes_1 = require("../src/opcodes");
 // Helper to check if bytecode contains a specific mapped opcode
 function hasOpCode(bytecode, opcodeMap, op) {
-    for (var i = 0; i < bytecode.length; i++) {
-        if (opcodeMap[bytecode[i]] === op) {
-            return true;
-        }
-    }
-    return false;
+    return countOpCode(bytecode, opcodeMap, op) > 0;
 }
 // Helper to count occurrences of a mapped opcode
 function countOpCode(bytecode, opcodeMap, op) {

@@ -14,4 +14,4 @@ compiler/node_modules/
 /.agents/
 *.tgz
 
-
+/server/.signing_key

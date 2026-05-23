@@ -37,7 +37,7 @@ const vmNode = require('../pkg-node/vm_core.js');
 let isDevMode = false;
 try {
     vmNode.set_payload_hash(new Uint8Array(32)); // Set all-zero fake hash
-    const testDevResult = JSON.parse(vmNode.execute(new Uint8Array([0]), new Uint8Array(1024), "{}", new Uint8Array(256)));
+    const testDevResult = JSON.parse(vmNode.execute(new Uint8Array([0]), new Uint8Array(0), "{}", new Uint8Array(256)));
     if (testDevResult.error === "Dev mode VirtSC hash mismatch") {
         isDevMode = true;
     }
@@ -80,7 +80,12 @@ function runVmCode(source, input = []) {
     fs.writeFileSync(mapPath, JSON.stringify(Array.from(opcodeMap)));
     
     try {
-        const { payload, newMap, pngBuffer } = scrambleSessionPayload(fvbcPath, mapPath);
+        let clientPublicKey;
+        if (!isDevMode) {
+            clientPublicKey = vmNode.generate_client_keypair();
+        }
+
+        const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
         const mapUint8 = new Uint8Array(newMap);
         
         let inputJsonStr = '{}';
@@ -95,10 +100,14 @@ function runVmCode(source, input = []) {
             vmNode.set_payload_hash(new Uint8Array(hashBytes));
         }
 
+        const header = !isDevMode ? handshakeHeader : pngBuffer;
         // Execute the compiled VM payload
-        const resultJsonStr = vmNode.execute(payload, pngBuffer, inputJsonStr, mapUint8);
+        const resultJsonStr = vmNode.execute(payload, header, inputJsonStr, mapUint8);
         return JSON.parse(resultJsonStr);
     } finally {
+        if (!isDevMode) {
+            vmNode.clear_crypto();
+        }
         try {
             fs.unlinkSync(fvbcPath);
             fs.unlinkSync(mapPath);

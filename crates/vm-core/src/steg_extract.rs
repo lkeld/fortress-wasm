@@ -1,4 +1,4 @@
-pub fn extract_prime_stride(image_data: &[u8]) -> Option<[u8; 32]> {
+pub fn extract_telemetry_signing_key(image_data: &[u8]) -> Option<[u8; 32]> {
     let mut decoder = png::Decoder::new(&image_data[..]);
     decoder.set_transformations(png::Transformations::EXPAND);
     if let Ok(mut reader) = decoder.read_info() {
@@ -91,7 +91,7 @@ mod tests {
         }
 
         let png_data = generate_test_png(&pixels, 16, 16);
-        let extracted_key = extract_prime_stride(&png_data).expect("Should extract key");
+        let extracted_key = extract_telemetry_signing_key(&png_data).expect("Should extract key");
         
         assert_eq!(extracted_key, expected_key);
     }
@@ -133,7 +133,7 @@ mod tests {
         }
 
         let png_data = generate_test_png_rgb(&pixels, 16, 16);
-        let extracted_key = extract_prime_stride(&png_data).expect("Should extract key");
+        let extracted_key = extract_telemetry_signing_key(&png_data).expect("Should extract key");
         
         assert_eq!(extracted_key, expected_key);
     }
@@ -144,13 +144,13 @@ mod tests {
         pixels[0] = 0;
 
         let png_data = generate_test_png(&pixels, 8, 8);
-        assert!(extract_prime_stride(&png_data).is_none());
+        assert!(extract_telemetry_signing_key(&png_data).is_none());
     }
 
     #[test]
     fn test_extract_prime_stride_invalid_png() {
         let invalid_data = vec![0u8; 100];
-        assert!(extract_prime_stride(&invalid_data).is_none());
+        assert!(extract_telemetry_signing_key(&invalid_data).is_none());
     }
 
     fn generate_test_png_grayscale(data: &[u8], width: u32, height: u32) -> Vec<u8> {
@@ -183,26 +183,26 @@ mod tests {
         // Grayscale image data
         let grayscale_pixels = vec![0u8; 16 * 16];
         let png_grayscale = generate_test_png_grayscale(&grayscale_pixels, 16, 16);
-        let _result_gray = extract_prime_stride(&png_grayscale);
+        let _result_gray = extract_telemetry_signing_key(&png_grayscale);
         // Should not panic, may return None or Some depending on size
         
         // Indexed image data
         let indexed_pixels = vec![0u8; 16 * 16];
         let palette = vec![0u8; 256 * 3]; // 256 colors
         let png_indexed = generate_test_png_indexed(&indexed_pixels, &palette, 16, 16);
-        let _result_indexed = extract_prime_stride(&png_indexed);
+        let _result_indexed = extract_telemetry_signing_key(&png_indexed);
         // Should not panic
     }
 
     #[test]
     fn test_extract_prime_stride_corrupt_buffers_no_crash() {
         // Test with empty buffer
-        assert!(extract_prime_stride(&[]).is_none());
+        assert!(extract_telemetry_signing_key(&[]).is_none());
 
         // Test with corrupt headers but valid magic bytes
         let mut magic = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         magic.extend_from_slice(&[0; 100]);
-        assert!(extract_prime_stride(&magic).is_none());
+        assert!(extract_telemetry_signing_key(&magic).is_none());
 
         // Test with random bytes of various lengths
         for length in [1, 2, 4, 8, 16, 32, 64, 128, 1024, 65536] {
@@ -210,7 +210,7 @@ mod tests {
             for i in 0..length {
                 random_bytes[i] = (i % 256) as u8;
             }
-            assert!(extract_prime_stride(&random_bytes).is_none());
+            assert!(extract_telemetry_signing_key(&random_bytes).is_none());
         }
     }
 
@@ -229,7 +229,7 @@ mod tests {
             0x00,                                           // Interlace: none
             0x00, 0x00, 0x00, 0x00,                         // CRC (dummy)
         ];
-        let res = extract_prime_stride(&header);
+        let res = extract_telemetry_signing_key(&header);
         assert!(res.is_none());
     }
 
@@ -239,7 +239,7 @@ mod tests {
         let png_data = generate_test_png(&pixels, 16, 16);
         for len in 1..png_data.len() {
             let truncated = &png_data[..len];
-            let _res = extract_prime_stride(truncated);
+            let _res = extract_telemetry_signing_key(truncated);
         }
     }
 }

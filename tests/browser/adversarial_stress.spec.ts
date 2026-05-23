@@ -10,7 +10,7 @@ import { CodeGenerator } from '../../compiler/dist/codegen.js';
 // @ts-ignore
 import { scrambleSessionPayload } from '../../server/scrambler.js';
 
-function compileAndScramble(sourceCode: string, devMode: boolean, providedSessionKey?: Uint8Array) {
+function compileAndScramble(sourceCode: string, devMode: boolean, clientPublicKey?: Uint8Array) {
   const parser = new Parser(sourceCode);
   const ast = parser.parseProgram();
   const codegen = new CodeGenerator();
@@ -28,7 +28,7 @@ function compileAndScramble(sourceCode: string, devMode: boolean, providedSessio
     const oldDevMode = process.env.DEV_MODE;
     process.env.DEV_MODE = devMode ? 'true' : 'false';
 
-    const scrambled = scrambleSessionPayload(fvbcPath, mapPath, providedSessionKey);
+    const scrambled = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
 
     if (oldDevMode !== undefined) {
       process.env.DEV_MODE = oldDevMode;
@@ -39,6 +39,7 @@ function compileAndScramble(sourceCode: string, devMode: boolean, providedSessio
     return {
       payload: Array.from(scrambled.payload),
       newMap: scrambled.newMap,
+      handshakeHeader: Array.from(scrambled.handshakeHeader),
       pngBuffer: Array.from(scrambled.pngBuffer)
     };
   } finally {
@@ -60,17 +61,19 @@ test.describe('Adversarial and Stress Tests', () => {
       try {
         window.fortress.clear_crypto();
         window.fortress.set_payload_hash(new Uint8Array(32));
-        const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(1024), "[]", new Uint8Array(256)));
+        const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(0), "[]", new Uint8Array(256)));
         return res.error === "Dev mode VirtSC hash mismatch";
       } catch (e) {
         return false;
       }
     });
 
-    const sc = compileAndScramble('return 42;', isWasmDevMode);
+    await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+      const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
+      return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+    });
 
-    // We will start 25 concurrent Web Workers, and on each, run multiple EXECUTE and SIGN_REQUEST calls
-    const result = await page.evaluate(async ({ payload, pngBuffer, newMap, isDev }) => {
+    const result = await page.evaluate(async ({ isDev }) => {
       const wasmResponse = await fetch('/pkg-web/vm_core_bg.wasm');
       const vmCoreBytes = await wasmResponse.arrayBuffer();
 
@@ -79,16 +82,31 @@ test.describe('Adversarial and Stress Tests', () => {
           const worker = new Worker('/dist/fortress-worker.js');
           let initialized = false;
 
-          worker.onmessage = (e) => {
-            const { type, error, result: execResult, signature } = e.data;
+          worker.onmessage = async (e) => {
+            const { type, error, result: execResult, signature, publicKey } = e.data;
             if (type === 'INIT_SUCCESS') {
               initialized = true;
-              // Trigger first EXECUTE
+              if (!isDev) {
+                worker.postMessage({ type: 'GENERATE_KEYPAIR' });
+              } else {
+                const sc = await (window as any).compileAndScramble('return 42;', isDev);
+                worker.postMessage({
+                  type: 'EXECUTE',
+                  payload: {
+                    bytecode: sc.payload,
+                    opcodeMap: sc.newMap,
+                    input: []
+                  }
+                });
+              }
+            } else if (type === 'KEYPAIR_SUCCESS') {
+              const sc = await (window as any).compileAndScramble('return 42;', isDev, publicKey);
               worker.postMessage({
                 type: 'EXECUTE',
                 payload: {
-                  bytecode: payload,
-                  opcodeMap: newMap,
+                  bytecode: sc.payload,
+                  opcodeMap: sc.newMap,
+                  handshakeHeader: sc.handshakeHeader,
                   input: []
                 }
               });
@@ -101,7 +119,6 @@ test.describe('Adversarial and Stress Tests', () => {
                 resolve({ id, success: false, error: `Invalid execute result: ${execResult}` });
                 return;
               }
-              // Trigger a SIGN_REQUEST to test crypto capability concurrently
               worker.postMessage({
                 type: 'SIGN_REQUEST',
                 payload: {
@@ -133,12 +150,11 @@ test.describe('Adversarial and Stress Tests', () => {
             resolve({ id, success: false, error: err.message || 'Worker onerror triggered' });
           };
 
-          // Send INIT message
           worker.postMessage({
             type: 'INIT',
             payload: {
               vmCoreBytes: vmCoreBytes.slice(0),
-              stegoImageBytes: new Uint8Array(pngBuffer),
+              stegoImageBytes: new Uint8Array(0),
               imageWidth: 16,
               imageHeight: 16,
               sessionSeedHex: '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff',
@@ -156,9 +172,6 @@ test.describe('Adversarial and Stress Tests', () => {
       const workerPromises = Array.from({ length: 25 }, (_, i) => runWorkerStress(i));
       return Promise.all(workerPromises);
     }, {
-      payload: sc.payload,
-      pngBuffer: sc.pngBuffer,
-      newMap: sc.newMap,
       isDev: isWasmDevMode
     });
 
@@ -175,17 +188,20 @@ test.describe('Adversarial and Stress Tests', () => {
       try {
         window.fortress.clear_crypto();
         window.fortress.set_payload_hash(new Uint8Array(32));
-        const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(1024), "[]", new Uint8Array(256)));
+        const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(0), "[]", new Uint8Array(256)));
         return res.error === "Dev mode VirtSC hash mismatch";
       } catch (e) {
         return false;
       }
     });
 
-    const sc = compileAndScramble('return 42;', isWasmDevMode);
+    await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+      const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
+      return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+    });
 
-    const testRobustness = async (stegoBytes: ArrayBuffer) => {
-      return await page.evaluate(async ({ payload, newMap, isDev, stegoBytesArr }) => {
+    const testRobustness = async (scenarioType: 'empty' | 'truncated' | 'malformed') => {
+      return await page.evaluate(async ({ isDev, scenarioTypeVal }) => {
         const wasmResponse = await fetch('/pkg-web/vm_core_bg.wasm');
         const vmCoreBytes = await wasmResponse.arrayBuffer();
 
@@ -193,15 +209,42 @@ test.describe('Adversarial and Stress Tests', () => {
           const worker = new Worker('/dist/fortress-worker.js');
           let initSucceeded = false;
 
-          worker.onmessage = (e) => {
-            const { type, error, result: execResult } = e.data;
+          worker.onmessage = async (e) => {
+            const { type, error, result: execResult, publicKey } = e.data;
             if (type === 'INIT_SUCCESS') {
               initSucceeded = true;
+              if (!isDev) {
+                worker.postMessage({ type: 'GENERATE_KEYPAIR' });
+              } else {
+                const sc = await (window as any).compileAndScramble('return 42;', isDev);
+                let carrier = sc.pngBuffer;
+                if (scenarioTypeVal === 'empty') carrier = [];
+                else if (scenarioTypeVal === 'truncated') carrier = carrier.slice(0, 10);
+                else if (scenarioTypeVal === 'malformed') carrier = Array.from({length: 100}, () => Math.floor(Math.random() * 256));
+                
+                worker.postMessage({
+                  type: 'EXECUTE',
+                  payload: {
+                    bytecode: sc.payload,
+                    opcodeMap: sc.newMap,
+                    handshakeHeader: carrier,
+                    input: []
+                  }
+                });
+              }
+            } else if (type === 'KEYPAIR_SUCCESS') {
+              const sc = await (window as any).compileAndScramble('return 42;', isDev, publicKey);
+              let carrier = sc.handshakeHeader;
+              if (scenarioTypeVal === 'empty') carrier = [];
+              else if (scenarioTypeVal === 'truncated') carrier = carrier.slice(0, 10);
+              else if (scenarioTypeVal === 'malformed') carrier = Array.from({length: 100}, () => Math.floor(Math.random() * 256));
+
               worker.postMessage({
                 type: 'EXECUTE',
                 payload: {
-                  bytecode: payload,
-                  opcodeMap: newMap,
+                  bytecode: sc.payload,
+                  opcodeMap: sc.newMap,
+                  handshakeHeader: carrier,
                   input: []
                 }
               });
@@ -231,7 +274,7 @@ test.describe('Adversarial and Stress Tests', () => {
             type: 'INIT',
             payload: {
               vmCoreBytes,
-              stegoImageBytes: new Uint8Array(stegoBytesArr),
+              stegoImageBytes: new Uint8Array(0),
               imageWidth: 16,
               imageHeight: 16,
               sessionSeedHex: '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff',
@@ -245,27 +288,23 @@ test.describe('Adversarial and Stress Tests', () => {
           });
         });
       }, {
-        payload: sc.payload,
-        newMap: sc.newMap,
         isDev: isWasmDevMode,
-        stegoBytesArr: Array.from(new Uint8Array(stegoBytes))
+        scenarioTypeVal: scenarioType
       });
     };
 
     // Scenario A: Empty stegoImageBytes
-    const resEmpty = await testRobustness(new ArrayBuffer(0));
+    const resEmpty = await testRobustness('empty');
     expect(resEmpty.initSuccess).toBe(true); // Should successfully initialize
     if (isWasmDevMode) {
       expect(resEmpty.result).toBe(42);
     } else {
-      // In prod mode, execute should fail (e.g. return status: false) because decryption session key is incorrect
       expect(resEmpty.result).toBeDefined();
       expect(resEmpty.result.status).toBe(false);
     }
 
     // Scenario B: Truncated PNG
-    const truncatedPng = new Uint8Array(sc.pngBuffer.slice(0, 10));
-    const resTruncated = await testRobustness(truncatedPng.buffer);
+    const resTruncated = await testRobustness('truncated');
     expect(resTruncated.initSuccess).toBe(true);
     if (isWasmDevMode) {
       expect(resTruncated.result).toBe(42);
@@ -275,8 +314,7 @@ test.describe('Adversarial and Stress Tests', () => {
     }
 
     // Scenario C: Malformed/random bytes
-    const randomBytes = crypto.randomBytes(100);
-    const resMalformed = await testRobustness(randomBytes.buffer);
+    const resMalformed = await testRobustness('malformed');
     expect(resMalformed.initSuccess).toBe(true);
     if (isWasmDevMode) {
       expect(resMalformed.result).toBe(42);
@@ -295,17 +333,20 @@ test.describe('Adversarial and Stress Tests', () => {
       try {
         window.fortress.clear_crypto();
         window.fortress.set_payload_hash(new Uint8Array(32));
-        const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(1024), "[]", new Uint8Array(256)));
+        const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(0), "[]", new Uint8Array(256)));
         return res.error === "Dev mode VirtSC hash mismatch";
       } catch (e) {
         return false;
       }
     });
 
-    const sc = compileAndScramble('return 42;', isWasmDevMode);
+    await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+      const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
+      return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+    });
 
     const testMockedTiming = async (devModeVal: boolean, stepMs: number) => {
-      return await page.evaluate(async ({ payload, pngBuffer, newMap, devModeVal: passedDevModeVal, stepMsVal }) => {
+      return await page.evaluate(async ({ passedDevModeVal, stepMsVal, isDev }) => {
         const wasmResponse = await fetch('/pkg-web/vm_core_bg.wasm');
         const vmCoreBytes = await wasmResponse.arrayBuffer();
 
@@ -328,14 +369,30 @@ test.describe('Adversarial and Stress Tests', () => {
 
         return new Promise<{ success: boolean; result: any; error?: string }>((resolve) => {
           const worker = new Worker(workerUrl);
-          worker.onmessage = (e) => {
-            const { type, error, result: execResult } = e.data;
+          worker.onmessage = async (e) => {
+            const { type, error, result: execResult, publicKey } = e.data;
             if (type === 'INIT_SUCCESS') {
+              if (!isDev) {
+                worker.postMessage({ type: 'GENERATE_KEYPAIR' });
+              } else {
+                const sc = await (window as any).compileAndScramble('return 42;', true);
+                worker.postMessage({
+                  type: 'EXECUTE',
+                  payload: {
+                    bytecode: sc.payload,
+                    opcodeMap: sc.newMap,
+                    input: []
+                  }
+                });
+              }
+            } else if (type === 'KEYPAIR_SUCCESS') {
+              const sc = await (window as any).compileAndScramble('return 42;', false, publicKey);
               worker.postMessage({
                 type: 'EXECUTE',
                 payload: {
-                  bytecode: payload,
-                  opcodeMap: newMap,
+                  bytecode: sc.payload,
+                  opcodeMap: sc.newMap,
+                  handshakeHeader: sc.handshakeHeader,
                   input: []
                 }
               });
@@ -364,7 +421,7 @@ test.describe('Adversarial and Stress Tests', () => {
             type: 'INIT',
             payload: {
               vmCoreBytes: vmCoreBytes.slice(0),
-              stegoImageBytes: new Uint8Array(pngBuffer),
+              stegoImageBytes: new Uint8Array(0),
               imageWidth: 16,
               imageHeight: 16,
               sessionSeedHex: '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff',
@@ -378,11 +435,9 @@ test.describe('Adversarial and Stress Tests', () => {
           });
         });
       }, {
-        payload: sc.payload,
-        pngBuffer: sc.pngBuffer,
-        newMap: sc.newMap,
-        devModeVal,
-        stepMsVal: stepMs
+        passedDevModeVal: devModeVal,
+        stepMsVal: stepMs,
+        isDev: isWasmDevMode
       });
     };
 

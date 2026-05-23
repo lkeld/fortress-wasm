@@ -52,7 +52,12 @@ function compileAndExecute(source, inputs = [], devMode = false) {
     process.env.DEV_MODE = devMode ? 'true' : 'false';
 
     try {
-        const { payload, newMap, pngBuffer } = scrambleSessionPayload(fvbcPath, mapPath);
+        let clientPublicKey;
+        if (!devMode) {
+            clientPublicKey = vmNode.generate_client_keypair();
+        }
+
+        const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
         const mapUint8 = new Uint8Array(newMap);
 
         // Prepend 7 nulls to offset the dummy variables in vm.locals
@@ -65,9 +70,13 @@ function compileAndExecute(source, inputs = [], devMode = false) {
             vmNode.set_payload_hash(new Uint8Array(hashBytes));
         }
 
-        const resultJsonStr = vmNode.execute(payload, pngBuffer, inputJsonStr, mapUint8);
+        const header = !devMode ? handshakeHeader : pngBuffer;
+        const resultJsonStr = vmNode.execute(payload, header, inputJsonStr, mapUint8);
         return JSON.parse(resultJsonStr);
     } finally {
+        if (!devMode) {
+            vmNode.clear_crypto();
+        }
         try {
             fs.unlinkSync(fvbcPath);
             fs.unlinkSync(mapPath);

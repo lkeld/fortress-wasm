@@ -5,33 +5,100 @@ import * as crypto from 'crypto';
 // @ts-ignore
 import { OpCode } from '../compiler/dist/opcodes.js';
 
+// Load server signing key dynamically
+function loadServerSigningKey(): crypto.KeyObject {
+    const keyPath = path.join(__dirname, '.signing_key');
+    let privateKeyDer: Buffer;
+    if (fs.existsSync(keyPath)) {
+        privateKeyDer = fs.readFileSync(keyPath);
+    } else {
+        const pair = crypto.generateKeyPairSync('ed25519', {
+            privateKeyEncoding: { format: 'der', type: 'pkcs8' }
+        });
+        privateKeyDer = pair.privateKey;
+        fs.writeFileSync(keyPath, privateKeyDer);
+    }
+    return crypto.createPrivateKey({
+        key: privateKeyDer,
+        format: 'der',
+        type: 'pkcs8'
+    });
+}
+
+/**
+ * Exposes generateHandshake returning a base64-encoded header value containing the concatenated raw fields
+ */
+export function generateHandshake(clientPublicKey: Uint8Array | Buffer): { handshakeHeader: string, sessionKey: Uint8Array } {
+    const serverPrivateKey = loadServerSigningKey();
+
+    // Generate fresh X25519 ephemeral key pair
+    const serverEphemeral = crypto.generateKeyPairSync('x25519');
+    const serverEphemeralPublicKeyRaw = serverEphemeral.publicKey.export({ type: 'spki', format: 'der' }).subarray(12);
+
+    const clientPublicKeyObject = crypto.createPublicKey({
+        key: Buffer.concat([
+            Buffer.from('302a300506032b656e032100', 'hex'),
+            Buffer.from(clientPublicKey)
+        ]),
+        format: 'der',
+        type: 'spki'
+    });
+
+    const sharedSecret = crypto.diffieHellman({
+        privateKey: serverEphemeral.privateKey,
+        publicKey: clientPublicKeyObject
+    });
+
+    const sessionId = crypto.randomBytes(8).toString('hex'); // 16-byte hex string
+    const nonce = crypto.randomBytes(32); // 32-random-byte session nonce
+    const timestamp = Math.floor(Date.now() / 1000).toString().padStart(10, '0'); // 10-byte zero-padded timestamp string
+
+    const sessionKey = crypto.hkdfSync(
+        'sha256',
+        sharedSecret,
+        nonce,
+        Buffer.from(sessionId, 'utf8'),
+        32
+    );
+
+    const signBuffer = Buffer.concat([
+        Buffer.from(sessionId, 'utf8'),
+        serverEphemeralPublicKeyRaw,
+        nonce,
+        Buffer.from(timestamp, 'utf8')
+    ]);
+    const signature = crypto.sign(null, signBuffer, serverPrivateKey);
+
+    const handshakeHeader = Buffer.concat([
+        Buffer.from(sessionId, 'utf8'),
+        nonce,
+        Buffer.from(timestamp, 'utf8'),
+        serverEphemeralPublicKeyRaw,
+        signature
+    ]);
+
+    return {
+        handshakeHeader: handshakeHeader.toString('base64'),
+        sessionKey: new Uint8Array(sessionKey)
+    };
+}
+
 /**
  * Dynamically scrambles a compiled .fvbc payload for a specific user session.
  * 
  * @param fvbcPath Path to the compiled .fvbc file
  * @param originalMapPath Path to the original opcode_map.json
- * @returns { payload: Uint8Array, newMap: number[], pngBuffer: Buffer }
+ * @param clientPublicKeyOrSessionKey Client X25519 public key (32 bytes) or provided session key (legacy)
+ * @returns { payload: Uint8Array, newMap: number[], pngBuffer: Buffer, handshakeHeader: Buffer }
  */
-export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string, providedSessionKey?: Uint8Array | Buffer): { payload: Uint8Array, newMap: number[], pngBuffer: Buffer } {
+export function scrambleSessionPayload(
+    fvbcPath: string, 
+    originalMapPath: string, 
+    clientPublicKeyOrSessionKey?: Uint8Array | Buffer
+): { payload: Uint8Array, newMap: number[], pngBuffer: Buffer, handshakeHeader: Buffer } {
     const originalBytecode = fs.readFileSync(fvbcPath);
     const originalMap: number[] = JSON.parse(fs.readFileSync(originalMapPath, 'utf8'));
 
-    // 1. In original mapping, the array exported from compiler represents opcodeMap.
-    // However, the JSON array IS the opcodeMap, not the inverse. Wait, compiler exports invertedMap?
-    // Let's check: compiler exports this.opcodeMap or this.invertedMap?
-    // In compiler/src/codegen.ts, generate returns opcodeMap: this.opcodeMap.
-    // The VM uses: instruction = opcode_map[raw_instruction];
-    // So the VM's map maps encoded -> standard.
-    // This means the compiler exports `invertedMap`! Let's assume the JSON array is what the VM uses: 
-    // encoded -> standard.
-    
-    // originalMap maps: encodedByte -> standardOpcode.
-    // So to decode: standardOpcode = originalMap[encodedByte]
-    
-    // Phase 12: Per-Request Code Renewability
-    // By generating a fresh, mathematically distinct translation map (standardOpcode -> newEncodedByte) for every single invocation,
-    // we render signature-based analysis, caching attacks, and payload diffing structurally impossible.
-    // See Code Renewability for Native Software Protection, arxiv.org/abs/2003.00916.
     const newMap = Array.from({ length: 256 }, (_, i) => i);
     for (let i = 255; i > 0; i--) {
         const j = crypto.randomBytes(4).readUInt32LE(0) % (i + 1);
@@ -40,23 +107,38 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
         newMap[j] = temp;
     }
 
-    // 3. Build the new map for the VM (newEncodedByte -> standardOpcode)
     const newInverseMap = new Array(256);
     for (let i = 0; i < 256; i++) {
         newInverseMap[newMap[i]] = i;
     }
 
-    // 3.5. Generate 32-byte Session Key early so it can be used for string encryption
     let sessionKey = new Uint8Array(32);
-    if (providedSessionKey) {
-        for (let i = 0; i < 32; i++) {
-            sessionKey[i] = providedSessionKey[i];
+    let handshakeHeaderBytes = Buffer.alloc(0);
+
+    if (process.env.DEV_MODE === 'true') {
+        // In dev mode, keep sessionKey as all zeros to match the VM's default/uninitialized state
+        handshakeHeaderBytes = Buffer.alloc(0);
+    } else if (clientPublicKeyOrSessionKey && clientPublicKeyOrSessionKey.length === 32) {
+        // Check if it matches a valid DH handshake public key or legacy manual key
+        try {
+            const handshake = generateHandshake(clientPublicKeyOrSessionKey);
+            sessionKey = handshake.sessionKey as any;
+            handshakeHeaderBytes = Buffer.from(handshake.handshakeHeader, 'base64');
+        } catch (e) {
+            // Legacy manual key fallback if key parsing failed
+            for (let i = 0; i < 32; i++) {
+                sessionKey[i] = clientPublicKeyOrSessionKey[i];
+            }
         }
     } else {
-        sessionKey = new Uint8Array(crypto.randomBytes(32));
+        // Generate random client key pair for DH derivation
+        const dummyClient = crypto.generateKeyPairSync('x25519');
+        const dummyClientPublic = dummyClient.publicKey.export({ type: 'spki', format: 'der' }).subarray(12);
+        const handshake = generateHandshake(dummyClientPublic);
+        sessionKey = handshake.sessionKey as any;
+        handshakeHeaderBytes = Buffer.from(handshake.handshakeHeader, 'base64');
     }
 
-    // 4. Translate the payload
     const newBytecode = new Uint8Array(originalBytecode.length);
     let i = 0;
     while (i < originalBytecode.length) {
@@ -66,8 +148,7 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
         newBytecode[i] = newByte;
         i++;
 
-        if (standardOpcode === OpCode.PushString) { // PushString
-            // 4 byte nonce
+        if (standardOpcode === OpCode.PushString) {
             const nonce = new Uint8Array(crypto.randomBytes(4));
             for (let j = 0; j < 4; j++) {
                 if (i < originalBytecode.length) {
@@ -75,7 +156,6 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
                     i++;
                 }
             }
-            // 4 bytes length
             let len = 0;
             if (i + 3 < originalBytecode.length) {
                 len = originalBytecode[i] | (originalBytecode[i+1] << 8) | (originalBytecode[i+2] << 16) | (originalBytecode[i+3] << 24);
@@ -84,7 +164,6 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
                     i++;
                 }
             }
-            // Generate keystream of length `len` using SHA-256
             const keystream = new Uint8Array(len);
             {
                 let offset = 0;
@@ -103,7 +182,6 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
                     blockIndex++;
                 }
             }
-            // string bytes: encrypt using SHA-256 keystream
             for (let j = 0; j < len; j++) {
                 if (i < originalBytecode.length) {
                     const plaintext = originalBytecode[i];
@@ -111,7 +189,7 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
                     i++;
                 }
             }
-        } else if (standardOpcode === OpCode.PushFloat || standardOpcode === OpCode.CallNative || standardOpcode === OpCode.Call) { // PushFloat (8), CallNative (8), Call (8)
+        } else if (standardOpcode === OpCode.PushFloat || standardOpcode === OpCode.CallNative || standardOpcode === OpCode.Call) {
             for (let j = 0; j < 8; j++) {
                 if (i < originalBytecode.length) {
                     newBytecode[i] = originalBytecode[i];
@@ -119,14 +197,14 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
                 }
             }
         } else if (
-            standardOpcode === OpCode.PushInt || // PushInt
-            standardOpcode === OpCode.PushBool || // PushBool
-            standardOpcode === OpCode.LoadLocal || // LoadLocal
-            standardOpcode === OpCode.StoreLocal || // StoreLocal
-            standardOpcode === OpCode.Jump || // Jump
-            standardOpcode === OpCode.JumpIf || // JumpIf
-            standardOpcode === OpCode.JumpIfNot || // JumpIfNot
-            standardOpcode === OpCode.JumpAndMul // JumpAndMul
+            standardOpcode === OpCode.PushInt ||
+            standardOpcode === OpCode.PushBool ||
+            standardOpcode === OpCode.LoadLocal ||
+            standardOpcode === OpCode.StoreLocal ||
+            standardOpcode === OpCode.Jump ||
+            standardOpcode === OpCode.JumpIf ||
+            standardOpcode === OpCode.JumpIfNot ||
+            standardOpcode === OpCode.JumpAndMul
         ) {
             for (let j = 0; j < 4; j++) {
                 if (i < originalBytecode.length) {
@@ -137,42 +215,7 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
         }
     }
 
-    // Phase 4: LSB Steganographic Key Delivery
-    // We encode the 32-byte session key into the PNG's Least Significant Bits.
-    const png = new PNG({ width: 16, height: 16 });
-    const padding = crypto.randomBytes(256 * 3);
-    for (let i = 0; i < 256; i++) {
-        const idx = i * 4;
-        png.data[idx] = padding[i * 3]; // R
-        png.data[idx+1] = padding[i * 3 + 1]; // G
-        png.data[idx+2] = padding[i * 3 + 2]; // B
-        png.data[idx+3] = 255; // Alpha is always 255 now! No longer an anomaly
-    }
-    
-    const primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47];
-    const stride = primes[png.data[0] % primes.length];
-    
-    let pixelOffset = 0;
-
-    // Embed all 32 bytes into RGB channels non-sequentially using dynamic stride.
-    // The extraction stride is derived dynamically from the randomised R channel of the first pixel,
-    // removing any fixed mathematical anchor for an attacker.
-    for (let i = 0; i < 32; i++) {
-        for (let bit = 0; bit < 8; bit++) {
-            pixelOffset = (pixelOffset + stride) % 256;
-            const channel = (i + bit) % 3;
-            const dataIdx = pixelOffset * 4 + channel;
-            
-            const bitValue = (sessionKey[i] >> bit) & 1;
-            png.data[dataIdx] = (png.data[dataIdx] & ~1) | bitValue;
-        }
-    }
-    
-    console.log("Scrambler Session Key:", sessionKey);
-    
-    const pngBuffer = PNG.sync.write(png);
-
-    // 6. XOR encrypt the final payload with 32-byte rolling key (unless DEV_MODE)
+    // XOR encrypt the final payload with 32-byte rolling key (unless DEV_MODE)
     const encryptedBytecode = new Uint8Array(newBytecode.length);
     if (process.env.DEV_MODE === 'true') {
         for (let i = 0; i < newBytecode.length; i++) {
@@ -186,8 +229,9 @@ export function scrambleSessionPayload(fvbcPath: string, originalMapPath: string
 
     return {
         payload: encryptedBytecode,
-        newMap: newInverseMap, // This is what gets sent to the client as opcode_map
-        pngBuffer
+        newMap: newInverseMap,
+        pngBuffer: handshakeHeaderBytes,
+        handshakeHeader: handshakeHeaderBytes
     };
 }
 
@@ -204,7 +248,7 @@ if (require.main === module) {
     const outBase = args[0].replace(/\.fvbc$/, '') + '.scrambled';
     fs.writeFileSync(`${outBase}.fvbc`, payload);
     fs.writeFileSync(`${outBase}.opcodes.json`, JSON.stringify(newMap));
-    fs.writeFileSync(`${outBase}.key.png`, pngBuffer);
+    fs.writeFileSync(`${outBase}.key.bin`, pngBuffer);
     
-    console.log(`Successfully generated dynamic session payload to ${outBase}.fvbc and key image to ${outBase}.key.png`);
+    console.log(`Successfully generated dynamic session payload to ${outBase}.fvbc and handshake header to ${outBase}.key.bin`);
 }

@@ -2,6 +2,17 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.0.5] - 2026-05-23
+
+### Added
+- **Ephemeral Authenticated Key Exchange (EAKE)**:
+  - Replaced insecure LSB steganography key delivery with an ephemeral X25519 Diffie-Hellman key exchange authenticated by an Ed25519 signature.
+  - Implemented client keypair generation (`generate_client_keypair`) and private key thread-local storage (`set_client_private_key`) in `wrapper.rs`.
+  - Upgraded the Web Worker script (`worker.ts`) to handle asynchronous key generation, pass `clientPrivateKey` to FFI initialization, and feed the 154-byte `handshake_header` into the FFI `execute()` loop.
+  - Hardened key generation to zeroize client private key bytes immediately after DH derivation, guaranteeing perfect forward secrecy.
+- **Separated Telemetry Validation Key Flow**:
+  - Re-routed legacy steganographic extraction (`steg_extract.rs`) to target only the verification of the telemetry signing key from `logo.png` (renamed helper `extract_telemetry_signing_key`), separating VM execution keys from telemetry payload signing.
+
 ## [1.0.4] - 2026-05-23
 
 ### Added

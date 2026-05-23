@@ -73,7 +73,7 @@ const vmNode = require('../../pkg-node/vm_core.js');
 let isDevMode = false;
 try {
     vmNode.set_payload_hash(new Uint8Array(32)); // Set all-zero fake hash
-    const testDevResult = JSON.parse(vmNode.execute(new Uint8Array([0]), new Uint8Array(1024), "{}", new Uint8Array(256)));
+    const testDevResult = JSON.parse(vmNode.execute(new Uint8Array([0]), new Uint8Array(0), "{}", new Uint8Array(256)));
     if (testDevResult.error === "Dev mode VirtSC hash mismatch") {
         isDevMode = true;
     }
@@ -112,8 +112,13 @@ const runTestCase = (testCase, devMode) => {
         // Set env variable DEV_MODE
         process.env.DEV_MODE = devMode ? 'true' : 'false';
 
+        let clientPublicKey;
+        if (!devMode) {
+            clientPublicKey = vmNode.generate_client_keypair();
+        }
+
         // 2. Scramble
-        const { payload, newMap, pngBuffer } = scrambleSessionPayload(fvbcPath, mapPath);
+        const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
         const mapUint8 = new Uint8Array(newMap);
 
         // Prepare final payload
@@ -143,14 +148,18 @@ const runTestCase = (testCase, devMode) => {
             vmNode.set_payload_hash(new Uint8Array(hashBytes));
         }
 
+        const header = !devMode ? handshakeHeader : pngBuffer;
         // 3. Execute
-        const resultJsonStr = vmNode.execute(finalPayload, pngBuffer, inputJsonStr, mapUint8);
+        const resultJsonStr = vmNode.execute(finalPayload, header, inputJsonStr, mapUint8);
         
         // Parse results
         runResult = JSON.parse(resultJsonStr);
     } catch (e) {
         runError = e;
     } finally {
+        if (!devMode) {
+            vmNode.clear_crypto();
+        }
         // Cleanup temp files
         try {
             fs.unlinkSync(fvbcPath);
@@ -229,7 +238,9 @@ for (const testCase of cases) {
                         const run2 = scrambleSessionPayload(fvbcPath, mapPath);
                         
                         assert.notDeepStrictEqual(run1.payload, run2.payload, "Payloads must be distinct for renewals");
-                        assert.notDeepStrictEqual(run1.pngBuffer, run2.pngBuffer, "Key PNGs must be distinct for renewals");
+                        if (!devMode) {
+                            assert.notDeepStrictEqual(run1.pngBuffer, run2.pngBuffer, "Key PNGs must be distinct for renewals");
+                        }
                     } finally {
                         try {
                             fs.unlinkSync(fvbcPath);

@@ -1,4 +1,4 @@
-import initCore, { execute, init_crypto, init_crypto_with_key, sign_request } from '../../pkg/vm-core/vm_core.js';
+import initCore, { execute, init_crypto, init_crypto_with_key, sign_request, generate_client_keypair, clear_crypto } from '../../pkg/vm-core/vm_core.js';
 let isReady = false;
 let globalStegoImage = null;
 let cachedNativeData = null;
@@ -150,12 +150,31 @@ self.onmessage = async (e) => {
             return;
         }
         try {
-            const { bytecode, opcodeMap, input } = payload;
-            const resultJson = execute(new Uint8Array(bytecode), globalStegoImage, JSON.stringify(input || []), new Uint8Array(opcodeMap));
+            const { bytecode, opcodeMap, input, handshakeHeader } = payload;
+            const header = handshakeHeader ? new Uint8Array(handshakeHeader) : globalStegoImage;
+            const resultJson = execute(new Uint8Array(bytecode), header, JSON.stringify(input || []), new Uint8Array(opcodeMap));
             self.postMessage({ type: 'EXECUTE_SUCCESS', result: resultJson });
         }
         catch (err) {
             self.postMessage({ type: 'EXECUTE_ERROR', error: err.message });
+        }
+    }
+    else if (type === 'GENERATE_KEYPAIR') {
+        try {
+            const publicKey = generate_client_keypair();
+            self.postMessage({ type: 'KEYPAIR_SUCCESS', publicKey: Array.from(publicKey) });
+        }
+        catch (err) {
+            self.postMessage({ type: 'KEYPAIR_ERROR', error: err.message });
+        }
+    }
+    else if (type === 'CLEAR_CRYPTO') {
+        try {
+            clear_crypto();
+            self.postMessage({ type: 'CLEAR_CRYPTO_SUCCESS' });
+        }
+        catch (err) {
+            self.postMessage({ type: 'CLEAR_CRYPTO_ERROR', error: err.message });
         }
     }
     else if (type === 'SIGN_REQUEST') {

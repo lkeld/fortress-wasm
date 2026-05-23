@@ -10,7 +10,7 @@ import { CodeGenerator } from '../../compiler/dist/codegen.js';
 // @ts-ignore
 import { scrambleSessionPayload } from '../../server/scrambler.js';
 
-function compileAndScramble(sourceCode: string, devMode: boolean, providedSessionKey?: Uint8Array) {
+function compileAndScramble(sourceCode: string, devMode: boolean, clientPublicKey?: Uint8Array) {
   const parser = new Parser(sourceCode);
   const ast = parser.parseProgram();
   const codegen = new CodeGenerator();
@@ -28,7 +28,7 @@ function compileAndScramble(sourceCode: string, devMode: boolean, providedSessio
     const oldDevMode = process.env.DEV_MODE;
     process.env.DEV_MODE = devMode ? 'true' : 'false';
 
-    const scrambled = scrambleSessionPayload(fvbcPath, mapPath, providedSessionKey);
+    const scrambled = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
 
     if (oldDevMode !== undefined) {
       process.env.DEV_MODE = oldDevMode;
@@ -39,6 +39,7 @@ function compileAndScramble(sourceCode: string, devMode: boolean, providedSessio
     return {
       payload: Array.from(scrambled.payload),
       newMap: scrambled.newMap,
+      handshakeHeader: Array.from(scrambled.handshakeHeader),
       pngBuffer: Array.from(scrambled.pngBuffer)
     };
   } finally {
@@ -58,33 +59,47 @@ test('Test 1: Basic payload execution and evaluation in Chrome', async ({ page }
     try {
       window.fortress.clear_crypto();
       window.fortress.set_payload_hash(new Uint8Array(32));
-      const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(1024), "[]", new Uint8Array(256)));
+      const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(0), "[]", new Uint8Array(256)));
       return res.error === "Dev mode VirtSC hash mismatch";
     } catch (e) {
       return false;
     }
   });
 
-  const sc = compileAndScramble('return 42;', isWasmDevMode);
+  let clientPublicKey: Uint8Array | undefined = undefined;
+  if (!isWasmDevMode) {
+    const rawPublicKey = await page.evaluate(() => {
+      return Array.from(window.fortress.generate_client_keypair());
+    });
+    clientPublicKey = new Uint8Array(rawPublicKey);
+  }
+
+  const sc = compileAndScramble('return 42;', isWasmDevMode, clientPublicKey);
 
   const hashArray = Array.from(
     crypto.createHash('sha256').update(Buffer.from(sc.payload)).digest()
   );
 
-  const result = await page.evaluate(({ payload, pngBuffer, newMap, isDev, hashArr }) => {
-    window.fortress.clear_crypto();
+  const result = await page.evaluate(({ payload, pngBuffer, handshakeHeader, newMap, isDev, hashArr }) => {
     if (isDev) {
+      window.fortress.clear_crypto();
       window.fortress.set_payload_hash(new Uint8Array(hashArr));
     }
-    return window.fortress.execute(
+    const header = isDev ? pngBuffer : handshakeHeader;
+    const res = window.fortress.execute(
       new Uint8Array(payload),
-      new Uint8Array(pngBuffer),
+      new Uint8Array(header),
       '[]',
       new Uint8Array(newMap)
     );
+    if (!isDev) {
+      window.fortress.clear_crypto();
+    }
+    return res;
   }, {
     payload: sc.payload,
     pngBuffer: sc.pngBuffer,
+    handshakeHeader: sc.handshakeHeader,
     newMap: sc.newMap,
     isDev: isWasmDevMode,
     hashArr: hashArray
@@ -102,30 +117,49 @@ test('Test 2: Web Worker concurrent message lifecycle', async ({ page }) => {
     try {
       window.fortress.clear_crypto();
       window.fortress.set_payload_hash(new Uint8Array(32));
-      const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(1024), "[]", new Uint8Array(256)));
+      const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(0), "[]", new Uint8Array(256)));
       return res.error === "Dev mode VirtSC hash mismatch";
     } catch (e) {
       return false;
     }
   });
 
-  const sc = compileAndScramble('return 100;', isWasmDevMode);
+  await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+    const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
+    return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+  });
 
-  const result = await page.evaluate(async ({ payload, pngBuffer, newMap, isDev }) => {
+  const result = await page.evaluate(async ({ isDev }) => {
     const wasmResponse = await fetch('/pkg-web/vm_core_bg.wasm');
     const vmCoreBytes = await wasmResponse.arrayBuffer();
 
-    const runWorker = (vmCore, stego, pay, map) => {
+    const runWorker = (vmCore) => {
       return new Promise((resolve, reject) => {
         const worker = new Worker('/dist/fortress-worker.js');
-        worker.onmessage = (e) => {
-          const { type, error, result: execResult } = e.data;
+        worker.onmessage = async (e) => {
+          const { type, error, result: execResult, publicKey } = e.data;
           if (type === 'INIT_SUCCESS') {
+            if (!isDev) {
+              worker.postMessage({ type: 'GENERATE_KEYPAIR' });
+            } else {
+              const sc = await (window as any).compileAndScramble('return 100;', isDev);
+              worker.postMessage({
+                type: 'EXECUTE',
+                payload: {
+                  bytecode: sc.payload,
+                  opcodeMap: sc.newMap,
+                  input: []
+                }
+              });
+            }
+          } else if (type === 'KEYPAIR_SUCCESS') {
+            const sc = await (window as any).compileAndScramble('return 100;', isDev, publicKey);
             worker.postMessage({
               type: 'EXECUTE',
               payload: {
-                bytecode: pay,
-                opcodeMap: map,
+                bytecode: sc.payload,
+                opcodeMap: sc.newMap,
+                handshakeHeader: sc.handshakeHeader,
                 input: []
               }
             });
@@ -148,7 +182,7 @@ test('Test 2: Web Worker concurrent message lifecycle', async ({ page }) => {
           type: 'INIT',
           payload: {
             vmCoreBytes: vmCore,
-            stegoImageBytes: stego,
+            stegoImageBytes: new Uint8Array(0),
             imageWidth: 16,
             imageHeight: 16,
             sessionSeedHex: '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff',
@@ -169,14 +203,11 @@ test('Test 2: Web Worker concurrent message lifecycle', async ({ page }) => {
     };
 
     return Promise.all([
-      runWorker(vmCoreBytes.slice(0), new Uint8Array(pngBuffer), payload, newMap),
-      runWorker(vmCoreBytes.slice(0), new Uint8Array(pngBuffer), payload, newMap),
-      runWorker(vmCoreBytes.slice(0), new Uint8Array(pngBuffer), payload, newMap)
+      runWorker(vmCoreBytes.slice(0)),
+      runWorker(vmCoreBytes.slice(0)),
+      runWorker(vmCoreBytes.slice(0))
     ]);
   }, {
-    payload: sc.payload,
-    pngBuffer: sc.pngBuffer,
-    newMap: sc.newMap,
     isDev: isWasmDevMode
   });
 
@@ -193,7 +224,7 @@ test('Test 3: Timing API availability and validation - triggers anti-debugging i
     try {
       window.fortress.clear_crypto();
       window.fortress.set_payload_hash(new Uint8Array(32));
-      const raw = window.fortress.execute(new Uint8Array([0]), new Uint8Array(1024), "[]", new Uint8Array(256));
+      const raw = window.fortress.execute(new Uint8Array([0]), new Uint8Array(0), "[]", new Uint8Array(256));
       console.log("isWasmDevMode raw output:", raw);
       const res = JSON.parse(raw);
       return res.error === "Dev mode VirtSC hash mismatch";
@@ -203,14 +234,12 @@ test('Test 3: Timing API availability and validation - triggers anti-debugging i
     }
   });
 
-  const sc = compileAndScramble('return 42;', isWasmDevMode);
-  console.log("isWasmDevMode is:", isWasmDevMode);
-  console.log("sc.payload length is:", sc.payload.length);
-  console.log("sc.payload first 10 bytes:", sc.payload.slice(0, 10));
-  console.log("newMap[51] (maps encoded 51 to standard) is:", sc.newMap[51]);
-  console.log("newMap[10] (maps encoded 10 to standard) is:", sc.newMap[10]);
+  await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+    const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
+    return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+  });
 
-  const result = await page.evaluate(async ({ payload, pngBuffer, newMap, isDev }) => {
+  const result = await page.evaluate(async ({ isDev }) => {
     const wasmResponse = await fetch('/pkg-web/vm_core_bg.wasm');
     const vmCoreBytes = await wasmResponse.arrayBuffer();
 
@@ -234,14 +263,30 @@ test('Test 3: Timing API availability and validation - triggers anti-debugging i
 
     return new Promise((resolve) => {
       const worker = new Worker(workerUrl);
-      worker.onmessage = (e) => {
-        const { type, error, result: execResult } = e.data;
+      worker.onmessage = async (e) => {
+        const { type, error, result: execResult, publicKey } = e.data;
         if (type === 'INIT_SUCCESS') {
+          if (!isDev) {
+            worker.postMessage({ type: 'GENERATE_KEYPAIR' });
+          } else {
+            const sc = await (window as any).compileAndScramble('return 42;', isDev);
+            worker.postMessage({
+              type: 'EXECUTE',
+              payload: {
+                bytecode: sc.payload,
+                opcodeMap: sc.newMap,
+                input: []
+              }
+            });
+          }
+        } else if (type === 'KEYPAIR_SUCCESS') {
+          const sc = await (window as any).compileAndScramble('return 42;', isDev, publicKey);
           worker.postMessage({
             type: 'EXECUTE',
             payload: {
-              bytecode: payload,
-              opcodeMap: newMap,
+              bytecode: sc.payload,
+              opcodeMap: sc.newMap,
+              handshakeHeader: sc.handshakeHeader,
               input: []
             }
           });
@@ -269,7 +314,7 @@ test('Test 3: Timing API availability and validation - triggers anti-debugging i
         type: 'INIT',
         payload: {
           vmCoreBytes,
-          stegoImageBytes: new Uint8Array(pngBuffer),
+          stegoImageBytes: new Uint8Array(0),
           imageWidth: 16,
           imageHeight: 16,
           sessionSeedHex: '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff',
@@ -283,9 +328,6 @@ test('Test 3: Timing API availability and validation - triggers anti-debugging i
       });
     });
   }, {
-    payload: sc.payload,
-    pngBuffer: sc.pngBuffer,
-    newMap: sc.newMap,
     isDev: isWasmDevMode
   });
 
@@ -307,16 +349,19 @@ test('Test 4: Timing API availability and validation - bypassed in dev mode', as
     try {
       window.fortress.clear_crypto();
       window.fortress.set_payload_hash(new Uint8Array(32));
-      const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(1024), "[]", new Uint8Array(256)));
+      const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(0), "[]", new Uint8Array(256)));
       return res.error === "Dev mode VirtSC hash mismatch";
     } catch (e) {
       return false;
     }
   });
 
-  const sc = compileAndScramble('return 42;', isWasmDevMode);
+  await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+    const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
+    return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+  });
 
-  const result = await page.evaluate(async ({ payload, pngBuffer, newMap }) => {
+  const result = await page.evaluate(async ({ isDev }) => {
     const wasmResponse = await fetch('/pkg-web/vm_core_bg.wasm');
     const vmCoreBytes = await wasmResponse.arrayBuffer();
 
@@ -333,14 +378,30 @@ test('Test 4: Timing API availability and validation - bypassed in dev mode', as
 
     return new Promise((resolve, reject) => {
       const worker = new Worker(workerUrl);
-      worker.onmessage = (e) => {
-        const { type, error, result: execResult } = e.data;
+      worker.onmessage = async (e) => {
+        const { type, error, result: execResult, publicKey } = e.data;
         if (type === 'INIT_SUCCESS') {
+          if (!isDev) {
+            worker.postMessage({ type: 'GENERATE_KEYPAIR' });
+          } else {
+            const sc = await (window as any).compileAndScramble('return 42;', isDev);
+            worker.postMessage({
+              type: 'EXECUTE',
+              payload: {
+                bytecode: sc.payload,
+                opcodeMap: sc.newMap,
+                input: []
+              }
+            });
+          }
+        } else if (type === 'KEYPAIR_SUCCESS') {
+          const sc = await (window as any).compileAndScramble('return 42;', isDev, publicKey);
           worker.postMessage({
             type: 'EXECUTE',
             payload: {
-              bytecode: payload,
-              opcodeMap: newMap,
+              bytecode: sc.payload,
+              opcodeMap: sc.newMap,
+              handshakeHeader: sc.handshakeHeader,
               input: []
             }
           });
@@ -363,7 +424,7 @@ test('Test 4: Timing API availability and validation - bypassed in dev mode', as
         type: 'INIT',
         payload: {
           vmCoreBytes,
-          stegoImageBytes: new Uint8Array(pngBuffer),
+          stegoImageBytes: new Uint8Array(0),
           imageWidth: 16,
           imageHeight: 16,
           sessionSeedHex: '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff',
@@ -377,9 +438,7 @@ test('Test 4: Timing API availability and validation - bypassed in dev mode', as
       });
     });
   }, {
-    payload: sc.payload,
-    pngBuffer: sc.pngBuffer,
-    newMap: sc.newMap
+    isDev: isWasmDevMode
   });
 
   expect(result).toBe(42);
@@ -394,29 +453,48 @@ test('Test 5: dev-mode payload execution safety under prod-mode configuration', 
     try {
       window.fortress.clear_crypto();
       window.fortress.set_payload_hash(new Uint8Array(32));
-      const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(1024), "[]", new Uint8Array(256)));
+      const res = JSON.parse(window.fortress.execute(new Uint8Array([0]), new Uint8Array(0), "[]", new Uint8Array(256)));
       return res.error === "Dev mode VirtSC hash mismatch";
     } catch (e) {
       return false;
     }
   });
 
-  const sc = compileAndScramble('return 42;', isWasmDevMode);
+  await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+    const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
+    return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+  });
 
-  const result = await page.evaluate(async ({ payload, newMap }) => {
+  const result = await page.evaluate(async ({ isDev }) => {
     const wasmResponse = await fetch('/pkg-web/vm_core_bg.wasm');
     const vmCoreBytes = await wasmResponse.arrayBuffer();
 
     return new Promise((resolve) => {
       const worker = new Worker('/dist/fortress-worker.js');
-      worker.onmessage = (e) => {
-        const { type, error, result: execResult } = e.data;
+      worker.onmessage = async (e) => {
+        const { type, error, result: execResult, publicKey } = e.data;
         if (type === 'INIT_SUCCESS') {
+          if (!isDev) {
+            worker.postMessage({ type: 'GENERATE_KEYPAIR' });
+          } else {
+            const sc = await (window as any).compileAndScramble('return 42;', true);
+            worker.postMessage({
+              type: 'EXECUTE',
+              payload: {
+                bytecode: sc.payload,
+                opcodeMap: sc.newMap,
+                input: []
+              }
+            });
+          }
+        } else if (type === 'KEYPAIR_SUCCESS') {
+          const sc = await (window as any).compileAndScramble('return 42;', true, publicKey);
           worker.postMessage({
             type: 'EXECUTE',
             payload: {
-              bytecode: payload,
-              opcodeMap: newMap,
+              bytecode: sc.payload,
+              opcodeMap: sc.newMap,
+              handshakeHeader: sc.handshakeHeader,
               input: []
             }
           });
@@ -458,8 +536,7 @@ test('Test 5: dev-mode payload execution safety under prod-mode configuration', 
       });
     });
   }, {
-    payload: sc.payload,
-    newMap: sc.newMap
+    isDev: isWasmDevMode
   });
 
   if (isWasmDevMode) {

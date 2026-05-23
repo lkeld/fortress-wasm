@@ -8,19 +8,19 @@ export function clear_crypto() {
 
 /**
  * @param {Uint8Array} bytecode
- * @param {Uint8Array} image_rgba
+ * @param {Uint8Array} handshake_header
  * @param {string} input_json
  * @param {Uint8Array} opcode_map
  * @returns {string}
  */
-export function execute(bytecode, image_rgba, input_json, opcode_map) {
+export function execute(bytecode, handshake_header, input_json, opcode_map) {
     let deferred5_0;
     let deferred5_1;
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         const ptr0 = passArray8ToWasm0(bytecode, wasm.__wbindgen_export2);
         const len0 = WASM_VECTOR_LEN;
-        const ptr1 = passArray8ToWasm0(image_rgba, wasm.__wbindgen_export2);
+        const ptr1 = passArray8ToWasm0(handshake_header, wasm.__wbindgen_export2);
         const len1 = WASM_VECTOR_LEN;
         const ptr2 = passStringToWasm0(input_json, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
         const len2 = WASM_VECTOR_LEN;
@@ -35,6 +35,23 @@ export function execute(bytecode, image_rgba, input_json, opcode_map) {
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
         wasm.__wbindgen_export4(deferred5_0, deferred5_1, 1);
+    }
+}
+
+/**
+ * @returns {Uint8Array}
+ */
+export function generate_client_keypair() {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.generate_client_keypair(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v1 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v1;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
     }
 }
 
@@ -70,6 +87,17 @@ export function init_crypto_with_key(stego_key_bytes, session_seed, fingerprint,
     const ptr2 = passArray8ToWasm0(fingerprint, wasm.__wbindgen_export2);
     const len2 = WASM_VECTOR_LEN;
     wasm.init_crypto_with_key(ptr0, len0, ptr1, len1, ptr2, len2, epoch_day);
+}
+
+/**
+ * @param {Uint8Array} key
+ * @returns {boolean}
+ */
+export function set_client_private_key(key) {
+    const ptr0 = passArray8ToWasm0(key, wasm.__wbindgen_export2);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.set_client_private_key(ptr0, len0);
+    return ret !== 0;
 }
 
 /**

@@ -54,7 +54,7 @@ pub fn init_crypto(
     let mut extracted = false;
 
     // Try primary prime-stride steganography first since scrambler targets use this format
-    if let Some(key) = crate::steg_extract::extract_prime_stride(&image_bytes) {
+    if let Some(key) = crate::steg_extract::extract_telemetry_signing_key(&image_bytes) {
         stego_key = key;
         extracted = true;
     }
@@ -98,7 +98,7 @@ pub fn init_crypto(
         *k.borrow_mut() = Some(sig_key);
     });
     SESSION_KEY.with(|k| {
-        *k.borrow_mut() = Some(stego_key);
+        *k.borrow_mut() = None;
     });
 
     // Zeroize sensitive material immediately.
@@ -163,6 +163,13 @@ pub fn clear_crypto() {
         let mut borrow = h.borrow_mut();
         if let Some(ref mut hash) = *borrow {
             hash.zeroize();
+        }
+        *borrow = None;
+    });
+    crate::wrapper::CLIENT_PRIVATE_KEY.with(|k| {
+        let mut borrow = k.borrow_mut();
+        if let Some(ref mut key) = *borrow {
+            key.zeroize();
         }
         *borrow = None;
     });

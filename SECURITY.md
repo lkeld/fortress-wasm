@@ -30,13 +30,13 @@ Emerging attacks use LLMs to infer logic based on static stack depth profiling. 
 Static LLVM IR analysis easily identifies virtual machines by locating the central `switch` block with the highest number of successors. We defeat this by flattening the dispatcher into a native Function Pointer Array trampoline. The central switch block no longer exists.
 
 **Payload Caching & Diffing (Code Renewability, 2020)**
-Attackers frequently diff payloads across sessions to isolate dynamic variables. The `scramblePayload()` module generates a mathematically distinct payload per-request, featuring a fresh 256-byte translation map, a rolling 32-byte session key, and a randomised LSB image stride. Differential analysis yields zero usable data.
+Attackers frequently diff payloads across sessions to isolate dynamic variables. The `scrambleSessionPayload()` module generates a mathematically distinct payload per-request, featuring a fresh 256-byte translation map, a rolling 32-byte session key derived via an ephemeral X25519 DH key exchange, and a randomised handshake header. Differential analysis yields zero usable data.
 
 **Cryptographic Memory Scraping (Zeroize)**
 Wasm linear memory is vulnerable to scraping during VM execution, exposing keys and decrypted pages. We protect against this by wrapping the session key, JIT decrypted page buffers, and intermediate FFI signature arrays in the `zeroize` crate. All cryptographic materials are explicitly zeroed out the microsecond they go out of scope or upon interpreter termination.
 
 **Production FFI Execution Shortcutting**
-To prevent attackers from bypassing steganographic key extraction by executing plain canonical payloads directly in the production VM target, the interpreter FFI wrapper strictly checks for the presence of a steganographic session key when compiled under production (`not(feature = "dev")`) targets, immediately throwing a `MissingSessionKey` error if the key is absent.
+To prevent attackers from bypassing the handshake verification by executing plain canonical payloads directly in the production VM target, the interpreter FFI wrapper strictly checks for the successful derivation of the session key through a valid handshake header when compiled under production (`not(feature = "dev")`) targets, immediately throwing a `MissingSessionKey` error if the key is absent.
 
 **V8 TurboFan JIT Optimisation (Polynomial Parity Locks)**
 Optimizing compilers (specifically V8 TurboFan) use aggressive Range Analysis, Type Feedback, Constant Folding, and Strength Reduction to optimize arithmetic structures. To prevent JIT engines from optimizing away our Mixed Boolean-Arithmetic (MBA) obfuscations, we implement Polynomial Parity Locks using non-linear math constraints:
@@ -51,8 +51,8 @@ Integer division `/` is protected by non-linear polynomial MBA obfuscation. Firs
 
 ## What This Does NOT Protect Against
 
-**Algorithmic Obscurity of LSB Steganography**
-The 32-byte cryptographic session key is delivered via LSB steganography in a PNG pixel buffer. While we utilise a dynamic extraction stride generated from the `R` channel of the first pixel to defeat simple linear statistical scraping, the safety of this key relies partially on the attacker's ignorance of the specific extraction algorithm. If the attacker perfectly reverse-engineers the VM's extraction loop, the session key is compromised.
+**Active Client Tampering / Replay Attacks**
+The 32-byte session key is negotiated via an ephemeral X25519 key exchange signed with Ed25519. This protects against passive eavesdropping, payload diffing, and replay attacks (via a 10-byte timestamp and session IDs). However, if an attacker has fully compromised the client-side execution environment, they can intercept the negotiated session key from WebAssembly memory before it is zeroized, or bypass the verification logic entirely by patching the compiled WASM binary.
 
 **White-Box Cryptography Limitations**
 Software-only protection cannot achieve the security of hardware enclaves. We rely on the JIT sliding decryption window to mitigate memory scraping, but as of 2026, there are no unbroken, practical white-box implementations of standard symmetric encryption. Given unlimited time, a dedicated nation-state or hyper-resourced attacker can physically step through the execution and dump memory page by page. 

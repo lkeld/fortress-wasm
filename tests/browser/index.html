@@ -7,7 +7,7 @@
 <body>
   <h1>Fortress WASM Browser Test</h1>
   <script type="module">
-    import init, { execute, init_crypto, init_crypto_with_key, set_payload_hash, clear_crypto } from '/pkg-web/vm_core.js';
+    import init, { execute, init_crypto, init_crypto_with_key, set_payload_hash, clear_crypto, generate_client_keypair } from '/pkg-web/vm_core.js';
     
     // Expose APIs to window so that Playwright can access them easily
     window.fortress = {
@@ -16,7 +16,8 @@
       init_crypto,
       init_crypto_with_key,
       set_payload_hash,
-      clear_crypto
+      clear_crypto,
+      generate_client_keypair
     };
     
     console.log("Fortress WASM module APIs exposed to window.fortress");

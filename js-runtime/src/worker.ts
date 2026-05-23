@@ -1,4 +1,4 @@
-import initCore, { execute, init_crypto, init_crypto_with_key, sign_request } from '../../pkg-web/vm_core.js';
+import initCore, { execute, init_crypto, init_crypto_with_key, sign_request, generate_client_keypair, set_client_private_key } from '../../pkg-web/vm_core.js';
 import { nativeCallRouter } from './router.js';
 
 const workerInitTime = performance.now();
@@ -24,7 +24,7 @@ self.onmessage = async (e: MessageEvent) => {
 
     if (type === 'INIT') {
         try {
-            let { vmCoreBytes, stegoImageBytes, imageWidth, imageHeight, sessionSeedHex, fingerprintHex, epochDay, devMode, websocketUrl, websocketAuth, nativeData } = payload;
+            let { vmCoreBytes, stegoImageBytes, imageWidth, imageHeight, sessionSeedHex, fingerprintHex, epochDay, devMode, websocketUrl, websocketAuth, nativeData, clientPrivateKey } = payload;
             
             const t0 = performance.now();
             
@@ -137,6 +137,10 @@ self.onmessage = async (e: MessageEvent) => {
                     epochDay
                 );
                 
+                if (clientPrivateKey) {
+                    set_client_private_key(new Uint8Array(clientPrivateKey));
+                }
+
                 globalStegoImage = stegoBytes;
                 isReady = true;
                 cachedNativeData = nativeData;
@@ -153,17 +157,27 @@ self.onmessage = async (e: MessageEvent) => {
             return;
         }
         try {
-            const { bytecode, opcodeMap, input } = payload;
+            const { bytecode, opcodeMap, handshakeHeader, input } = payload;
+            
+            const handshakeBytes = handshakeHeader ? new Uint8Array(handshakeHeader) : (globalStegoImage || new Uint8Array(0));
             
             const resultJson = execute(
                 new Uint8Array(bytecode), 
-                globalStegoImage!,
+                handshakeBytes,
                 JSON.stringify(input || []),
                 new Uint8Array(opcodeMap)
             );
             self.postMessage({ type: 'EXECUTE_SUCCESS', result: resultJson });
         } catch (err: any) {
             self.postMessage({ type: 'EXECUTE_ERROR', error: err.message });
+        }
+    }
+    else if (type === 'GENERATE_KEYPAIR') {
+        try {
+            const pubKey = generate_client_keypair();
+            self.postMessage({ type: 'KEYPAIR_SUCCESS', publicKey: Array.from(pubKey) });
+        } catch (err: any) {
+            self.postMessage({ type: 'KEYPAIR_ERROR', error: err.message });
         }
     }
     else if (type === 'SIGN_REQUEST') {

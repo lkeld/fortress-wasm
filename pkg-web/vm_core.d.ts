@@ -3,11 +3,15 @@
 
 export function clear_crypto(): void;
 
-export function execute(bytecode: Uint8Array, image_rgba: Uint8Array, input_json: string, opcode_map: Uint8Array): string;
+export function execute(bytecode: Uint8Array, handshake_header: Uint8Array, input_json: string, opcode_map: Uint8Array): string;
+
+export function generate_client_keypair(): Uint8Array;
 
 export function init_crypto(image_bytes: Uint8Array, _width: number, _height: number, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;
 
 export function init_crypto_with_key(stego_key_bytes: Uint8Array, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;
+
+export function set_client_private_key(key: Uint8Array): boolean;
 
 export function set_payload_hash(hash: Uint8Array): void;
 
@@ -19,8 +23,10 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly clear_crypto: () => void;
     readonly execute: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly generate_client_keypair: (a: number) => void;
     readonly init_crypto: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly init_crypto_with_key: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
+    readonly set_client_private_key: (a: number, b: number) => number;
     readonly set_payload_hash: (a: number, b: number) => void;
     readonly sign_request: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly __wbindgen_export: (a: number) => void;

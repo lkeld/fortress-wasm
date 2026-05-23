@@ -33,7 +33,7 @@ fn benchmarkArithmetic() {
 benchmarkArithmetic();
 `;
 
-function compileAndScramble(source, devMode) {
+function compileAndScramble(source, devMode, clientPublicKey) {
     process.env.DEV_MODE = devMode ? 'true' : 'false';
     const parser = new Parser(source);
     const ast = parser.parseProgram();
@@ -47,7 +47,7 @@ function compileAndScramble(source, devMode) {
     fs.writeFileSync(fvbcPath, Buffer.from(code));
     fs.writeFileSync(mapPath, JSON.stringify(Array.from(opcodeMap)));
 
-    const { payload, newMap, pngBuffer } = scrambleSessionPayload(fvbcPath, mapPath);
+    const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
     
     fs.unlinkSync(fvbcPath);
     fs.unlinkSync(mapPath);
@@ -56,6 +56,7 @@ function compileAndScramble(source, devMode) {
         payload: new Uint8Array(payload),
         newMap: new Uint8Array(newMap),
         pngBuffer: pngBuffer,
+        handshakeHeader: handshakeHeader,
         bytecodeSize: code.length
     };
 }
@@ -65,12 +66,13 @@ vmNode.clear_crypto();
 
 // Compile both modes
 const devConfig = compileAndScramble(sourceCode, true);
-const prodConfig = compileAndScramble(sourceCode, false);
+// Initial prod compilation without key for compilation metrics
+const prodConfigMetrics = compileAndScramble(sourceCode, false);
 
 console.log("=== Compilation Metrics ===");
 console.log(`Dev Bytecode Size:  ${devConfig.bytecodeSize} bytes`);
-console.log(`Prod Bytecode Size: ${prodConfig.bytecodeSize} bytes`);
-console.log(`Overhead Ratio:      ${(prodConfig.bytecodeSize / devConfig.bytecodeSize).toFixed(2)}x\n`);
+console.log(`Prod Bytecode Size: ${prodConfigMetrics.bytecodeSize} bytes`);
+console.log(`Overhead Ratio:      ${(prodConfigMetrics.bytecodeSize / devConfig.bytecodeSize).toFixed(2)}x\n`);
 
 const RUNS = 10000;
 
@@ -91,18 +93,22 @@ const timeDev = endDev - startDev;
 
 // Benchmark PROD mode
 vmNode.clear_crypto();
+const clientPublicKey = vmNode.generate_client_keypair();
+const prodConfig = compileAndScramble(sourceCode, false, clientPublicKey);
 
 // Warm-up PROD mode to trigger JIT optimization
 for (let i = 0; i < 1000; i++) {
-    vmNode.execute(prodConfig.payload, prodConfig.pngBuffer, '{}', prodConfig.newMap);
+    vmNode.execute(prodConfig.payload, prodConfig.handshakeHeader, '{}', prodConfig.newMap);
 }
 
 const startProd = performance.now();
 for (let i = 0; i < RUNS; i++) {
-    vmNode.execute(prodConfig.payload, prodConfig.pngBuffer, '{}', prodConfig.newMap);
+    vmNode.execute(prodConfig.payload, prodConfig.handshakeHeader, '{}', prodConfig.newMap);
 }
 const endProd = performance.now();
 const timeProd = endProd - startProd;
+
+vmNode.clear_crypto();
 
 console.log("=== Execution Metrics (10,000 iterations) ===");
 console.log(`Dev execution time:  ${timeDev.toFixed(2)} ms`);

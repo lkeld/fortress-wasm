@@ -18,6 +18,10 @@ zeroize = { version = "1.8", features = ["zeroize_derive"] }
 web-sys = { version = "0.3", features = ["Window", "WorkerGlobalScope", "Performance"] }
 getrandom = { version = "0.2", features = ["js"] }
 
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hkdf = "0.12"
+
 png = "0.17"
 
 [package.metadata.wasm-pack.profile.release]

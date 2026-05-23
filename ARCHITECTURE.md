@@ -19,16 +19,16 @@ graph TD
     
     I[Scrambler Module] -->|Ingests| G
     I -->|Ingests| H
-    I -->|Derives| J[32-Byte Session Key]
+    I -->|Performs DH Exchange| J[Derive 32-Byte Session Key]
     I -->|Rolling XOR| K[Scrambled Payload]
-    I -->|Dynamic Modulus LSB| L[key.png]
+    I -->|Signs & Packages| L[154-Byte Handshake Header]
     I -->|Translation Layer| M[Client opcode_map.json]
 ```
 
 ### Architectural Rationale
 The build pipeline enforces **Code Renewability** (Abrath et al., *Code Renewability for Native Software Protection*, arxiv.org/abs/2003.00916). Standard compilers generate a static ISA, allowing attackers to write automated lifters (e.g., mapping `0x20` to `LocalGet`). Fortress WASM breaks this by using a Fisher-Yates shuffle in `generate_isa.js` to randomise the canonical opcode map on every single build. 
 
-Furthermore, the Scrambler generates a secondary translation layer per request. It encrypts the base `.fvbc` payload with a 32-byte rolling XOR key, embeds the key dynamically into a PNG image using LSB steganography, and generates a fresh runtime mapping. This makes caching, signature matching, and payload diffing mathematically impossible.
+Furthermore, the Scrambler generates a secondary translation layer per request. It encrypts the base `.fvbc` payload with a 32-byte rolling XOR key, negotiates the key dynamically using an ephemeral X25519 DH key exchange signed by an Ed25519 signature, and generates a fresh runtime mapping. This makes caching, signature matching, and payload diffing mathematically impossible.
 
 ---
 
@@ -36,20 +36,20 @@ Furthermore, the Scrambler generates a secondary translation layer per request. 
 
 ```mermaid
 graph TD
-    A[Client Request] --> B[Receive scrambled.fvbc, key.png, map.json]
-    B --> C[Extract Pixel Buffer]
-    C --> D{LSB Steganography Decoder}
-    D -->|Read R Channel of Pixel 0| E[Derive Stride Modulus]
-    E -->|Extract across RGB| F[Reconstruct 32-Byte Session Key]
+    A[Client Request] --> B[Negotiate X25519 Keypair]
+    B --> C[Receive scrambled.fvbc, Handshake Header, map.json]
+    C --> D{Ed25519 Signature Verifier}
+    D -->|Verify Server Signature| E[Extract Server Ephemeral Public Key]
+    E -->|X25519 Diffie-Hellman & HKDF| F[Derive 32-Byte Session Key]
     
-    F --> G[Initialise VM]
+    F --> G[Initialise VM & Zeroize Private Key]
     G --> H[VirtSC Hash Check]
     H -->|Match| I[Enter Trampoline Dispatcher]
     H -->|Mismatch| J[Silent Key Corruption]
 ```
 
 ### Architectural Rationale
-The runtime extraction specifically addresses static key extraction vulnerabilities. By deriving the LSB extraction stride dynamically from the randomised `R` channel of the first pixel, the system removes any fixed mathematical anchor for an attacker to bootstrap from. 
+The runtime key negotiation specifically addresses static key extraction and eavesdropping vulnerabilities. By negotiating an ephemeral 32-byte session key via X25519 Diffie-Hellman and validating the parameters with a server-signed Ed25519 signature, we guarantee perfect forward secrecy and protect against man-in-the-middle or replay attacks. To further harden client security, the client private key is immediately zeroized in Rust memory as soon as the session key is negotiated.
 
 The **VirtSC Hash Check** (Ahmadvand et al., *VirtSC: Combining Virtualisation Obfuscation with Self-Checksumming*, arxiv.org/abs/1909.11404) guarantees payload integrity. If an attacker byte-patches the scrambled `.fvbc` file to inject malicious instructions or alter control flow, the pre-execution SHA-256 hash check fails. Rather than throwing an overt error—which an attacker could trace and bypass—it silently corrupts the 32-byte session key. When the JIT decryption window reaches the patched section, it decrypts garbage opcodes, causing a silent and untraceable crash.
 
@@ -105,13 +105,13 @@ flowchart TD
 
     subgraph "Phase II: Scrambling & Transmission"
         E --> F["Scrambler Module: Rolling 32-byte XOR Encryption"]
-        F --> G["Stego Encoder: Dynamic Modulus PNG Embedding"]
+        F --> G["DH Handshake: X25519 & Ed25519 Signing"]
         G --> H["HTTPS Payload Transmission"]
     end
 
     subgraph "Phase III: VM Decryption & Execution"
         H --> I["Rust FFI: wrapper::execute"]
-        I --> J["steg_extract: Session Key Extraction"]
+        I --> J["X25519 DH & HKDF: Session Key Derivation"]
         J --> K["JIT Page Decoder: Sliding Decryption Window"]
         K --> L["VM Stack Interpreter: Step-by-Step Execution"]
         L --> M["Result Stored in Local Slot x"]
@@ -119,4 +119,4 @@ flowchart TD
 ```
 
 ### Architectural Rationale
-This fifth diagram outlines the entire lifecycle of a variable data flow under virtualisation. It illustrates how the high-level semantic logic is systematically decomposed, obfuscated algebraically, encrypted cryptographically, hidden steganographically, and executed incrementally on a stack machine. This process ensures that the variable's true mathematical value is never exposed in a plain or unprotected format at any point during its transit or execution in the browser memory.
+This fifth diagram outlines the entire lifecycle of a variable data flow under virtualisation. It illustrates how the high-level semantic logic is systematically decomposed, obfuscated algebraically, encrypted cryptographically, negotiated via an ephemeral authenticated key exchange, and executed incrementally on a stack machine. This process ensures that the variable's true mathematical value is never exposed in a plain or unprotected format at any point during its transit or execution in the browser memory.

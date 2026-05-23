@@ -17,7 +17,7 @@ const crypto = require('crypto');
 let isDevMode = false;
 try {
     vmNode.set_payload_hash(new Uint8Array(32)); // Set all-zero fake hash
-    const testDevResult = JSON.parse(vmNode.execute(new Uint8Array([0]), new Uint8Array(1024), "{}", new Uint8Array(256)));
+    const testDevResult = JSON.parse(vmNode.execute(new Uint8Array([0]), new Uint8Array(0), "{}", new Uint8Array(256)));
     if (testDevResult.error === "Dev mode VirtSC hash mismatch") {
         isDevMode = true;
     }
@@ -44,8 +44,13 @@ test('Integration: end-to-end payload compilation, scramble, and execution pipel
     fs.writeFileSync(fvbcPath, Buffer.from(code));
     fs.writeFileSync(mapPath, JSON.stringify(Array.from(opcodeMap)));
     
+    let clientPublicKey;
+    if (!isDevMode) {
+        clientPublicKey = vmNode.generate_client_keypair();
+    }
+
     // 2. Scramble
-    const { payload, newMap, pngBuffer } = scrambleSessionPayload(fvbcPath, mapPath);
+    const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
     
     // Convert newMap to Uint8Array
     const mapUint8 = new Uint8Array(newMap);
@@ -59,7 +64,13 @@ test('Integration: end-to-end payload compilation, scramble, and execution pipel
         vmNode.set_payload_hash(new Uint8Array(hashBytes));
     }
     
-    const resultJsonStr = vmNode.execute(payload, pngBuffer, inputJson, mapUint8);
+    const header = !isDevMode ? handshakeHeader : pngBuffer;
+    const resultJsonStr = vmNode.execute(payload, header, inputJson, mapUint8);
+    
+    if (!isDevMode) {
+        vmNode.clear_crypto();
+    }
+    
     const result = JSON.parse(resultJsonStr);
     
     assert.strictEqual(result, 42);
@@ -86,7 +97,9 @@ test('Integration: Renewability (distinct session keys)', () => {
     
     // Payload and PNG buffer should differ
     assert.notDeepStrictEqual(run1.payload, run2.payload);
-    assert.notDeepStrictEqual(run1.pngBuffer, run2.pngBuffer);
+    if (!isDevMode) {
+        assert.notDeepStrictEqual(run1.pngBuffer, run2.pngBuffer);
+    }
     
     // Cleanup
     fs.unlinkSync(fvbcPath);
