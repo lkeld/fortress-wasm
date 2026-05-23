@@ -12,4 +12,6 @@ compiler/node_modules/
 /dashboard/
 /agents/
 /.agents/
+*.tgz
+
 
