@@ -21,17 +21,27 @@ graph TD
     A[Source Logic .fvm] -->|1. Compiler Pipeline| B(Custom Compiler)
     B -->|Generates Base Bytecode & Maps| C{Scrambler / Delivery Layer}
     
-    subgraph "Server Delivery"
-    C -->|Generates Fresh Opcode Map| D[Dynamic Translation Map]
-    C -->|Encodes Key in PNG| E[LSB Steganography Image]
-    C -->|Rolling XOR Cipher| F[Scrambled Payload .fvbc]
+    subgraph "Server Key Derivation & Handshake"
+        PWD[FORTRESS_SIGNING_PASSWORD + Salt] -->|Argon2id| SK[Ed25519 Signing Key]
+        NS{NonceStore Check} -->|Replay Protection| EAKE[Ephemeral X25519 Key Exchange]
+        SK -->|Signs Handshake Block| EAKE
+        EAKE -->|Generates Handshake Header| HSH[Handshake Header]
     end
     
-    subgraph "Client Execution"
-    D -.-> G
-    E -.-> G
-    F -.-> G
-    G[VM Interpreter Wasm] -->|JIT Sliding Decryption| H[Execution]
+    subgraph "Server Delivery"
+        C -->|Generates Fresh Opcode Map| D[Dynamic Translation Map]
+        C -->|Rolling XOR Cipher| F[Scrambled Payload .fvbc]
+        C -->|Telemetry Key| E[LSB Steganography Image]
+    end
+    
+    subgraph "Client Execution & Verification"
+        D -.-> G
+        HSH -.-> G
+        F -.-> G
+        E -.-> G
+        G[VM Interpreter Wasm] -->|Client DH & Ed25519 Verify| V[Handshake Key Verification]
+        E -.->|Decoupled Telemetry Signature Key Verification| V
+        V -->|JIT Sliding Decryption| H[Execution]
     end
 ```
 
@@ -46,7 +56,7 @@ This system implements targeted defences against the following state-of-the-art 
 | **Phase 1** | Plaintext Constant Leakage | Constant Pool Elimination | On-demand constant decryption via inline nonces | Cao et al. (WASMixer) |
 | **Phase 2** | Trivial Disassembly / Lifters | Linear MBA Solvers | Mixed Boolean-Arithmetic substitution (Add/Sub) | Harnes & Morrison (Cryptic Bytes) |
 | **Phase 3** | Symbolic Execution Paths | Path Explosion Tools | Bogus control flow injection & opaque predicates | Cao et al. (WASMixer) |
-| **Phase 4** | Static Key Ingestion | Hardcoded Key Extractors | LSB steganographic key delivery with dynamic strides | Steganographic Key Delivery |
+| **Phase 4** | Static Key Ingestion | Hardcoded Key Extractors | X25519 Ephemeral Key Exchange with Ed25519 Handshake Signature | Steganographic Key Delivery |
 | **Phase 5** | Emulation / Emulators | VPC Emulators (e.g. PUSHAN) | VPC program counter base/offset fragmentation | Authors of PUSHAN |
 | **Phase 6** | Algebraic Deobfuscators | SMT Solvers (SiMBA, MBA-Blast) | Polynomial non-linear MBA and pseudo-variable domain expansion | MBA-Blast, SiMBA, gMBA |
 | **Phase 7** | ML Classifier Profiling | Static AST Fingerprinters | AST Path Distribution Pollution (semantically valid dead blocks) | Authors of WasmWalker |
@@ -103,6 +113,40 @@ The complete research methodology, including the threat model, the detailed arch
 ## Contributing
 
 For guidelines on environment setup, building, testing, reporting issues, and opening pull requests, please refer to [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Subresource Integrity (SRI)
+
+To prevent supply chain attacks and guarantee runtime integrity, Fortress WASM generates SHA-384 hashes for its compiled WebAssembly binaries. These hashes allow hosts and browsers to verify that the compiled code has not been tampered with.
+
+### Generating Hashes
+
+The hashes are generated automatically during the build process:
+- When running `npm run build` (or `build:dev` / `build:prod`), the build script automatically executes `node scripts/build.js --only-hashes` to generate:
+  - `pkg-web/vm_core_bg.wasm.sha384` (for the web target)
+  - `pkg-node/vm_core_bg.wasm.sha384` (for the Node.js target)
+- The v1.2.0 build pipeline and CI workflow (`.github/workflows/publish.yml`) incorporate reproducible builds via `npm ci`, block copyleft licenses via `cargo-deny`, run security audits via `npm audit` and `cargo-audit`, and automatically write the computed Web WASM SHA-384 hash to `WASM_INTEGRITY.txt` at the root of the workspace and in the `dist/` directory of the release artifacts.
+
+### Verifying Hashes
+
+To verify the integrity of the WASM binary manually, you can compute its SHA-384 checksum:
+
+Using OpenSSL/shasum:
+```bash
+shasum -a 384 pkg-web/vm_core_bg.wasm
+```
+
+Or using Node.js:
+```bash
+node -e "console.log(require('crypto').createHash('sha384').update(require('fs').readFileSync('pkg-web/vm_core_bg.wasm')).digest('hex'))"
+```
+
+Compare the output with the content of `pkg-web/vm_core_bg.wasm.sha384` or `WASM_INTEGRITY.txt`.
+
+For browser delivery, you can use the Subresource Integrity (SRI) format by converting the hex hash into base64. For example:
+```bash
+cat pkg-web/vm_core_bg.wasm | openssl dgst -sha384 -binary | openssl base64 -A
+```
+This base64 string can be used inside your application loader to enforce cryptographic pinning of the WASM runtime.
 
 ## References
 

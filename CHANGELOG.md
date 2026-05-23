@@ -2,6 +2,21 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.2.0] - 2026-05-24
+
+### Added
+- **Argon2id Server Key Derivation**: Derives the Ed25519 signing private key from `FORTRESS_SIGNING_PASSWORD` and salt in `server/.signing_params` using Argon2id (memoryCost: 65536, timeCost: 3, parallelism: 1).
+- **NonceStore Replay Protection**: Server scrambler checks nonces against an in-memory/Redis NonceStore, enforcing a 5-minute replay window on timestamp validation.
+- **VM Constant-Time Signature Verification & Timestamp Checks**: Prevents side-channel timing leaks by using the `subtle` crate for signature and timestamp comparison loops.
+- **Branchless Bounds Decryption Masking**: Replaces branches/conditional jumps during JIT page decoding with bitwise bounds masks (`mask = (in_bounds as u8).wrapping_neg()`).
+- **HMAC-SHA256 VirtSC Checksumming**: Replaces simple SHA-256 with keyed HMAC-SHA256 using `base_key_material` (derived via HKDF-SHA256).
+- **Supply Chain Hardening**: Integrated cargo-deny config (blocking copyleft licenses), npm and cargo vulnerability auditing checks, reproducible builds via `npm ci`, and Web WASM SHA-384 SRI verification.
+
+### Fixed
+- **CI Workflow Directory Creation Crash**: Fixed a publish workflow directory creation crash in `publish.yml` by ensuring output directories are recursively created.
+- **VM JIT Page Hash Mismatch Decryption Logic**: Fixed a bug where a JIT page hash verification failure resulted in incorrect state management, now correctly XORing `session_key[0]` with `0xFF` to corrupt decryption.
+- **Scrambler Offset-Parsing Loop Boundary Overrun**: Hardened the Scrambler payload offset parser to prevent boundary overruns on trailing hash byte parsing.
+
 ## [1.0.5] - 2026-05-23
 
 ### Added

@@ -30,10 +30,25 @@ Emerging attacks use LLMs to infer logic based on static stack depth profiling. 
 Static LLVM IR analysis easily identifies virtual machines by locating the central `switch` block with the highest number of successors. We defeat this by flattening the dispatcher into a native Function Pointer Array trampoline. The central switch block no longer exists.
 
 **Payload Caching & Diffing (Code Renewability, 2020)**
-Attackers frequently diff payloads across sessions to isolate dynamic variables. The `scrambleSessionPayload()` module generates a mathematically distinct payload per-request, featuring a fresh 256-byte translation map, a rolling 32-byte session key derived via an ephemeral X25519 DH key exchange, and a randomised handshake header. Differential analysis yields zero usable data.
+Attackers frequently diff payloads across sessions to isolate dynamic variables. The scrambler generates a mathematically distinct payload per-request, featuring a fresh 256-byte translation map, a rolling 32-byte session key derived via Ephemeral Authenticated Key Exchange (EAKE), and a randomised handshake header. Differential analysis yields zero usable data.
 
-**Cryptographic Memory Scraping (Zeroize)**
-Wasm linear memory is vulnerable to scraping during VM execution, exposing keys and decrypted pages. We protect against this by wrapping the session key, JIT decrypted page buffers, and intermediate FFI signature arrays in the `zeroize` crate. All cryptographic materials are explicitly zeroed out the microsecond they go out of scope or upon interpreter termination.
+**Ephemeral Authenticated Key Exchange (EAKE)**
+Fortress WASM negotiates ephemeral session keys via X25519 and verifies them with Ed25519 signatures, preventing Man-in-the-Middle (MITM) attacks and passive eavesdropping. Ed25519 signing keys are derived server-side via Argon2id from `FORTRESS_SIGNING_PASSWORD` and salt in `server/.signing_params` using memoryCost: 65536, timeCost: 3, parallelism: 1.
+
+**NonceStore & Replay Protection**
+The server scrambler checks nonces against an in-memory or Redis-backed NonceStore. This enforces a strict 5-minute replay window on timestamp validation, preventing replay attacks where old headers are reused to execute the VM.
+
+**VM Constant-Time Signature Verification**
+The VM uses the `subtle` crate and constant-time comparison loops to verify the handshake signature and timestamp. This prevents side-channel timing leaks that would otherwise reveal portions of cryptographic signatures or secrets.
+
+**Branchless Bounds Decryption**
+During JIT page decoding, all conditional jumps/branches for boundary checks are eliminated. We use a bitwise bounds mask (`mask = (in_bounds as u8).wrapping_neg()`), which ensures constant-time decoding execution and prevents branch-prediction side channels.
+
+**HMAC-SHA256 VirtSC Checksumming**
+To ensure payload integrity, Fortress WASM employs keyed HMAC-SHA256 (replacing simple unkeyed SHA-256) using `base_key_material` derived via HKDF-SHA256. If the payload is modified, the signature validation fails immediately.
+
+**Zeroization (Memory Hardening)**
+To defend against client memory-scraping, the VM explicitly zeroizes sensitive key materials and memory regions (`base_key_material`, `session_key`, `code`, `ves`, `opcode_map`) immediately upon verification failure or execution completion using the `zeroize` crate.
 
 **Production FFI Execution Shortcutting**
 To prevent attackers from bypassing the handshake verification by executing plain canonical payloads directly in the production VM target, the interpreter FFI wrapper strictly checks for the successful derivation of the session key through a valid handshake header when compiled under production (`not(feature = "dev")`) targets, immediately throwing a `MissingSessionKey` error if the key is absent.
@@ -51,8 +66,8 @@ Integer division `/` is protected by non-linear polynomial MBA obfuscation. Firs
 
 ## What This Does NOT Protect Against
 
-**Active Client Tampering / Replay Attacks**
-The 32-byte session key is negotiated via an ephemeral X25519 key exchange signed with Ed25519. This protects against passive eavesdropping, payload diffing, and replay attacks (via a 10-byte timestamp and session IDs). However, if an attacker has fully compromised the client-side execution environment, they can intercept the negotiated session key from WebAssembly memory before it is zeroized, or bypass the verification logic entirely by patching the compiled WASM binary.
+**Active Client Tampering**
+EAKE (X25519 & Ed25519) combined with the NonceStore provides strong protection against eavesdropping, MITM, and replay attacks. However, if an attacker has fully compromised the client-side environment, they can intercept the negotiated session key from WebAssembly memory before it is zeroized, or bypass the verification logic entirely by patching the compiled WASM binary.
 
 **White-Box Cryptography Limitations**
 Software-only protection cannot achieve the security of hardware enclaves. We rely on the JIT sliding decryption window to mitigate memory scraping, but as of 2026, there are no unbroken, practical white-box implementations of standard symmetric encryption. Given unlimited time, a dedicated nation-state or hyper-resourced attacker can physically step through the execution and dump memory page by page. 
@@ -69,6 +84,9 @@ Software-only protection cannot achieve the security of hardware enclaves. We re
 
 **Capabilities we assume the attacker DOES NOT HAVE:**
 - The ability to compromise the backend server that generates the randomised `scramblePayload()` responses.
+- The ability to compromise the server's private Ed25519 signing key or bypass the NonceStore checks (e.g., by predicting nonces or bypassing the 5-minute replay window).
+- The ability to bypass the zeroization process (keys are wiped immediately upon verification failure or execution completion, leaving a minimal window for memory scraping).
+- The ability to execute timing side-channel attacks on signature checks due to constant-time execution.
 - An infinite time horizon. (Our goal is to make the economic and temporal cost of reverse-engineering the binary exceed the value of the proprietary logic inside it).
 
 **Why these assumptions are reasonable:**

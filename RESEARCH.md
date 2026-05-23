@@ -1,7 +1,7 @@
 # Fortress WASM: A Research-Driven WebAssembly Virtualisation and Hardening Engine — Defeating State-of-the-Art Decompilation, Synthesis, and Machine Learning Attack Methodologies
 
 ## Abstract
-The rapid adoption of client-side WebAssembly (Wasm) has introduced unprecedented performance capabilities to the browser, but it inherently suffers from severe intellectual property (IP) vulnerability. Standard WebAssembly binaries are highly structured and lack the hardware-level obscurity of native machine code, making them exceptionally easy to decompile and analyse. This paper presents **Fortress WASM**, a comprehensive, research-driven WebAssembly virtualisation and hardening engine. Constructed directly from academic attack literature, Fortress WASM implements a thirteen-phase defensive architecture designed to neutralise state-of-the-art attack methodologies. By combining techniques such as mixed boolean-arithmetic (MBA), control-flow flattening, steganographic key delivery, dynamic code renewability, and LLM-targeted stack poisoning, the engine defeats advanced analysis tools including WasmWalker, PUSHAN, SiMBA, MBA-Blast, and StackSight by name.
+The rapid adoption of client-side WebAssembly (Wasm) has introduced unprecedented performance capabilities to the browser, but it inherently suffers from severe intellectual property (IP) vulnerability. Standard WebAssembly binaries are highly structured and lack the hardware-level obscurity of native machine code, making them exceptionally easy to decompile and analyse. This paper presents **Fortress WASM**, a comprehensive, research-driven WebAssembly virtualisation and hardening engine. Constructed directly from academic attack literature, Fortress WASM implements a thirteen-phase defensive architecture designed to neutralise state-of-the-art attack methodologies. By combining techniques such as mixed boolean-arithmetic (MBA), control-flow flattening, ephemeral X25519/Ed25519 authenticated key exchange, decoupled steganography for telemetry validation, dynamic code renewability, and LLM-targeted stack poisoning, the engine defeats advanced analysis tools including WasmWalker, PUSHAN, SiMBA, MBA-Blast, and StackSight by name.
 
 ---
 
@@ -70,6 +70,12 @@ The Rust interpreter implements a stack machine design with localised registers 
 ### 4.4 The JIT Sliding Decryption Window
 To defeat memory dumping, the payload is partitioned into 256-byte pages. An XOR cipher decrypts only the active page just-in-time, enforcing a maximum plaintext exposure of 256 bytes at any given instant during execution (Robert Vähhi, *Building a Wasm-in-Wasm Virtualizer*, trustsig.eu/blog/wasm-vm).
 
+Additionally, to prevent timing side-channel leaks and branch-based fingerprinting during JIT page decoding, we employ branchless bounds decryption masking. When indexing bytecode pages, the index validity check translates to a mask:
+```rust
+mask = (in_bounds as u8).wrapping_neg()
+```
+This mask is bitwise ANDed with the decrypted byte, completely eliminating conditional jumps and ensuring constant-time execution of the decoding step.
+
 ### 4.5 The Compiler Pipeline
 The compiler pipeline parses the high-level logic, traverses the AST, and emits the bytecode. Crucially, it manages the injection of cryptographic thunks and structural noise during the emission phase.
 
@@ -83,8 +89,15 @@ The delivery layer is responsible for taking the compiled payload and scrambling
 ### 5.1 Phase 1: On-Demand Constant Decryption
 To protect data literals, the traditional plaintext constants pool was eliminated. Data is loaded using typed push opcodes, and string literals are encrypted inline with dynamically derived nonces, decrypted strictly on-demand during execution (Cao et al., *WASMixer: Binary Obfuscation for WebAssembly*, arxiv.org/abs/2308.03123).
 
-### 5.2 Phase 4: LSB Steganographic Key Delivery
-The 32-byte cryptographic session key must be delivered securely. Rather than embedding it, the key is encoded into the Least Significant Bits (LSB) of a PNG pixel buffer. To defeat linear statistical analysis, the extraction utilises a dynamically derived stride based on a randomised starting modulus from the first pixel's R channel, mapping data non-sequentially across RGB channels.
+### 5.2 Phase 4: X25519/Ed25519 Ephemeral Authenticated Key Exchange (EAKE)
+To secure execution key delivery and prevent Man-in-the-Middle (MITM) or passive eavesdropping attacks, Fortress WASM negotiates VM execution keys via X25519/Ed25519 Ephemeral Authenticated Key Exchange (EAKE).
+The EAKE process operates as follows:
+- **Server Key Derivation**: The server derives an Ed25519 signing private key from `FORTRESS_SIGNING_PASSWORD` and a salt configured in `server/.signing_params` using the Argon2id key derivation function with parameters: `memoryCost: 65536`, `timeCost: 3`, and `parallelism: 1`.
+- **Replay Protection**: The client and server generate ephemeral X25519 keypairs. The server validates incoming nonces against a memory-backed/Redis `NonceStore` replay protection check (enforcing a 5-minute replay window on timestamp validation).
+- **Key Exchange & Handshake**: The server computes a shared secret using Diffie-Hellman (DH) key exchange, derives `session_key` and `base_key_material` via HKDF-SHA256, and signs the handshake block with its Ed25519 signing key.
+- **Constant-Time Verification**: The client verifies the Ed25519 signature in constant-time (utilizing the `subtle::Choice` crate for constant-time comparisons and constant-time timestamp checks) before proceeding with execution.
+
+The legacy LSB steganographic key delivery has been decoupled and is now used solely for verifying the telemetry signature key, rather than delivering raw VM execution session keys.
 
 ---
 
@@ -153,8 +166,9 @@ Static analysis tools search for the basic block with the highest successor coun
 ### 8.1 Phase 5: VPC Fragmentation
 The PUSHAN attack relies heavily on symbolic emulation to track the Virtual Program Counter (VPC). By fragmenting the `pc` into `pc_base ^ pc_offset` and mutating the offset non-deterministically during execution, we severely degrade PUSHAN's ability to maintain a stable emulation state (Authors of PUSHAN, *Pushan: Trace-Free Deobfuscation of Virtualisation-Obfuscated Binaries*, arxiv.org/abs/2603.18355).
 
-### 8.2 Phase 5: VirtSC Self-Checksumming
-To prevent tampering and byte-patching, the VM validates a hash of the bytecode payload at startup. If the hash fails, the engine silently corrupts the session key, causing subsequent decryptions to produce garbage opcodes, executing a silent crash (Ahmadvand et al., *VirtSC: Combining Virtualisation Obfuscation with Self-Checksumming*, arxiv.org/abs/1909.11404).
+### 8.2 Phase 5: VirtSC Self-Checksumming (HMAC-SHA256)
+To prevent tampering, reverse-engineering patching, and byte-alteration attacks, the VM performs a JIT-compiled bytecode integrity check using HMAC-SHA256 keyed on `base_key_material` (derived via HKDF-SHA256).
+If the VirtSC integrity check fails, the VM does not simply crash or corrupt the key; it immediately zeroizes sensitive memory regions—including `base_key_material`, `session_key`, `code` (the raw bytecode payload), `ves` (the VM evaluation stack), and the dynamic `opcode_map`—to prevent memory-scraping attacks (Ahmadvand et al., *VirtSC: Combining Virtualisation Obfuscation with Self-Checksumming*, arxiv.org/abs/1909.11404).
 
 ---
 
@@ -181,10 +195,17 @@ To defeat signature-based analysis and payload caching, the architecture enforce
 The core VM is built in Rust to leverage memory safety and `wasm-bindgen`. The compiler and scrambler are written in TypeScript and Node.js. Cryptographic backing relies on the `sha2` and `hmac` crates.
 
 ### 11.2 Memory Hardening (Zeroize)
-The steganographic key extracted in memory represents a severe vulnerability if an attacker performs a raw memory dump of the Wasm linear memory. To prevent this, we integrated the `zeroize` crate. The extracted 32-byte session key, JIT decrypted page buffers, and intermediate HMAC signature arrays are explicitly zeroed out (wiped with zeroes) the exact microsecond they go out of scope or upon completion of VM execution, securing memory against forensic scraping.
+The negotiated ephemeral keys and decoupled telemetry keys extracted in memory represent a vulnerability if an attacker performs a raw memory dump of the Wasm linear memory. To prevent this, we integrated the `zeroize` crate. The extracted 32-byte session key, JIT decrypted page buffers, and intermediate HMAC signature arrays are explicitly zeroed out (wiped with zeroes) the exact microsecond they go out of scope or upon completion of VM execution, securing memory against forensic scraping.
 
 ### 11.3 Cycle and Borrow Panic Prevention
 Converting VM values (such as nested/recursive lists and objects) to JSON during FFI calls can trigger Rust runtime borrow panics or infinite loops if cyclic references exist. To address this, we integrated recursive cycle tracking and replaced raw `.borrow()` calls with a safe `.try_borrow()` fallback in [wrapper.rs](file:///Users/luke/Desktop/fortress-wasm/crates/vm-core/src/wrapper.rs#L117). If a cyclic reference or dynamic borrowing conflict is detected, the wrapper safely outputs `<cycle>` or `<borrowed>` placeholders rather than crashing the VM.
+
+### 11.4 Supply Chain Security
+Fortress WASM enforces strict supply chain security measures to ensure artifact integrity and block dependencies vulnerabilities:
+- **Reproducible Builds**: Dependency installation in CI is locked using `npm ci` to prevent untrusted dependency updates or modification of the lockfile.
+- **Dependency License Audits**: We run `cargo-deny` checks to block dependency integration of copyleft licenses (e.g. GPL, AGPL) and audit licenses across all crates.
+- **Security Audits**: Continuous integration executes automated vulnerability auditing via `npm audit` and `cargo audit` to flag CVEs.
+- **Subresource Integrity (SRI)**: Web-targeted WASM binaries are published with SHA-384 checksums generated automatically and written to `WASM_INTEGRITY.txt`, allowing browsers to cryptographically pin the compiled WASM runtime.
 
 ---
 
@@ -200,17 +221,18 @@ In May 2026, we conducted a systematic functional correctness audit to ensure th
 - **Panic Hardening**: Host environment timer checking in `vm.rs` used unchecked `.unwrap()` which crashed when running under specific browser configurations where the performance API was restricted or disabled. Replaced with safe `.and_then()` fallback structures.
 
 ### 12.2 Full Variable Lifecycle Trace (FLOW_MAPPING)
-The following traces the complete execution flow of a local variable `let x = a + b;` through the compiler, scrambler, steganographic embedding, JIT page extraction, and Stack VM execution layers:
+The following traces the complete execution flow of a local variable `let x = a + b;` through the compiler, scrambler, EAKE handshake generation, and Stack VM execution layers:
 
 1. **Source Code**: The logic is written in `.fvm` format: `let x = a + b;`
 2. **Compiler AST**: The parser in [parser.ts](file:///Users/luke/Desktop/fortress-wasm/compiler/src/parser.ts) generates a binary expression node:
    - `type`: `"LetStatement"`, `name`: `"x"`, `value`: `BinaryExpression { operator: "+", left: "a", right: "b" }`
 3. **MBA & ISA Generation**: The compiler replaces addition with the polynomial MBA expression:
     $$a + b = (a \oplus b) + ((a \land b) \ll 1) + ((z^{2} + z) \land 1) \cdot a$$
-   It shuffles the canonical opcodes using the Fisher-Yates mapping generated by `generate_isa.js`.
-4. **Scrambler XOR & Steganographic PNG Embedding**:
-   The scrambler (`scrambler.ts`) encrypts the compiled bytecode with a rolling 32-byte session key and embeds the key dynamically into the LSBs of a PNG pixel buffer using a prime-stride pixel selection stride.
-5. **VM JIT Extraction**: The VM interpreter in `steg_extract.rs` extracts the session key from the PNG using the identical prime stride. 
+    It shuffles the canonical opcodes using the Fisher-Yates mapping generated by `generate_isa.js`.
+4. **Scrambler XOR & EAKE Handshake Generation**:
+   The scrambler (`scrambler.ts`) encrypts the compiled bytecode with a rolling 32-byte session key derived via HKDF-SHA256 from a shared secret negotiated using X25519. The server generates a handshake block containing the ephemeral public key, session ID, nonce, and timestamp, signed using the server's Ed25519 signing key derived via Argon2id.
+5. **VM Key Negotiation & Signature Verification**:
+   The VM interpreter performs the X25519 key exchange, derives the `session_key` and `base_key_material`, and verifies the Ed25519 signature in constant-time. Decoupled telemetry keys are still extracted from the LSBs of the PNG pixel buffer via `steg_extract.rs` for verifying telemetry signatures.
 6. **Stack VM Execution**: The Wasm interpreter in [vm.rs](file:///Users/luke/Desktop/fortress-wasm/crates/vm-core/src/vm.rs) decodes the randomised instruction stream, executing the MBA addition on the VM evaluation stack step-by-step:
    - `LoadLocal a` -> Stack: `[a]`
    - `LoadLocal b` -> Stack: `[a, b]`
@@ -242,7 +264,7 @@ The following traces the complete execution flow of a local variable `let x = a 
 | Signature/Diffing Attacks | Phase 12 | Per-Request Code Renewability | (Abrath et al., *Code Renewability*, arxiv.org/abs/2003.00916) |
 
 ### 13.2 Remaining Attack Surface
-The most prominent remaining weakness is the statistical signature of division `Div` opcodes, which bypass the domain expansion pipeline. While multiplication is now fully obfuscated via polynomial MBA, division is only protected by a structural, pseudo-data-dependent linear MBA pass (`val + (dummy - dummy)`). The steganography relies partially on the attacker's ignorance of the extraction algorithm. If the attacker perfectly reverse-engineers the VM's extraction loop, the session key is compromised.
+The most prominent remaining weakness is the statistical signature of division `Div` opcodes, which bypass the domain expansion pipeline. While multiplication is now fully obfuscated via polynomial MBA, division is only protected by a structural, pseudo-data-dependent linear MBA pass (`val + (dummy - dummy)`). The decoupled telemetry steganography relies partially on the attacker's ignorance of the extraction algorithm. However, execution keys are secure under the EAKE model.
 
 ### 13.3 Theoretical Limits
 While the system defeats current academic tools, white-box cryptography (hiding keys mathematically) and indistinguishability obfuscation remain theoretically unbroken but practically infeasible (Tim Blazytko & Nicolò Altamura, *Breaking Mixed Boolean-Arithmetic Obfuscation in Real-World Applications*, recon.cx/cfp.recon.cx/recon-2025/talk/BKBQ37/index.html). Obfuscation remains an arms race, but dynamic renewability presents the strongest asymptotic defence.
@@ -258,7 +280,7 @@ Currently, the advanced polynomial non-linear MBA applies strictly to `Add`, `Su
 While the system successfully diversifies dummy variable slots during execution, advanced dynamic taint trackers could potentially profile memory accesses over time. Future work could introduce per-build variable mapping rotation.
 
 ### 14.3 Server-Side Key Provisioning
-Steganography, while effective, still transmits the key to the client. Future iterations could deliver the session key over an authenticated WebSocket, ensuring offline decryption is mathematically impossible without a live authorised connection.
+EAKE ensures that keys are negotiated ephemeral per-session, but future iterations could further integrate live server-side session checks over an authenticated WebSocket, ensuring offline decryption is mathematically impossible without a live authorised connection.
 
 ### 14.4 Register-Based VM
 The current stack machine design maps closely to underlying WebAssembly. Transitioning the interpreter to a Register-Based ISA could offer performance benefits and exponentially increase the complexity required for structural pattern matching.
