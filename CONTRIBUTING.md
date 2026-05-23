@@ -60,3 +60,12 @@ npm run test:e2e
 If you modify the VM logic (`crates/vm-core/src/vm.rs` or `handlers.rs`), ensure you are not reintroducing switch blocks or static patterns that can be fingerprinted by LLVM passes.
 
 If you modify the Compiler (`compiler/src/codegen.ts`), ensure any new dummy variable allocations for Taint Analysis Resistance are properly appended to the `dummyVariables` array to maintain non-linear data dependency scattering.
+
+## Reporting Issues
+
+If you find a bug, functional mismatch, or security vulnerability, please open an issue in the official issue tracker at [GitHub Issues](https://github.com/lkeld/fortress-wasm/issues).
+
+When submitting an issue, please ensure you include:
+1. A minimal reproducible example (your source `.fvm` script).
+2. Environment details (Node.js version, Rust version, and whether it occurs on `DEV` or `PROD` builds).
+3. The expected behaviour versus the actual behaviour, including any console logs or stack traces.

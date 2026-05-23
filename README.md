@@ -100,6 +100,10 @@ npm run test:e2e
 
 The complete research methodology, including the threat model, the detailed architecture, the verification results, and exactly how each of the 13 hardening phases was implemented to defeat the academic literature, is fully documented in [RESEARCH.md](RESEARCH.md).
 
+## Contributing
+
+For guidelines on environment setup, building, testing, reporting issues, and opening pull requests, please refer to [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## References
 
 ---
