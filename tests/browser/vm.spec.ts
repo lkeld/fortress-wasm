@@ -9,8 +9,10 @@ import { Parser } from '../../compiler/dist/parser.js';
 import { CodeGenerator } from '../../compiler/dist/codegen.js';
 // @ts-ignore
 import { scrambleSessionPayload } from '../../server/scrambler.js';
+// @ts-ignore
+import { InMemoryNonceStore } from '../../server/nonce-store.js';
 
-function compileAndScramble(sourceCode: string, devMode: boolean, clientPublicKey?: Uint8Array) {
+async function compileAndScramble(sourceCode: string, devMode: boolean, clientPublicKey?: Uint8Array) {
   const parser = new Parser(sourceCode);
   const ast = parser.parseProgram();
   const codegen = new CodeGenerator();
@@ -28,7 +30,8 @@ function compileAndScramble(sourceCode: string, devMode: boolean, clientPublicKe
     const oldDevMode = process.env.DEV_MODE;
     process.env.DEV_MODE = devMode ? 'true' : 'false';
 
-    const scrambled = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
+    const nonceStore = new InMemoryNonceStore();
+    const scrambled = await scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey, nonceStore);
 
     if (oldDevMode !== undefined) {
       process.env.DEV_MODE = oldDevMode;
@@ -74,7 +77,7 @@ test('Test 1: Basic payload execution and evaluation in Chrome', async ({ page }
     clientPublicKey = new Uint8Array(rawPublicKey);
   }
 
-  const sc = compileAndScramble('return 42;', isWasmDevMode, clientPublicKey);
+  const sc = await compileAndScramble('return 42;', isWasmDevMode, clientPublicKey);
 
   const hashArray = Array.from(
     crypto.createHash('sha256').update(Buffer.from(sc.payload)).digest()
@@ -124,9 +127,9 @@ test('Test 2: Web Worker concurrent message lifecycle', async ({ page }) => {
     }
   });
 
-  await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+  await page.exposeFunction('compileAndScramble', async (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
     const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
-    return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+    return await compileAndScramble(sourceCode, devMode, pubKeyUint8);
   });
 
   const result = await page.evaluate(async ({ isDev }) => {
@@ -234,9 +237,9 @@ test('Test 3: Timing API availability and validation - triggers anti-debugging i
     }
   });
 
-  await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+  await page.exposeFunction('compileAndScramble', async (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
     const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
-    return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+    return await compileAndScramble(sourceCode, devMode, pubKeyUint8);
   });
 
   const result = await page.evaluate(async ({ isDev }) => {
@@ -356,9 +359,9 @@ test('Test 4: Timing API availability and validation - bypassed in dev mode', as
     }
   });
 
-  await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+  await page.exposeFunction('compileAndScramble', async (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
     const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
-    return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+    return await compileAndScramble(sourceCode, devMode, pubKeyUint8);
   });
 
   const result = await page.evaluate(async ({ isDev }) => {
@@ -460,9 +463,9 @@ test('Test 5: dev-mode payload execution safety under prod-mode configuration', 
     }
   });
 
-  await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+  await page.exposeFunction('compileAndScramble', async (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
     const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
-    return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+    return await compileAndScramble(sourceCode, devMode, pubKeyUint8);
   });
 
   const result = await page.evaluate(async ({ isDev }) => {

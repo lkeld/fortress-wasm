@@ -1,35 +1,82 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { PNG } from 'pngjs';
 import * as crypto from 'crypto';
+import * as argon2 from 'argon2';
 // @ts-ignore
 import { OpCode } from '../compiler/dist/opcodes.js';
+import { NonceStore, InMemoryNonceStore } from './nonce-store';
 
-// Load server signing key dynamically
-function loadServerSigningKey(): crypto.KeyObject {
-    const keyPath = path.join(__dirname, '.signing_key');
-    let privateKeyDer: Buffer;
-    if (fs.existsSync(keyPath)) {
-        privateKeyDer = fs.readFileSync(keyPath);
-    } else {
-        const pair = crypto.generateKeyPairSync('ed25519', {
-            privateKeyEncoding: { format: 'der', type: 'pkcs8' }
-        });
-        privateKeyDer = pair.privateKey;
-        fs.writeFileSync(keyPath, privateKeyDer);
+let cachedSigningKey: crypto.KeyObject | null = null;
+
+// Load server signing key dynamically using Argon2id key derivation
+async function loadServerSigningKey(): Promise<crypto.KeyObject> {
+    if (cachedSigningKey) {
+        return cachedSigningKey;
     }
-    return crypto.createPrivateKey({
+
+    const password = process.env.FORTRESS_SIGNING_PASSWORD;
+    if (!password) {
+        throw new Error("Missing FORTRESS_SIGNING_PASSWORD environment variable");
+    }
+
+    const paramsPath = path.join(__dirname, '.signing_params');
+    let salt: Buffer;
+    let isColdStart = false;
+
+    if (fs.existsSync(paramsPath)) {
+        salt = fs.readFileSync(paramsPath);
+        if (salt.length !== 32) {
+            throw new Error(`Invalid salt length in ${paramsPath}. Expected 32 bytes.`);
+        }
+    } else {
+        salt = crypto.randomBytes(32);
+        fs.writeFileSync(paramsPath, salt);
+        isColdStart = true;
+    }
+
+    // Derive seed using Argon2id (memoryCost: 65536, timeCost: 3, parallelism: 1, hashLength: 32)
+    const seed = await argon2.hash(password, {
+        type: argon2.argon2id,
+        memoryCost: 65536,
+        timeCost: 3,
+        parallelism: 1,
+        hashLength: 32,
+        salt: salt,
+        raw: true
+    });
+
+    // Wrap the derived 32-byte seed in the PKCS#8 DER header 302e020100300506032b657004220420
+    const derHeader = Buffer.from('302e020100300506032b657004220420', 'hex');
+    const privateKeyDer = Buffer.concat([derHeader, seed]);
+
+    const signingKey = crypto.createPrivateKey({
         key: privateKeyDer,
         format: 'der',
         type: 'pkcs8'
     });
+
+    if (isColdStart) {
+        const publicKeyObject = crypto.createPublicKey(signingKey);
+        const pubKeyDer = publicKeyObject.export({ type: 'spki', format: 'der' });
+        const pubKeyBytes = pubKeyDer.subarray(pubKeyDer.length - 32);
+        
+        const rustArray = "[" + Array.from(pubKeyBytes).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(', ') + "]";
+        console.log(`Cold Start: Derived public key bytes (Rust array):`);
+        console.log(rustArray);
+    }
+
+    cachedSigningKey = signingKey;
+    return signingKey;
 }
 
 /**
  * Exposes generateHandshake returning a base64-encoded header value containing the concatenated raw fields
  */
-export function generateHandshake(clientPublicKey: Uint8Array | Buffer): { handshakeHeader: string, sessionKey: Uint8Array } {
-    const serverPrivateKey = loadServerSigningKey();
+export async function generateHandshake(
+    clientPublicKey: Uint8Array | Buffer,
+    nonceStore: NonceStore
+): Promise<{ handshakeHeader: string, sessionKey: Uint8Array }> {
+    const serverPrivateKey = await loadServerSigningKey();
 
     // Generate fresh X25519 ephemeral key pair
     const serverEphemeral = crypto.generateKeyPairSync('x25519');
@@ -52,6 +99,12 @@ export function generateHandshake(clientPublicKey: Uint8Array | Buffer): { hands
     const sessionId = crypto.randomBytes(8).toString('hex'); // 16-byte hex string
     const nonce = crypto.randomBytes(32); // 32-random-byte session nonce
     const timestamp = Math.floor(Date.now() / 1000).toString().padStart(10, '0'); // 10-byte zero-padded timestamp string
+
+    const nonceHex = nonce.toString('hex');
+    const consumed = await nonceStore.consume(nonceHex, timestamp);
+    if (!consumed) {
+        throw new Error('HandshakeNonceRejected — nonce already consumed or timestamp expired');
+    }
 
     const sessionKey = crypto.hkdfSync(
         'sha256',
@@ -89,13 +142,15 @@ export function generateHandshake(clientPublicKey: Uint8Array | Buffer): { hands
  * @param fvbcPath Path to the compiled .fvbc file
  * @param originalMapPath Path to the original opcode_map.json
  * @param clientPublicKeyOrSessionKey Client X25519 public key (32 bytes) or provided session key (legacy)
+ * @param nonceStore NonceStore to validate handshakes
  * @returns { payload: Uint8Array, newMap: number[], pngBuffer: Buffer, handshakeHeader: Buffer }
  */
-export function scrambleSessionPayload(
+export async function scrambleSessionPayload(
     fvbcPath: string, 
     originalMapPath: string, 
-    clientPublicKeyOrSessionKey?: Uint8Array | Buffer
-): { payload: Uint8Array, newMap: number[], pngBuffer: Buffer, handshakeHeader: Buffer } {
+    clientPublicKeyOrSessionKey: Uint8Array | Buffer | undefined,
+    nonceStore: NonceStore
+): Promise<{ payload: Uint8Array, newMap: number[], pngBuffer: Buffer, handshakeHeader: Buffer }> {
     const originalBytecode = fs.readFileSync(fvbcPath);
     const originalMap: number[] = JSON.parse(fs.readFileSync(originalMapPath, 'utf8'));
 
@@ -121,10 +176,26 @@ export function scrambleSessionPayload(
     } else if (clientPublicKeyOrSessionKey && clientPublicKeyOrSessionKey.length === 32) {
         // Check if it matches a valid DH handshake public key or legacy manual key
         try {
-            const handshake = generateHandshake(clientPublicKeyOrSessionKey);
+            const handshake = await generateHandshake(clientPublicKeyOrSessionKey, nonceStore);
             sessionKey = handshake.sessionKey as any;
             handshakeHeaderBytes = Buffer.from(handshake.handshakeHeader, 'base64');
-        } catch (e) {
+        } catch (error) {
+            const e = error as any;
+            const isCritical = e && (
+                e.message?.includes('Missing FORTRESS_SIGNING_PASSWORD') ||
+                e.message?.includes('HandshakeNonceRejected') ||
+                e.message?.includes('Invalid salt length')
+            );
+            const isDerivationOrKeyError = e && (
+                e.code === 'ERR_OSSL_FAILED_DURING_DERIVATION' ||
+                e.code === 'ERR_CRYPTO_PUBLIC_KEY_IDENTIFIER_INVALID' ||
+                e.message?.includes('failed during derivation')
+            );
+
+            if (isCritical || !isDerivationOrKeyError) {
+                throw error;
+            }
+
             // Legacy manual key fallback if key parsing failed
             for (let i = 0; i < 32; i++) {
                 sessionKey[i] = clientPublicKeyOrSessionKey[i];
@@ -134,14 +205,17 @@ export function scrambleSessionPayload(
         // Generate random client key pair for DH derivation
         const dummyClient = crypto.generateKeyPairSync('x25519');
         const dummyClientPublic = dummyClient.publicKey.export({ type: 'spki', format: 'der' }).subarray(12);
-        const handshake = generateHandshake(dummyClientPublic);
+        const handshake = await generateHandshake(dummyClientPublic, nonceStore);
         sessionKey = handshake.sessionKey as any;
         handshakeHeaderBytes = Buffer.from(handshake.handshakeHeader, 'base64');
     }
 
     const newBytecode = new Uint8Array(originalBytecode.length);
     let i = 0;
-    while (i < originalBytecode.length) {
+    const limit = (originalBytecode.length % 288 === 0 && originalBytecode.length > 0)
+        ? (originalBytecode.length / 288) * 256
+        : originalBytecode.length;
+    while (i < limit) {
         const currentByte = originalBytecode[i];
         const standardOpcode = originalMap[currentByte];
         const newByte = newMap[standardOpcode];
@@ -215,6 +289,19 @@ export function scrambleSessionPayload(
         }
     }
 
+    // Recompute page hashes over the scrambled bytecode pages
+    if (originalBytecode.length % 288 === 0 && originalBytecode.length > 0) {
+        const numPages = originalBytecode.length / 288;
+        const hashStart = numPages * 256;
+        for (let p = 0; p < numPages; p++) {
+            const pageData = newBytecode.subarray(p * 256, (p + 1) * 256);
+            const hash = crypto.createHash('sha256').update(pageData).digest();
+            for (let b = 0; b < 32; b++) {
+                newBytecode[hashStart + p * 32 + b] = hash[b];
+            }
+        }
+    }
+
     // XOR encrypt the final payload with 32-byte rolling key (unless DEV_MODE)
     const encryptedBytecode = new Uint8Array(newBytecode.length);
     if (process.env.DEV_MODE === 'true') {
@@ -237,18 +324,24 @@ export function scrambleSessionPayload(
 
 // CLI usage
 if (require.main === module) {
-    const args = process.argv.slice(2);
-    if (args.length < 2) {
-        console.error("Usage: node scrambler.js <file.fvbc> <file.opcodes.json>");
-        process.exit(1);
-    }
+    (async () => {
+        const args = process.argv.slice(2);
+        if (args.length < 2) {
+            console.error("Usage: node scrambler.js <file.fvbc> <file.opcodes.json>");
+            process.exit(1);
+        }
 
-    const { payload, newMap, pngBuffer } = scrambleSessionPayload(args[0], args[1]);
-    
-    const outBase = args[0].replace(/\.fvbc$/, '') + '.scrambled';
-    fs.writeFileSync(`${outBase}.fvbc`, payload);
-    fs.writeFileSync(`${outBase}.opcodes.json`, JSON.stringify(newMap));
-    fs.writeFileSync(`${outBase}.key.bin`, pngBuffer);
-    
-    console.log(`Successfully generated dynamic session payload to ${outBase}.fvbc and handshake header to ${outBase}.key.bin`);
+        const defaultNonceStore = new InMemoryNonceStore();
+        const { payload, newMap, pngBuffer } = await scrambleSessionPayload(args[0], args[1], undefined, defaultNonceStore);
+        
+        const outBase = args[0].replace(/\.fvbc$/, '') + '.scrambled';
+        fs.writeFileSync(`${outBase}.fvbc`, payload);
+        fs.writeFileSync(`${outBase}.opcodes.json`, JSON.stringify(newMap));
+        fs.writeFileSync(`${outBase}.key.bin`, pngBuffer);
+        
+        console.log(`Successfully generated dynamic session payload to ${outBase}.fvbc and handshake header to ${outBase}.key.bin`);
+    })().catch(err => {
+        console.error(err);
+        process.exit(1);
+    });
 }

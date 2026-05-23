@@ -21,6 +21,7 @@ Module.prototype.require = function (id) {
 const { Parser } = require('../../compiler/dist/parser.js');
 const { CodeGenerator } = require('../../compiler/dist/codegen.js');
 const { scrambleSessionPayload } = require('../../server/scrambler.js');
+const { InMemoryNonceStore } = require('../../server/nonce-store.js');
 const vmNode = require('../../pkg-node/vm_core.js');
 const { OpCode } = require('../../compiler/dist/opcodes.js');
 
@@ -37,7 +38,7 @@ try {
 } catch (e) {}
 
 
-function compileAndExecute(source, inputs = [], devMode = false) {
+async function compileAndExecute(source, inputs = [], devMode = false) {
     vmNode.clear_crypto();
     const parser = new Parser(source);
     const ast = parser.parseProgram();
@@ -57,7 +58,8 @@ function compileAndExecute(source, inputs = [], devMode = false) {
             clientPublicKey = vmNode.generate_client_keypair();
         }
 
-        const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
+        const nonceStore = new InMemoryNonceStore();
+        const { payload, newMap, pngBuffer, handshakeHeader } = await scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey, nonceStore);
         const mapUint8 = new Uint8Array(newMap);
 
         // Prepend 7 nulls to offset the dummy variables in vm.locals
@@ -88,6 +90,7 @@ console.log("==========================================");
 // console.log("   FORTRESS-WASM ADVERSARIAL STRESS TESTS ");
 console.log("==========================================");
 
+(async () => {
 // Case 1: Scope Isolation and Nested Function Codegen Crash/Mismatch
 try {
     console.log("Test 1: Scope Isolation & Nested Function Execution...");
@@ -101,7 +104,7 @@ try {
         }
         return outer();
     `;
-    const res = compileAndExecute(source, [], isDevMode);
+    const res = await compileAndExecute(source, [], isDevMode);
     console.log("  Result:", res);
     // If it works correctly under lexical scope or hoists/jumps, it would return 42.
     // If it returns null/crashes, it fails or exhibits the early return / uninitialized local bug.
@@ -128,7 +131,7 @@ try {
         }
         return overflow();
     `;
-    const res = compileAndExecute(source, [], isDevMode);
+    const res = await compileAndExecute(source, [], isDevMode);
     console.log("  Result:", res);
     if (res === 131) {
         console.log("  => PASS (Successfully handled 130 additions)");
@@ -148,7 +151,7 @@ try {
         }
         return addFloat(1.5);
     `;
-    const res = compileAndExecute(source, [1.5], isDevMode);
+    const res = await compileAndExecute(source, [1.5], isDevMode);
     console.log("  Result:", res);
     if (res === 2.5) {
         console.log("  => PASS (Float parameter arithmetic succeeded)");
@@ -217,3 +220,7 @@ try {
 } catch (e) {
     console.log("  => CRASH/FAIL:", e.message);
 }
+})().catch(err => {
+    console.error(err);
+    process.exit(1);
+});

@@ -2,6 +2,8 @@
 name = "vm-core"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -15,6 +17,7 @@ crypto-core = { path = "../crypto-core" }
 hmac = "0.12"
 sha2 = "0.10"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
+subtle = { version = "2.5.0", default-features = false }
 web-sys = { version = "0.3", features = ["Window", "WorkerGlobalScope", "Performance"] }
 getrandom = { version = "0.2", features = ["js"] }
 

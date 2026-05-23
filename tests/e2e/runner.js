@@ -67,6 +67,7 @@ const cases = require('./cases.js');
 const { Parser } = require('../../compiler/dist/parser.js');
 const { CodeGenerator } = require('../../compiler/dist/codegen.js');
 const { scrambleSessionPayload } = require('../../server/scrambler.js');
+const { InMemoryNonceStore } = require('../../server/nonce-store.js');
 const vmNode = require('../../pkg-node/vm_core.js');
 
 // Detect DEV mode dynamically from the VM build
@@ -89,7 +90,7 @@ console.log("==========================================");
 console.log("      FORTRESS-WASM E2E TEST RUNNER       ");
 console.log("==========================================");
 
-const runTestCase = (testCase, devMode) => {
+const runTestCase = async (testCase, devMode) => {
     // Clear dynamic keys and payload hash from previous runs
     vmNode.clear_crypto();
 
@@ -118,7 +119,8 @@ const runTestCase = (testCase, devMode) => {
         }
 
         // 2. Scramble
-        const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
+        const nonceStore = new InMemoryNonceStore();
+        const { payload, newMap, pngBuffer, handshakeHeader } = await scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey, nonceStore);
         const mapUint8 = new Uint8Array(newMap);
 
         // Prepare final payload
@@ -175,6 +177,7 @@ const runTestCase = (testCase, devMode) => {
 };
 
 // Run E2E pipeline for all test cases
+(async () => {
 for (const testCase of cases) {
     if (testCase.devOnly && process.env.DEV_MODE === 'false') continue;
     if (testCase.prodOnly && process.env.DEV_MODE === 'true') continue;
@@ -191,7 +194,7 @@ for (const testCase of cases) {
         console.log(`Running case [${testCase.id}] - ${testCase.name} (${modeLabel} mode)...`);
 
         try {
-            const runResult = runTestCase(testCase, devMode);
+            const runResult = await runTestCase(testCase, devMode);
 
             // Assertions
             if (testCase.isError) {
@@ -234,8 +237,9 @@ for (const testCase of cases) {
                     fs.writeFileSync(mapPath, JSON.stringify(Array.from(opcodeMap)));
                     
                     try {
-                        const run1 = scrambleSessionPayload(fvbcPath, mapPath);
-                        const run2 = scrambleSessionPayload(fvbcPath, mapPath);
+                        const nonceStore = new InMemoryNonceStore();
+                        const run1 = await scrambleSessionPayload(fvbcPath, mapPath, undefined, nonceStore);
+                        const run2 = await scrambleSessionPayload(fvbcPath, mapPath, undefined, nonceStore);
                         
                         assert.notDeepStrictEqual(run1.payload, run2.payload, "Payloads must be distinct for renewals");
                         if (!devMode) {
@@ -256,7 +260,7 @@ for (const testCase of cases) {
             console.log(`  => PASS`);
         } catch (err) {
             failed++;
-            console.error(`  => FAIL:`, err.message);
+            console.error(`  => FAIL:`, err.stack || err.message);
         }
     }
 }
@@ -274,3 +278,7 @@ if (failed > 0) {
 } else {
     process.exit(0);
 }
+})().catch(err => {
+    console.error(err);
+    process.exit(1);
+});

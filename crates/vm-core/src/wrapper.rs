@@ -4,7 +4,7 @@ use crate::value::Value;
 use std::cell::RefCell;
 
 thread_local! {
-    pub static CLIENT_PRIVATE_KEY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
+    pub static CLIENT_PRIVATE_KEY: RefCell<Option<[u8; 32]>> = const { RefCell::new(None) };
 }
 
 struct ClientKeyClearGuard;
@@ -55,9 +55,12 @@ pub fn set_client_private_key(key: &[u8]) -> bool {
 
 // No wee_alloc for now to keep dependencies simple
 
-const SERVER_LONG_TERM_PUBLIC_KEY: [u8; 32] = [
-    0x7d, 0xfb, 0x88, 0xc2, 0xbd, 0x83, 0x36, 0xf1, 0xdf, 0x33, 0x87, 0x70, 0xb8, 0x2b, 0xe7, 0x58,
-    0x06, 0x6d, 0xab, 0x30, 0x25, 0xba, 0x2f, 0xf7, 0x95, 0x22, 0x22, 0x70, 0x24, 0x92, 0x96, 0xd4
+const SERVER_LONG_TERM_PUBLIC_KEY: [u8; 32] = *include_bytes!("public_key.bin");
+
+const SERVER_TRUSTED_PUBLIC_KEYS: [[u8; 32]; 3] = [
+    SERVER_LONG_TERM_PUBLIC_KEY,
+    SERVER_LONG_TERM_PUBLIC_KEY,
+    SERVER_LONG_TERM_PUBLIC_KEY,
 ];
 
 #[wasm_bindgen]
@@ -91,6 +94,7 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
     crate::verify_bridge::set_payload_hash(Box::new(hash_arr));
 
     let mut session_key = zeroize::Zeroizing::new([0u8; 32]);
+    let mut base_key_material = zeroize::Zeroizing::new([0u8; 32]);
     let mut has_session_key = false;
     crate::verify_bridge::SESSION_KEY.with(|k| {
         if let Some(key) = *k.borrow() {
@@ -98,6 +102,18 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
             has_session_key = true;
         }
     });
+    if has_session_key {
+        let mut loaded_base = false;
+        crate::verify_bridge::BASE_KEY_MATERIAL.with(|k| {
+            if let Some(key) = *k.borrow() {
+                *base_key_material = key;
+                loaded_base = true;
+            }
+        });
+        if !loaded_base {
+            *base_key_material = *session_key;
+        }
+    }
 
     if !has_session_key {
         // Handshake check
@@ -134,13 +150,7 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
 
                 // 2. Verify signature
                 use ed25519_dalek::{VerifyingKey, Signature, Verifier};
-                
-                let verifying_key = VerifyingKey::from_bytes(&SERVER_LONG_TERM_PUBLIC_KEY)
-                    .map_err(|_| r#"{"status": false, "error": "SignatureVerificationFailed"}"#.to_string());
-                let verifying_key = match verifying_key {
-                    Ok(key) => key,
-                    Err(e) => return e,
-                };
+                use subtle::Choice;
 
                 let sig = Signature::from_slice(signature)
                     .map_err(|_| r#"{"status": false, "error": "SignatureVerificationFailed"}"#.to_string());
@@ -149,24 +159,32 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
                     Err(e) => return e,
                 };
 
-                if verifying_key.verify(&msg, &sig).is_err() {
+                let mut sig_valid = Choice::from(0);
+                for key_bytes in &SERVER_TRUSTED_PUBLIC_KEYS {
+                    if let Ok(verifying_key) = VerifyingKey::from_bytes(key_bytes) {
+                        let is_ok = verifying_key.verify(&msg, &sig).is_ok();
+                        sig_valid |= Choice::from(is_ok as u8);
+                    } else {
+                        sig_valid |= Choice::from(0);
+                    }
+                }
+                if sig_valid.unwrap_u8() == 0 {
                     return r#"{"status": false, "error": "SignatureVerificationFailed"}"#.to_string();
                 }
 
                 // 3. Replay protection
-                let timestamp_str = std::str::from_utf8(timestamp)
-                    .map_err(|_| r#"{"status": false, "error": "InvalidHandshake"}"#.to_string());
-                let timestamp_str = match timestamp_str {
-                    Ok(s) => s,
-                    Err(e) => return e,
-                };
-
-                let parsed_timestamp = timestamp_str.parse::<u64>()
-                    .map_err(|_| r#"{"status": false, "error": "InvalidHandshake"}"#.to_string());
-                let parsed_timestamp = match parsed_timestamp {
-                    Ok(t) => t,
-                    Err(e) => return e,
-                };
+                let mut parsed_timestamp = 0u64;
+                let mut timestamp_valid = true;
+                for &b in timestamp {
+                    if b.is_ascii_digit() {
+                        parsed_timestamp = parsed_timestamp * 10 + (b - b'0') as u64;
+                    } else {
+                        timestamp_valid = false;
+                    }
+                }
+                if !timestamp_valid {
+                    return r#"{"status": false, "error": "InvalidHandshake"}"#.to_string();
+                }
 
                 let current_time_secs = {
                     #[cfg(target_arch = "wasm32")]
@@ -182,12 +200,7 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
                     }
                 };
 
-                let diff = if current_time_secs >= parsed_timestamp {
-                    current_time_secs - parsed_timestamp
-                } else {
-                    parsed_timestamp - current_time_secs
-                };
-
+                let diff = (current_time_secs as i128 - parsed_timestamp as i128).unsigned_abs() as u64;
                 if diff > 300 {
                     return r#"{"status": false, "error": "HandshakeExpired"}"#.to_string();
                 }
@@ -214,17 +227,22 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
 
                 let shared_secret = client_secret.diffie_hellman(&server_pub);
 
-                // Derive session key using HKDF-SHA256
+                // Derive session key and base key material using HKDF-SHA256
                 use hkdf::Hkdf;
                 use sha2::Sha256;
                 let hk = Hkdf::<Sha256>::new(Some(nonce), shared_secret.as_bytes());
                 let mut derived_key = zeroize::Zeroizing::new([0u8; 32]);
-                if hk.expand(session_id, &mut *derived_key).is_ok() {
+                let mut derived_base = zeroize::Zeroizing::new([0u8; 32]);
+                if hk.expand(session_id, &mut *derived_key).is_ok() && hk.expand(b"base_key_material", &mut *derived_base).is_ok() {
                     *session_key = *derived_key;
+                    *base_key_material = *derived_base;
                     has_session_key = true;
-                    // Cache the session key in SESSION_KEY thread-local!
+                    // Cache in thread-locals!
                     crate::verify_bridge::SESSION_KEY.with(|k| {
                         *k.borrow_mut() = Some(*derived_key);
+                    });
+                    crate::verify_bridge::BASE_KEY_MATERIAL.with(|k| {
+                        *k.borrow_mut() = Some(*derived_base);
                     });
                 }
 
@@ -250,7 +268,24 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
 
     let bytecode_payload = bytecode;
 
-    let mut vm = Vm::new(bytecode_payload.to_vec(), opcode_map.to_vec(), *session_key, hash_arr);
+    let mut expected_hash = [0u8; 32];
+    {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+        if let Ok(mut mac) = HmacSha256::new_from_slice(&*base_key_material) {
+            mac.update(bytecode);
+            expected_hash.copy_from_slice(&mac.finalize().into_bytes());
+        }
+    }
+
+    let mut vm = Vm::new(
+        bytecode_payload.to_vec(),
+        opcode_map.to_vec(),
+        *session_key,
+        *base_key_material,
+        expected_hash,
+    );
     
     // Load input_json into locals
     if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(input_json) {

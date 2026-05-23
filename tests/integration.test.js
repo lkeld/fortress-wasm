@@ -8,6 +8,7 @@ const vmNode = require('../pkg-node/vm_core.js');
 const { Parser } = require('../compiler/dist/parser.js');
 const { CodeGenerator } = require('../compiler/dist/codegen.js');
 const { scrambleSessionPayload } = require('../server/scrambler.js');
+const { InMemoryNonceStore } = require('../server/nonce-store.js');
 
 const TEMP_DIR = os.tmpdir();
 
@@ -25,7 +26,7 @@ try {
 
 process.env.DEV_MODE = isDevMode ? 'true' : 'false';
 
-test('Integration: end-to-end payload compilation, scramble, and execution pipeline', () => {
+test('Integration: end-to-end payload compilation, scramble, and execution pipeline', async () => {
     // 1. Compile simple Fortress code
     const sourceCode = `
         let x = 10;
@@ -50,7 +51,8 @@ test('Integration: end-to-end payload compilation, scramble, and execution pipel
     }
 
     // 2. Scramble
-    const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
+    const nonceStore = new InMemoryNonceStore();
+    const { payload, newMap, pngBuffer, handshakeHeader } = await scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey, nonceStore);
     
     // Convert newMap to Uint8Array
     const mapUint8 = new Uint8Array(newMap);
@@ -80,7 +82,7 @@ test('Integration: end-to-end payload compilation, scramble, and execution pipel
     fs.unlinkSync(mapPath);
 });
 
-test('Integration: Renewability (distinct session keys)', () => {
+test('Integration: Renewability (distinct session keys)', async () => {
     const sourceCode = `return 1;`;
     const parser = new Parser(sourceCode);
     const codegen = new CodeGenerator();
@@ -92,8 +94,9 @@ test('Integration: Renewability (distinct session keys)', () => {
     fs.writeFileSync(mapPath, JSON.stringify(Array.from(opcodeMap)));
     
     // Scramble twice without passing a session key (should generate random distinct keys)
-    const run1 = scrambleSessionPayload(fvbcPath, mapPath);
-    const run2 = scrambleSessionPayload(fvbcPath, mapPath);
+    const nonceStore = new InMemoryNonceStore();
+    const run1 = await scrambleSessionPayload(fvbcPath, mapPath, undefined, nonceStore);
+    const run2 = await scrambleSessionPayload(fvbcPath, mapPath, undefined, nonceStore);
     
     // Payload and PNG buffer should differ
     assert.notDeepStrictEqual(run1.payload, run2.payload);
@@ -141,3 +144,42 @@ test('Integration: Environment Compatibility (Dev vs Prod)', () => {
     // It should be either a PNG error, missing key error, or InvalidOpCode due to virtsc checksum mismatch.
     assert.ok(result.error !== undefined);
 });
+
+test('Integration: Scrambler offset-parsing safety test (trailing hash byte maps to PushString)', async () => {
+    // Construct a bytecode buffer of length 288 (1 page of 256 bytes + 32 bytes of hash).
+    // In our case, the scrambler translates bytecode bytes using originalMap[currentByte].
+    // If originalMap[hashByte] === OpCode.PushString (0x7C), the scrambler processes it as a string instruction.
+    
+    const fvbcPath = path.join(TEMP_DIR, 'test_scrambler_bug.fvbc');
+    const mapPath = path.join(TEMP_DIR, 'test_scrambler_bug.opcodes.json');
+    
+    const bytecode = Buffer.alloc(288, 0);
+    // 0x42 at index 256 will map to OpCode.PushString (0x7C).
+    bytecode[256] = 0x42;
+    // Set bytes 261-264 to 0xFF to cause an invalid typed array length RangeError if parsed.
+    bytecode[261] = 0xFF;
+    bytecode[262] = 0xFF;
+    bytecode[263] = 0xFF;
+    bytecode[264] = 0xFF;
+    
+    // Build the opcode map.
+    const map = new Array(256).fill(0xB6); // Default all to OpCode.Halt (0xB6) to avoid other multi-byte opcodes
+    map[0x42] = 0x7C; // Map 0x42 to OpCode.PushString (0x7C)
+    
+    fs.writeFileSync(fvbcPath, bytecode);
+    fs.writeFileSync(mapPath, JSON.stringify(map));
+    
+    const nonceStore = new InMemoryNonceStore();
+    let errorOccurred = null;
+    try {
+        await scrambleSessionPayload(fvbcPath, mapPath, undefined, nonceStore);
+    } catch (e) {
+        errorOccurred = e;
+    } finally {
+        fs.unlinkSync(fvbcPath);
+        fs.unlinkSync(mapPath);
+    }
+    
+    assert.strictEqual(errorOccurred, null, `Scrambler should not have crashed but got: ${errorOccurred}`);
+});
+

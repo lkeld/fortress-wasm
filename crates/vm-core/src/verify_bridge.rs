@@ -4,9 +4,10 @@ use zeroize::Zeroize;
 use std::cell::RefCell;
 
 thread_local! {
-    pub static SIGNING_KEY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
-    pub static SESSION_KEY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
-    pub static PAYLOAD_HASH: RefCell<Option<[u8; 32]>> = RefCell::new(None);
+    pub static SIGNING_KEY: RefCell<Option<[u8; 32]>> = const { RefCell::new(None) };
+    pub static SESSION_KEY: RefCell<Option<[u8; 32]>> = const { RefCell::new(None) };
+    pub static PAYLOAD_HASH: RefCell<Option<[u8; 32]>> = const { RefCell::new(None) };
+    pub static BASE_KEY_MATERIAL: RefCell<Option<[u8; 32]>> = const { RefCell::new(None) };
 }
 
 #[wasm_bindgen]
@@ -153,6 +154,13 @@ pub fn clear_crypto() {
         *borrow = None;
     });
     SESSION_KEY.with(|k| {
+        let mut borrow = k.borrow_mut();
+        if let Some(ref mut key) = *borrow {
+            key.zeroize();
+        }
+        *borrow = None;
+    });
+    BASE_KEY_MATERIAL.with(|k| {
         let mut borrow = k.borrow_mut();
         if let Some(ref mut key) = *borrow {
             key.zeroize();

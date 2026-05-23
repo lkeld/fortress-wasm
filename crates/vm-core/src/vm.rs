@@ -24,6 +24,7 @@ pub struct Vm {
     pub(crate) hash_verified: bool,
     pub(crate) opcode_map: [u8; 256],
     pub(crate) session_key: [u8; 32],
+    pub(crate) base_key_material: [u8; 32],
     pub(crate) current_page_id: i32,
     pub(crate) ves: [u8; 256],
     pub(crate) prng_state: u64,
@@ -32,7 +33,13 @@ pub struct Vm {
 }
 
 impl Vm {
-    pub fn new(code: Vec<u8>, opcode_map_vec: Vec<u8>, session_key: [u8; 32], expected_hash: [u8; 32]) -> Self {
+    pub fn new(
+        code: Vec<u8>,
+        opcode_map_vec: Vec<u8>,
+        session_key: [u8; 32],
+        base_key_material: [u8; 32],
+        expected_hash: [u8; 32],
+    ) -> Self {
         let mut opcode_map = [0u8; 256];
         if opcode_map_vec.len() >= 256 {
             opcode_map.copy_from_slice(&opcode_map_vec[0..256]);
@@ -61,6 +68,7 @@ impl Vm {
             hash_verified: false,
             opcode_map,
             session_key,
+            base_key_material,
             current_page_id: -1,
             ves: [0u8; 256],
             prng_state: seed,
@@ -129,38 +137,42 @@ impl Vm {
         self.ves = [0u8; 256];
 
         if !self.hash_verified {
-            use sha2::{Sha256, Digest};
-            let mut hasher = Sha256::new();
-            hasher.update(&self.code);
-            let current_hash: [u8; 32] = hasher.finalize().into();
-            if current_hash != self.expected_hash {
-                // Silently corrupt session key
-                self.session_key[0] ^= 0xFF;
+            use hmac::{Hmac, Mac};
+            use sha2::Sha256;
+            use subtle::ConstantTimeEq;
+            type HmacSha256 = Hmac<Sha256>;
+            
+            let mut computed_mac = [0u8; 32];
+            if let Ok(mut mac) = HmacSha256::new_from_slice(&self.base_key_material) {
+                mac.update(&self.code);
+                computed_mac.copy_from_slice(&mac.finalize().into_bytes());
+            }
+            
+            if computed_mac.ct_eq(&self.expected_hash).unwrap_u8() == 0 {
+                // If mismatch, zeroize self.base_key_material, self.session_key, self.code, self.ves, and self.opcode_map in memory.
+                use zeroize::Zeroize;
+                self.base_key_material.zeroize();
+                self.session_key.zeroize();
+                self.code.zeroize();
+                self.ves.zeroize();
+                self.opcode_map.zeroize();
             }
             self.hash_verified = true;
         }
 
         let start_addr = page_id as usize * 256;
-        #[cfg(feature = "dev")]
-        {
-            for i in 0..256 {
-                if start_addr + i < self.code.len() {
-                    self.ves[i] = self.code[start_addr + i];
-                } else {
-                    self.ves[i] = 0;
-                }
-            }
-        }
-        #[cfg(not(feature = "dev"))]
-        {
-            for i in 0..256 {
-                if start_addr + i < self.code.len() {
-                    let key_byte = self.session_key[(start_addr + i) % 32];
-                    self.ves[i] = self.code[start_addr + i] ^ key_byte;
-                } else {
-                    self.ves[i] = 0;
-                }
-            }
+        let page_key = {
+            #[cfg(feature = "dev")]
+            { [0u8; 32] }
+            #[cfg(not(feature = "dev"))]
+            { self.session_key }
+        };
+
+        for i in 0..256 {
+            let in_bounds = (start_addr + i) < self.code.len();
+            let mask = (in_bounds as u8).wrapping_neg(); // 0xFF if in_bounds, 0x00 if not
+            let code_byte = *self.code.get(start_addr + i).unwrap_or(&0);
+            self.ves[i] = (code_byte ^ page_key[i % 32]) & mask;
         }
         self.current_page_id = page_id as i32;
 
@@ -171,13 +183,14 @@ impl Vm {
                 let hash_start = (num_pages * 256) + page_id as usize * 32;
                 if hash_start + 32 <= self.code.len() {
                     let mut expected_page_hash = [0u8; 32];
-                    expected_page_hash.copy_from_slice(&self.code[hash_start..hash_start + 32]);
+                    for i in 0..32 {
+                        expected_page_hash[i] = self.code[hash_start + i] ^ self.session_key[i];
+                    }
                     
                     use sha2::{Sha256, Digest};
                     let mut hasher = Sha256::new();
                     hasher.update(&self.ves);
                     let actual_page_hash: [u8; 32] = hasher.finalize().into();
-                    
                     if actual_page_hash != expected_page_hash {
                         self.session_key[0] ^= 0xFF;
                     }
@@ -339,6 +352,7 @@ impl Drop for Vm {
     fn drop(&mut self) {
         use zeroize::Zeroize;
         self.session_key.zeroize();
+        self.base_key_material.zeroize();
         self.ves.zeroize();
         self.code.zeroize();
     }

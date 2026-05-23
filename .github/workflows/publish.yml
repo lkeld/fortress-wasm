@@ -31,11 +31,34 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
+      - name: Run lockfile validation
+        run: npm ci --ignore-scripts
+
+      - name: Check for vulnerabilities
+        run: npm audit --audit-level=high
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit check
+        run: cargo audit
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo-deny checks
+        run: cargo deny check
+
       - name: Run Tests
         run: npm test
 
       - name: Build Fortress WASM Pipeline
         run: npm run build
+        env:
+          FORTRESS_SIGNING_PASSWORD: ${{ secrets.FORTRESS_SIGNING_PASSWORD }}
+
+      - name: Generate WASM Integrity Hashes
+        run: node -e "const crypto = require('crypto'); const fs = require('fs'); const hash = crypto.createHash('sha384').update(fs.readFileSync('pkg-web/vm_core_bg.wasm')).digest('hex'); fs.mkdirSync('dist', { recursive: true }); fs.writeFileSync('WASM_INTEGRITY.txt', hash); fs.writeFileSync('dist/WASM_INTEGRITY.txt', hash);"
 
       - name: Install Playwright Chromium
         run: npx playwright install chromium --with-deps

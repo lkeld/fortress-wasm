@@ -7,22 +7,43 @@ fn main() {
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const keyPath = '../../server/.signing_key';
-let privateKeyDer;
-if (fs.existsSync(keyPath)) {
-    privateKeyDer = fs.readFileSync(keyPath);
-} else {
-    const pair = crypto.generateKeyPairSync('ed25519', {
-        privateKeyEncoding: { format: 'der', type: 'pkcs8' }
+const argon2 = require('argon2');
+
+(async () => {
+    const password = process.env.FORTRESS_SIGNING_PASSWORD;
+    if (!password) {
+        throw new Error("Missing FORTRESS_SIGNING_PASSWORD environment variable");
+    }
+    const paramsPath = '../../server/.signing_params';
+    let salt;
+    if (fs.existsSync(paramsPath)) {
+        salt = fs.readFileSync(paramsPath);
+    } else {
+        salt = crypto.randomBytes(32);
+        fs.writeFileSync(paramsPath, salt);
+    }
+    const seed = await argon2.hash(password, {
+        type: argon2.argon2id,
+        memoryCost: 65536,
+        timeCost: 3,
+        parallelism: 1,
+        hashLength: 32,
+        salt: salt,
+        raw: true
     });
-    fs.writeFileSync(keyPath, pair.privateKey);
-    privateKeyDer = pair.privateKey;
-}
-const privateKey = crypto.createPrivateKey({ key: privateKeyDer, format: 'der', type: 'pkcs8' });
-const publicKey = crypto.createPublicKey(privateKey);
-const pubDer = publicKey.export({ format: 'der', type: 'spki' });
-const rawPub = pubDer.subarray(12);
-fs.writeFileSync('src/public_key.bin', rawPub);
+    const derHeader = Buffer.from('302e020100300506032b657004220420', 'hex');
+    const privateKeyDer = Buffer.concat([derHeader, seed]);
+    fs.writeFileSync('../../server/.signing_key', privateKeyDer);
+
+    const privateKey = crypto.createPrivateKey({ key: privateKeyDer, format: 'der', type: 'pkcs8' });
+    const publicKey = crypto.createPublicKey(privateKey);
+    const pubDer = publicKey.export({ format: 'der', type: 'spki' });
+    const rawPub = pubDer.subarray(12);
+    fs.writeFileSync('src/public_key.bin', rawPub);
+})().catch(err => {
+    console.error(err);
+    process.exit(1);
+});
 "#;
 
     let output = Command::new("node")

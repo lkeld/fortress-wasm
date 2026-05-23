@@ -33,7 +33,9 @@ fn benchmarkArithmetic() {
 benchmarkArithmetic();
 `;
 
-function compileAndScramble(source, devMode, clientPublicKey) {
+const { InMemoryNonceStore } = require('../server/nonce-store.js');
+
+async function compileAndScramble(source, devMode, clientPublicKey) {
     process.env.DEV_MODE = devMode ? 'true' : 'false';
     const parser = new Parser(source);
     const ast = parser.parseProgram();
@@ -47,7 +49,8 @@ function compileAndScramble(source, devMode, clientPublicKey) {
     fs.writeFileSync(fvbcPath, Buffer.from(code));
     fs.writeFileSync(mapPath, JSON.stringify(Array.from(opcodeMap)));
 
-    const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
+    const nonceStore = new InMemoryNonceStore();
+    const { payload, newMap, pngBuffer, handshakeHeader } = await scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey, nonceStore);
     
     fs.unlinkSync(fvbcPath);
     fs.unlinkSync(mapPath);
@@ -61,56 +64,61 @@ function compileAndScramble(source, devMode, clientPublicKey) {
     };
 }
 
-// Ensure clean environment
-vmNode.clear_crypto();
+(async () => {
+    // Ensure clean environment
+    vmNode.clear_crypto();
 
-// Compile both modes
-const devConfig = compileAndScramble(sourceCode, true);
-// Initial prod compilation without key for compilation metrics
-const prodConfigMetrics = compileAndScramble(sourceCode, false);
+    // Compile both modes
+    const devConfig = await compileAndScramble(sourceCode, true);
+    // Initial prod compilation without key for compilation metrics
+    const prodConfigMetrics = await compileAndScramble(sourceCode, false);
 
-console.log("=== Compilation Metrics ===");
-console.log(`Dev Bytecode Size:  ${devConfig.bytecodeSize} bytes`);
-console.log(`Prod Bytecode Size: ${prodConfigMetrics.bytecodeSize} bytes`);
-console.log(`Overhead Ratio:      ${(prodConfigMetrics.bytecodeSize / devConfig.bytecodeSize).toFixed(2)}x\n`);
+    console.log("=== Compilation Metrics ===");
+    console.log(`Dev Bytecode Size:  ${devConfig.bytecodeSize} bytes`);
+    console.log(`Prod Bytecode Size: ${prodConfigMetrics.bytecodeSize} bytes`);
+    console.log(`Overhead Ratio:      ${(prodConfigMetrics.bytecodeSize / devConfig.bytecodeSize).toFixed(2)}x\n`);
 
-const RUNS = 10000;
+    const RUNS = 10000;
 
-// Benchmark DEV mode
-vmNode.clear_crypto();
+    // Benchmark DEV mode
+    vmNode.clear_crypto();
 
-// Warm-up DEV mode to trigger JIT optimization
-for (let i = 0; i < 1000; i++) {
-    vmNode.execute(devConfig.payload, devConfig.pngBuffer, '{}', devConfig.newMap);
-}
+    // Warm-up DEV mode to trigger JIT optimization
+    for (let i = 0; i < 1000; i++) {
+        vmNode.execute(devConfig.payload, devConfig.pngBuffer, '{}', devConfig.newMap);
+    }
 
-const startDev = performance.now();
-for (let i = 0; i < RUNS; i++) {
-    vmNode.execute(devConfig.payload, devConfig.pngBuffer, '{}', devConfig.newMap);
-}
-const endDev = performance.now();
-const timeDev = endDev - startDev;
+    const startDev = performance.now();
+    for (let i = 0; i < RUNS; i++) {
+        vmNode.execute(devConfig.payload, devConfig.pngBuffer, '{}', devConfig.newMap);
+    }
+    const endDev = performance.now();
+    const timeDev = endDev - startDev;
 
-// Benchmark PROD mode
-vmNode.clear_crypto();
-const clientPublicKey = vmNode.generate_client_keypair();
-const prodConfig = compileAndScramble(sourceCode, false, clientPublicKey);
+    // Benchmark PROD mode
+    vmNode.clear_crypto();
+    const clientPublicKey = vmNode.generate_client_keypair();
+    const prodConfig = await compileAndScramble(sourceCode, false, clientPublicKey);
 
-// Warm-up PROD mode to trigger JIT optimization
-for (let i = 0; i < 1000; i++) {
-    vmNode.execute(prodConfig.payload, prodConfig.handshakeHeader, '{}', prodConfig.newMap);
-}
+    // Warm-up PROD mode to trigger JIT optimization
+    for (let i = 0; i < 1000; i++) {
+        vmNode.execute(prodConfig.payload, prodConfig.handshakeHeader, '{}', prodConfig.newMap);
+    }
 
-const startProd = performance.now();
-for (let i = 0; i < RUNS; i++) {
-    vmNode.execute(prodConfig.payload, prodConfig.handshakeHeader, '{}', prodConfig.newMap);
-}
-const endProd = performance.now();
-const timeProd = endProd - startProd;
+    const startProd = performance.now();
+    for (let i = 0; i < RUNS; i++) {
+        vmNode.execute(prodConfig.payload, prodConfig.handshakeHeader, '{}', prodConfig.newMap);
+    }
+    const endProd = performance.now();
+    const timeProd = endProd - startProd;
 
-vmNode.clear_crypto();
+    vmNode.clear_crypto();
 
-console.log("=== Execution Metrics (10,000 iterations) ===");
-console.log(`Dev execution time:  ${timeDev.toFixed(2)} ms`);
-console.log(`Prod execution time: ${timeProd.toFixed(2)} ms`);
-console.log(`Slowdown Factor:     ${(timeProd / timeDev).toFixed(2)}x`);
+    console.log("=== Execution Metrics (10,000 iterations) ===");
+    console.log(`Dev execution time:  ${timeDev.toFixed(2)} ms`);
+    console.log(`Prod execution time: ${timeProd.toFixed(2)} ms`);
+    console.log(`Slowdown Factor:     ${(timeProd / timeDev).toFixed(2)}x`);
+})().catch(err => {
+    console.error(err);
+    process.exit(1);
+});

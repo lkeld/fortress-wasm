@@ -608,6 +608,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subtle",
  "wasm-bindgen",
  "web-sys",
  "x25519-dalek",

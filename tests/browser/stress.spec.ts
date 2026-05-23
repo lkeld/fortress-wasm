@@ -9,8 +9,10 @@ import { Parser } from '../../compiler/dist/parser.js';
 import { CodeGenerator } from '../../compiler/dist/codegen.js';
 // @ts-ignore
 import { scrambleSessionPayload } from '../../server/scrambler.js';
+// @ts-ignore
+import { InMemoryNonceStore } from '../../server/nonce-store.js';
 
-function compileAndScramble(sourceCode: string, devMode: boolean, clientPublicKey?: Uint8Array) {
+async function compileAndScramble(sourceCode: string, devMode: boolean, clientPublicKey?: Uint8Array) {
   const parser = new Parser(sourceCode);
   const ast = parser.parseProgram();
   const codegen = new CodeGenerator();
@@ -28,7 +30,8 @@ function compileAndScramble(sourceCode: string, devMode: boolean, clientPublicKe
     const oldDevMode = process.env.DEV_MODE;
     process.env.DEV_MODE = devMode ? 'true' : 'false';
 
-    const scrambled = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
+    const nonceStore = new InMemoryNonceStore();
+    const scrambled = await scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey, nonceStore);
 
     if (oldDevMode !== undefined) {
       process.env.DEV_MODE = oldDevMode;
@@ -68,9 +71,9 @@ test.describe('Challenger Empirical Robustness & Concurrency Stress Tests', () =
       }
     });
 
-    await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+    await page.exposeFunction('compileAndScramble', async (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
       const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
-      return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+      return await compileAndScramble(sourceCode, devMode, pubKeyUint8);
     });
 
     const result = await page.evaluate(async ({ isDev }) => {
@@ -189,9 +192,9 @@ test.describe('Challenger Empirical Robustness & Concurrency Stress Tests', () =
       }
     });
 
-    await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+    await page.exposeFunction('compileAndScramble', async (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
       const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
-      return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+      return await compileAndScramble(sourceCode, devMode, pubKeyUint8);
     });
 
     const testRobustness = async (scenarioType: 'empty' | 'truncated' | 'tiny' | 'magic' | 'garbage' | 'seed_len' | 'seed_chars') => {
@@ -370,9 +373,9 @@ test.describe('Challenger Empirical Robustness & Concurrency Stress Tests', () =
       }
     });
 
-    await page.exposeFunction('compileAndScramble', (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
+    await page.exposeFunction('compileAndScramble', async (sourceCode: string, devMode: boolean, clientPublicKey?: number[]) => {
       const pubKeyUint8 = clientPublicKey ? new Uint8Array(clientPublicKey) : undefined;
-      return compileAndScramble(sourceCode, devMode, pubKeyUint8);
+      return await compileAndScramble(sourceCode, devMode, pubKeyUint8);
     });
 
     const result = await page.evaluate(async ({ isDev }) => {

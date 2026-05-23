@@ -17,6 +17,7 @@ mod tests {
         // Zero session key means XOR cipher is an identity operation, 
         // allowing us to write plaintext test bytecode safely without decryption mangling it
         let session_key = [0u8; 32];
+        let base_key_material = [0u8; 32];
 
         // Encrypt any PushString literals in the bytecode with SHA-256 keystream derived from zero session key
         let mut i = 0;
@@ -68,12 +69,18 @@ mod tests {
         }
         
         // Compute correct hash so VirtSC doesn't corrupt the session key
-        use sha2::{Sha256, Digest};
-        let mut hasher = Sha256::new();
-        hasher.update(&bytecode);
-        let hash: [u8; 32] = hasher.finalize().into();
+        let mut expected_hash = [0u8; 32];
+        {
+            use hmac::{Hmac, Mac};
+            use sha2::Sha256;
+            type HmacSha256 = Hmac<Sha256>;
+            if let Ok(mut mac) = HmacSha256::new_from_slice(&base_key_material) {
+                mac.update(&bytecode);
+                expected_hash.copy_from_slice(&mac.finalize().into_bytes());
+            }
+        }
         
-        Vm::new(bytecode, opcode_map.to_vec(), session_key, hash)
+        Vm::new(bytecode, opcode_map.to_vec(), session_key, base_key_material, expected_hash)
     }
 
     fn encode_u32(val: u32) -> [u8; 4] {
@@ -736,6 +743,7 @@ mod tests {
     #[cfg(not(feature = "dev"))]
     fn test_secure_pushstring_decryption() {
         let session_key = [0x55u8; 32];
+        let base_key_material = [0x66u8; 32];
         let nonce = [0xAAu8; 4];
         let text = b"secure_cryptography_layer";
         let len = text.len();
@@ -778,12 +786,18 @@ mod tests {
             opcode_map[i] = i as u8;
         }
         
-        use sha2::{Sha256, Digest};
-        let mut hasher = Sha256::new();
-        hasher.update(&bytecode);
-        let hash: [u8; 32] = hasher.finalize().into();
+        let mut expected_hash = [0u8; 32];
+        {
+            use hmac::{Hmac, Mac};
+            use sha2::Sha256;
+            type HmacSha256 = Hmac<Sha256>;
+            if let Ok(mut mac) = HmacSha256::new_from_slice(&base_key_material) {
+                mac.update(&bytecode);
+                expected_hash.copy_from_slice(&mac.finalize().into_bytes());
+            }
+        }
         
-        let mut vm = Vm::new(bytecode, opcode_map.to_vec(), session_key, hash);
+        let mut vm = Vm::new(bytecode, opcode_map.to_vec(), session_key, base_key_material, expected_hash);
         let result = vm.run().unwrap();
         match result {
             Value::Str(s) => assert_eq!(&*s, "secure_cryptography_layer"),
@@ -1066,6 +1080,29 @@ mod tests {
         ];
         let mut vm = setup_vm(bytecode);
         assert!(matches!(vm.run(), Err(VmError::InvalidLocalSlot)));
+    }
+
+    #[test]
+    fn test_tampered_bytecode_aborts_and_zeroizes_keys() {
+        let bytecode = vec![OpCode::PushInt as u8, 0, 0, 0, 42, OpCode::Halt as u8];
+        let mut vm = setup_vm(bytecode);
+        
+        // Let's modify a byte in vm.code to simulate tampering (e.g. patching bytecode)
+        vm.code[1] = 99;
+        
+        // Running the vm should trigger JIT page decryption which checks the hash,
+        // finds a mismatch, and zeroizes the key materials and code.
+        let result = vm.run();
+        
+        // Since code is zeroized, the execution will abort/fail.
+        assert!(result.is_err());
+        
+        // Let's verify that key materials and memory states are zeroed out.
+        assert_eq!(vm.base_key_material, [0u8; 32]);
+        assert_eq!(vm.session_key, [0u8; 32]);
+        assert!(vm.code.iter().all(|&b| b == 0));
+        assert_eq!(vm.ves, [0u8; 256]);
+        assert_eq!(vm.opcode_map, [0u8; 256]);
     }
 }
 

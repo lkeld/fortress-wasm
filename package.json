@@ -19,8 +19,8 @@
     "build:wasm-node:prod": "wasm-pack build crates/vm-core --target nodejs --out-dir ../../pkg-node && rm -f pkg-node/.gitignore",
     "build:wasm-web:dev": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web -- --features dev && rm -f pkg-web/.gitignore && node scripts/patch_web.js",
     "build:wasm-web:prod": "wasm-pack build crates/vm-core --target web --out-dir ../../pkg-web && rm -f pkg-web/.gitignore && node scripts/patch_web.js",
-    "build:dev": "npm run build:isa:dev && DEV_MODE=true npm run build:compiler && npm run build:server && npm run build:wasm-node:dev && npm run build:wasm-web:dev",
-    "build:prod": "npm run build:isa:prod && npm run build:compiler && npm run build:server && npm run build:wasm-node:prod && npm run build:wasm-web:prod",
+    "build:dev": "npm run build:isa:dev && DEV_MODE=true npm run build:compiler && npm run build:server && npm run build:wasm-node:dev && npm run build:wasm-web:dev && node scripts/build.js --only-hashes",
+    "build:prod": "npm run build:isa:prod && npm run build:compiler && npm run build:server && npm run build:wasm-node:prod && npm run build:wasm-web:prod && node scripts/build.js --only-hashes",
     "build": "npm run build:prod",
     "dashboard": "node dashboard/server.js"
   },
@@ -42,6 +42,7 @@
   },
   "homepage": "https://github.com/lkeld/fortress-wasm#readme",
   "dependencies": {
+    "argon2": "^0.40.3",
     "jimp": "^1.6.1",
     "pngjs": "^7.0.0"
   },
@@ -50,6 +51,9 @@
     "@types/node": "^20.0.0",
     "@types/pngjs": "^6.0.5",
     "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "files": [
     "index.js",

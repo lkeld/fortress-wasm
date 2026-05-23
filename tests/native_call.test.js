@@ -48,6 +48,7 @@ process.env.DEV_MODE = isDevMode ? 'true' : 'false';
 const { Parser } = require('../compiler/dist/parser.js');
 const { CodeGenerator } = require('../compiler/dist/codegen.js');
 const { scrambleSessionPayload } = require('../server/scrambler.js');
+const { InMemoryNonceStore } = require('../server/nonce-store.js');
 
 // Save the worker initialization time
 const workerInitTime = performance.now();
@@ -66,7 +67,7 @@ function localNativeCallRouter(id, argsJson) {
 }
 
 // Helper to compile and run VM code
-function runVmCode(source, input = []) {
+async function runVmCode(source, input = []) {
     vmNode.clear_crypto();
     
     const parser = new Parser(source);
@@ -85,7 +86,8 @@ function runVmCode(source, input = []) {
             clientPublicKey = vmNode.generate_client_keypair();
         }
 
-        const { payload, newMap, pngBuffer, handshakeHeader } = scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey);
+        const nonceStore = new InMemoryNonceStore();
+        const { payload, newMap, pngBuffer, handshakeHeader } = await scrambleSessionPayload(fvbcPath, mapPath, clientPublicKey, nonceStore);
         const mapUint8 = new Uint8Array(newMap);
         
         let inputJsonStr = '{}';
@@ -115,9 +117,9 @@ function runVmCode(source, input = []) {
     }
 }
 
-test('ID 1001 (get_environment) returns correct structure and types', () => {
+test('ID 1001 (get_environment) returns correct structure and types', async () => {
     activeNativeHandler = localNativeCallRouter;
-    const res = runVmCode('return __native_call(1001);');
+    const res = await runVmCode('return __native_call(1001);');
     assert.ok(res !== null && typeof res === 'object', 'Should return an object');
     assert.strictEqual(typeof res.webdriver, 'boolean');
     assert.strictEqual(typeof res.hardwareConcurrency, 'number');
@@ -126,21 +128,21 @@ test('ID 1001 (get_environment) returns correct structure and types', () => {
     assert.strictEqual(typeof res.plugins_count, 'number');
 });
 
-test('ID 1002 (get_timing_delta) returns positive timing delta', () => {
+test('ID 1002 (get_timing_delta) returns positive timing delta', async () => {
     activeNativeHandler = localNativeCallRouter;
     const start = Date.now();
     while (Date.now() - start < 5) {}
-    const res = runVmCode('return __native_call(1002);');
+    const res = await runVmCode('return __native_call(1002);');
     assert.ok(res !== null && typeof res === 'object', 'Should return an object');
     assert.strictEqual(typeof res.delta_ms, 'number');
     assert.ok(res.delta_ms >= 0);
 });
 
-test('ID 1003 (get_webgl_info) handles supported and unsupported cases', () => {
+test('ID 1003 (get_webgl_info) handles supported and unsupported cases', async () => {
     activeNativeHandler = localNativeCallRouter;
     
     // 1. OffscreenCanvas undefined
-    const res1 = runVmCode('return __native_call(1003);');
+    const res1 = await runVmCode('return __native_call(1003);');
     assert.deepStrictEqual(res1, { supported: false });
     
     // 2. Mock OffscreenCanvas
@@ -181,7 +183,7 @@ test('ID 1003 (get_webgl_info) handles supported and unsupported cases', () => {
     };
     
     try {
-        const res2 = runVmCode('return __native_call(1003);');
+        const res2 = await runVmCode('return __native_call(1003);');
         assert.ok(res2.supported, 'WebGL should be supported in mock');
         assert.strictEqual(res2.vendor, 'Mock Vendor');
         assert.strictEqual(res2.renderer, 'Mock Renderer');
@@ -192,9 +194,9 @@ test('ID 1003 (get_webgl_info) handles supported and unsupported cases', () => {
     }
 });
 
-test('ID 1004 (get_screen_metrics) returns screen metrics', () => {
+test('ID 1004 (get_screen_metrics) returns screen metrics', async () => {
     activeNativeHandler = localNativeCallRouter;
-    const res = runVmCode('return __native_call(1004);');
+    const res = await runVmCode('return __native_call(1004);');
     assert.ok(res !== null && typeof res === 'object', 'Should return an object');
     assert.strictEqual(typeof res.width, 'number');
     assert.strictEqual(typeof res.height, 'number');
@@ -202,24 +204,24 @@ test('ID 1004 (get_screen_metrics) returns screen metrics', () => {
     assert.strictEqual(typeof res.pixelRatio, 'number');
 });
 
-test('ID 9999 (ping) returns status and timestamp', () => {
+test('ID 9999 (ping) returns status and timestamp', async () => {
     activeNativeHandler = localNativeCallRouter;
-    const res = runVmCode('return __native_call(9999);');
+    const res = await runVmCode('return __native_call(9999);');
     assert.deepStrictEqual(res.status, 'ok');
     assert.strictEqual(typeof res.timestamp, 'number');
     assert.ok(res.timestamp > 0);
 });
 
-test('Exceptions in native call handler are caught and wrapped', () => {
+test('Exceptions in native call handler are caught and wrapped', async () => {
     activeNativeHandler = () => {
         throw new Error("Something went wrong");
     };
-    const res = runVmCode('return __native_call(9999);');
+    const res = await runVmCode('return __native_call(9999);');
     assert.strictEqual(res.error, "HandlerError");
     assert.strictEqual(res.message, "Something went wrong");
 });
 
-test('Arguments to native call exceeding 4096 bytes return PayloadTooLarge', () => {
+test('Arguments to native call exceeding 4096 bytes return PayloadTooLarge', async () => {
     activeNativeHandler = localNativeCallRouter;
     const source = `
         let s = "1234567890123456";
@@ -234,14 +236,14 @@ test('Arguments to native call exceeding 4096 bytes return PayloadTooLarge', () 
         s = s + s;
         return __native_call(9999, s);
     `;
-    const res = runVmCode(source);
+    const res = await runVmCode(source);
     assert.deepStrictEqual(res, { error: "PayloadTooLarge" });
 });
 
-test('Returned string from native call exceeding 4096 bytes returns PayloadTooLarge string', () => {
+test('Returned string from native call exceeding 4096 bytes returns PayloadTooLarge string', async () => {
     activeNativeHandler = () => {
         return "A".repeat(4097);
     };
-    const res = runVmCode('return __native_call(9999);');
+    const res = await runVmCode('return __native_call(9999);');
     assert.strictEqual(res, "PayloadTooLarge");
 });
