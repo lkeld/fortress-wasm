@@ -303,6 +303,7 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
         Err(e) => {
             let err_str = match e {
                 crate::stack::VmError::OutOfGas => "ExecutionLimitExceeded".to_string(),
+                crate::stack::VmError::RuntimeError => "RuntimeError".to_string(),
                 _ => format!("{:?}", e),
             };
             format!(r#"{{"status": false, "error": "{}"}}"#, err_str)

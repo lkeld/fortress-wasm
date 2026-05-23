@@ -6,7 +6,32 @@ const OPCODES = [
   "LoadLocal", "StoreLocal", "Add", "Sub", "Mul", "Div", "Eq", "Neq", "Lt", "Gt", "Lte", "Gte",
   "And", "Or", "Not", "BitAnd", "BitOr", "BitXor", "BitNot", "Shl", "Shr", "Jump", "JumpIf", "JumpIfNot",
   "NewObject", "NewList", "ListPush", "GetMember", "SetMember", "Length", "Hash256", "EncryptAES", "JSONStringify", "Call", "Return", "CallNative", "Halt", "Concat",
-  "CompareAndAdd", "SwapAndMul", "JumpAndMul", "Swap", "Rotate", "Drop2"
+  "CompareAndAdd", "SwapAndMul", "JumpAndMul", "Swap", "Rotate", "Drop2",
+  // Math opcodes (32)
+  "MathFloor", "MathCeil", "MathRound", "MathAbs", "MathSqrt",
+  "MathPow", "MathLog", "MathLog2", "MathLog10", "MathSin",
+  "MathCos", "MathTan", "MathAsin", "MathAcos", "MathAtan",
+  "MathAtan2", "MathMax", "MathMin", "MathSign", "MathTrunc",
+  "MathHypot", "MathExp", "MathExpm1", "MathLog1p", "MathSinh",
+  "MathCosh", "MathTanh", "MathCbrt", "MathClz32", "MathFround",
+  "MathImul", "MathRandom",
+  // String opcodes (22)
+  "StrIndexOf", "StrLastIndexOf", "StrSlice", "StrReplace",
+  "StrReplaceAll", "StrSplit", "StrToLower", "StrToUpper",
+  "StrTrim", "StrTrimStart", "StrTrimEnd", "StrRepeat",
+  "StrPadStart", "StrPadEnd", "StrCharCodeAt", "StrFromCharCode",
+  "StrStartsWith", "StrEndsWith", "StrIncludes", "StrAt",
+  "StrConcat", "StrSubstring",
+  // Regex opcodes (4)
+  "RegExTest", "RegExMatch", "RegExReplace", "RegExSplit",
+  // JSON (1)
+  "JSONParse",
+  // Type checking (1)
+  "TypeOf",
+  // Array opcodes (14)
+  "ArrIndexOf", "ArrLastIndexOf", "ArrIncludes", "ArrReverse",
+  "ArrSortNumeric", "ArrSortString", "ArrSlice", "ArrJoin",
+  "ArrFlat", "ArrFill", "ArrPush", "ArrPop", "ArrShift", "ArrUnshift"
 ];
 
 // Phase 12: Code Renewability

@@ -1,6 +1,7 @@
 use crate::stack::{Stack, VmError};
 use crate::value::Value;
 use wasm_bindgen::prelude::*;
+use std::sync::Arc;
 
 #[wasm_bindgen(module = "env")]
 extern "C" {
@@ -11,6 +12,45 @@ pub(crate) struct CallFrame {
     pub(crate) pc_base: usize,
     pub(crate) pc_offset: usize,
     pub(crate) locals: Vec<Value>,
+}
+
+#[derive(Clone)]
+pub enum CachedRegex {
+    Normal(Arc<regex::Regex>),
+    Fancy(Arc<fancy_regex::Regex>),
+}
+
+pub struct RegexCache {
+    capacity: usize,
+    entries: Vec<(String, CachedRegex)>,
+}
+
+impl RegexCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            entries: Vec::with_capacity(capacity),
+        }
+    }
+
+    pub fn get(&mut self, pattern: &str) -> Option<&CachedRegex> {
+        let pos = self.entries.iter().position(|(k, _)| k == pattern)?;
+        let entry = self.entries.remove(pos);
+        self.entries.push(entry); // Move to the end (Most Recently Used)
+        self.entries.last().map(|(_, r)| r)
+    }
+
+    pub fn insert(&mut self, pattern: String, regex: CachedRegex) {
+        if self.capacity == 0 {
+            return;
+        }
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == &pattern) {
+            self.entries.remove(pos);
+        } else if self.entries.len() >= self.capacity {
+            self.entries.remove(0); // Evict Least Recently Used (first element)
+        }
+        self.entries.push((pattern, regex));
+    }
 }
 
 pub struct Vm {
@@ -30,6 +70,7 @@ pub struct Vm {
     pub(crate) prng_state: u64,
     pub(crate) gas_limit: u64,
     pub(crate) gas_used: u64,
+    pub(crate) regex_cache: RegexCache,
 }
 
 impl Vm {
@@ -41,8 +82,8 @@ impl Vm {
         expected_hash: [u8; 32],
     ) -> Self {
         let mut opcode_map = [0u8; 256];
-        if opcode_map_vec.len() >= 256 {
-            opcode_map.copy_from_slice(&opcode_map_vec[0..256]);
+        if let Some(slice) = opcode_map_vec.get(0..256) {
+            opcode_map.copy_from_slice(slice);
         } else {
             // Fallback (identity map) if code is malformed/too short
             for i in 0..256 {
@@ -74,12 +115,13 @@ impl Vm {
             prng_state: seed,
             gas_limit: 1_000_000,
             gas_used: 0,
+            regex_cache: RegexCache::new(32),
         }
     }
 
     pub fn set_local(&mut self, index: usize, value: Value) {
-        if index < self.locals.len() {
-            self.locals[index] = value;
+        if let Some(slot) = self.locals.get_mut(index) {
+            *slot = value;
         }
     }
 
@@ -184,7 +226,7 @@ impl Vm {
                 if hash_start + 32 <= self.code.len() {
                     let mut expected_page_hash = [0u8; 32];
                     for i in 0..32 {
-                        expected_page_hash[i] = self.code[hash_start + i] ^ self.session_key[i];
+                        expected_page_hash[i] = *self.code.get(hash_start + i).unwrap_or(&0) ^ self.session_key[i];
                     }
                     
                     use sha2::{Sha256, Digest};
@@ -224,7 +266,7 @@ impl Vm {
             self.decrypt_page(page_id);
         }
         
-        let b = self.ves[offset];
+        let b = *self.ves.get(offset).ok_or(VmError::UnexpectedEndOfCode)?;
         self.advance_pc(1);
         Ok(b)
     }
@@ -296,7 +338,7 @@ impl Vm {
             }
 
             let raw_instruction = self.read_byte()?;
-            let opcode_val_translated = self.opcode_map[raw_instruction as usize];
+            let opcode_val_translated = *self.opcode_map.get(raw_instruction as usize).ok_or(VmError::UnexpectedEndOfCode)?;
 
             let gas_cost = match crate::opcodes::OpCode::try_from(opcode_val_translated) {
                 Ok(crate::opcodes::OpCode::PushInt) | Ok(crate::opcodes::OpCode::Pop) | Ok(crate::opcodes::OpCode::Dup) | Ok(crate::opcodes::OpCode::PushFloat) |
@@ -335,7 +377,7 @@ impl Vm {
             };
             self.charge_gas(gas_cost)?;
 
-            let handler = dispatch_table[opcode_val_translated as usize];
+            let handler = *dispatch_table.get(opcode_val_translated as usize).ok_or(VmError::InvalidOpCode(opcode_val_translated))?;
             
             match handler(self) {
                 Ok(true) => break,

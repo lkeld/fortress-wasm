@@ -19,6 +19,7 @@ pub enum VmError {
     InvalidShiftAmount,
     BorrowError,
     OutOfGas,
+    RuntimeError,
 }
 
 pub struct Stack {

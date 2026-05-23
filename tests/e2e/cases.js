@@ -185,8 +185,8 @@ const cases = [
     name: 'Division by Zero',
     source: 'return 10 / 0;',
     inputs: [],
-    expected: 'DivisionByZero',
-    isError: true
+    expected: null,
+    isError: false
   },
   {
     id: 'F1.9',

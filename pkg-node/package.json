@@ -1,6 +1,7 @@
 {
   "name": "vm-core",
   "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
   "files": [
     "vm_core_bg.wasm",
     "vm_core.js",
