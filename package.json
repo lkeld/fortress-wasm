@@ -81,7 +81,7 @@
   },
   "homepage": "https://github.com/lkeld/fortress-wasm#readme",
   "dependencies": {
-    "argon2": "^0.40.3",
+    "argon2": "^0.44.0",
     "cross-spawn": "^7.0.3",
     "jimp": "^1.6.1",
     "magicast": "^0.3.4",
