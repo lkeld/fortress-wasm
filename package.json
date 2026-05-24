@@ -97,7 +97,7 @@
     "typescript": "^5.0.0"
   },
   "optionalDependencies": {
-    "isolated-vm": "^5.0.0"
+    "isolated-vm": "^6.1.2"
   },
   "engines": {
     "node": ">=18.0.0"
