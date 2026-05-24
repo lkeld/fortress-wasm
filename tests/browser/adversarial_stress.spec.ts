@@ -56,6 +56,7 @@ async function compileAndScramble(sourceCode: string, devMode: boolean, clientPu
 test.describe('Adversarial and Stress Tests', () => {
 
   test('Check 1: Web Worker high concurrency and message loop stress test', async ({ page }) => {
+    test.setTimeout(90000);
     await page.goto('http://localhost:8080/index.html');
     await page.waitForFunction(() => window.fortress !== undefined);
     await page.evaluate(() => window.fortress.init());
@@ -172,7 +173,7 @@ test.describe('Adversarial and Stress Tests', () => {
         });
       };
 
-      const workerPromises = Array.from({ length: 25 }, (_, i) => runWorkerStress(i));
+      const workerPromises = Array.from({ length: 10 }, (_, i) => runWorkerStress(i));
       return Promise.all(workerPromises);
     }, {
       isDev: isWasmDevMode

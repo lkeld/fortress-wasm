@@ -6,11 +6,19 @@ I needed to make that mathematically and practically as difficult as possible. S
 
 Fortress WASM serves both as a passively hardened virtual machine and as the foundational runtime substrate for an active Runtime Application Self-Protection (RASP) layer, capable of actively defending client-side logic against host-based tampering, dynamic extraction, and automated deobfuscation.
 
-## The Approach
+---
 
-I didn't want to build security theatre, so I started with the academic literature. The foundation of this system is a Wasm-in-Wasm virtualisation concept outlined by Robert Vähhi at TrustSig. From there, I went deep into offensive research. I read seventeen academic papers covering every major attack methodology currently used against WebAssembly binaries. I read *PUSHAN* to understand the state of the art in VM deobfuscation. I read *SiMBA* and *MBA-Blast* to see which Mixed Boolean-Arithmetic patterns are already broken by solvers. I read *WasmWalker* to understand how machine learning classifiers fingerprint binaries, and *StackSight* to understand how LLMs use chain-of-thought to decompile them. 
+## 📚 Documentation Index
 
-Then, I systematically built countermeasures against each one by name. This repository represents thirteen phases of hardening. Every major attack in the current literature has a named, implemented defence built into this engine.
+For detailed guides and reference documentation, please see the following guides:
+
+- ⚙️ **[Configuration Guide](docs/config.md)**: Options and settings for `fortress.config.js`.
+- 💻 **[Command Line Interface (CLI) Guide](docs/cli.md)**: Compilation, live-watch (`dev` mode with port conflict solver), and integrity auditing (`verify` command).
+- 🔄 **[JS-to-FVM Transpiler Guide](docs/transpiler.md)**: Details on syntax compatibility, helper function maps, stable merge sorting, and error boundaries.
+- 🛡️ **[Security Model & Hardening Guide](docs/security-model.md)**: Deep dive into the Ed25519/X25519 key exchanges, steganography carrier, rolling XOR, and the 13 academic hardening phases.
+- 🔌 **[Framework Integrations & CSP Guide](docs/frameworks.md)**: Outlining hooks/middleware setup and required Content Security Policy (`worker-src 'self' blob:;`) directives.
+
+---
 
 ## How It Works
 
@@ -47,31 +55,7 @@ graph TD
 
 The system separates the compilation of canonical opcodes from their runtime execution. The **Compiler Pipeline** translates high-level code into a custom, non-standard ISA that is randomised on every build. The **Scrambler Layer** intercepts the payload on the server, encrypts it, generates a totally fresh translation map for that specific session, and hides the 32-byte cryptographic session key inside a PNG image using a dynamically derived LSB stride. The **VM Interpreter** runs in the browser, extracts the key, and uses a JIT sliding decryption window to execute the logic without the payload ever residing fully decrypted in memory.
 
-## Security Model
-
-This system implements targeted defences against the following state-of-the-art attack vectors:
-
-| Hardening Phase | Attack / Vulnerability | Defeated By | Countermeasure Implementation | Reference |
-|---|---|---|---|---|
-| **Phase 1** | Plaintext Constant Leakage | Constant Pool Elimination | On-demand constant decryption via inline nonces | Cao et al. (WASMixer) |
-| **Phase 2** | Trivial Disassembly / Lifters | Linear MBA Solvers | Mixed Boolean-Arithmetic substitution (Add/Sub) | Harnes & Morrison (Cryptic Bytes) |
-| **Phase 3** | Symbolic Execution Paths | Path Explosion Tools | Bogus control flow injection & opaque predicates | Cao et al. (WASMixer) |
-| **Phase 4** | Static Key Ingestion | Hardcoded Key Extractors | X25519 Ephemeral Key Exchange with Ed25519 Handshake Signature | Steganographic Key Delivery |
-| **Phase 5** | Emulation / Emulators | VPC Emulators (e.g. PUSHAN) | VPC program counter base/offset fragmentation | Authors of PUSHAN |
-| **Phase 6** | Algebraic Deobfuscators | SMT Solvers (SiMBA, MBA-Blast) | Polynomial non-linear MBA and pseudo-variable domain expansion | MBA-Blast, SiMBA, gMBA |
-| **Phase 7** | ML Classifier Profiling | Static AST Fingerprinters | AST Path Distribution Pollution (semantically valid dead blocks) | Authors of WasmWalker |
-| **Phase 8** | Monolithic Dispatcher Fingerprints | VM Struct Detectors | Dispatcher decentralisation & handler duplication | Authors of PUSHAN |
-| **Phase 9** | String Cipher Brute-Force | 1-Byte Key Scrapers | String encryption key hardening (4-byte nonce + 32-byte key) | Key Hardening |
-| **Phase 10** | Handler SMT Isolation | Automated Program Synthesis | Superoperator fusion of stack and control flow logic | Schloegel et al. (Loki) |
-| **Phase 11** | Neurosymbolic CoT Extraction | LLM Decompilers (StackSight) | LLM Stack Poisoning via non-monotonic phantom stack spikes | Fang et al. (StackSight) |
-| **Phase 12** | Differential Payload Auditing | Signature Cache & Differs | Per-request Code Renewability (map, key & stride reshuffling) | Abrath et al. (Code Renewability) |
-| **Phase 13** | Dispatcher Succession Heuristics | LLVM Switch Profilers | switch-block elimination via native Function Pointer Trampoline | Static VM Detection |
-
-For a totally honest assessment of what this protects against, what it doesn't, and my threat model assumptions, see [SECURITY.md](SECURITY.md).
-
-## Engine Architecture
-
-For a detailed breakdown of the compilation pipeline stages, the runtime VM execution flow, and the JIT sliding decryption window, see [ARCHITECTURE.md](ARCHITECTURE.md). The step-by-step variable lifecycle trace and stack execution state under polynomial MBA transformations are mapped in [FLOW_MAPPING.md](FLOW_MAPPING.md).
+---
 
 ## Building and Running
 
@@ -82,10 +66,10 @@ You need Node.js and Rust installed (`wasm-pack`).
 npm install
 
 # 2. Build the entire pipeline for development
-npm run build:dev
+FORTRESS_SIGNING_PASSWORD=validpassword123 npm run build:dev
 
 # 3. Build the entire pipeline for production (enforces steganographic key requirements)
-npm run build:prod
+FORTRESS_SIGNING_PASSWORD=validpassword123 npm run build:prod
 
 # 4. Compile a sample script
 node compiler/dist/cli.js path/to/script.fvm
@@ -96,66 +80,33 @@ node server/dist/scrambler.js path/to/script.fvbc path/to/script.opcodes.json
 
 ## Running Tests
 
-The verification pipeline tests functional correctness and renewability in both environments. For a detailed breakdown of the test categories (Tiers 1–4) and the test coverage design, see [TEST_INFRA.md](TEST_INFRA.md).
+The verification pipeline tests functional correctness and renewability in both environments.
 
 ```bash
 # Run unit and integration tests (both Rust and TS)
-npm run test:full
+FORTRESS_SIGNING_PASSWORD=validpassword123 npm run test:full
 
 # Run E2E integration test suite
-npm run test:e2e
+FORTRESS_SIGNING_PASSWORD=validpassword123 npm run test:e2e
 ```
 
-## Research Document
+Refer to [docs/cli.md](docs/cli.md) and [docs/transpiler.md](docs/transpiler.md) for detailed descriptions of test commands and transpiler behavior.
 
-The complete research methodology, including the threat model, the detailed architecture, the verification results, and exactly how each of the 13 hardening phases was implemented to defeat the academic literature, is fully documented in [RESEARCH.md](RESEARCH.md).
-
-## Contributing
-
-For guidelines on environment setup, building, testing, reporting issues, and opening pull requests, please refer to [CONTRIBUTING.md](CONTRIBUTING.md).
+---
 
 ## Subresource Integrity (SRI)
 
 To prevent supply chain attacks and guarantee runtime integrity, Fortress WASM generates SHA-384 hashes for its compiled WebAssembly binaries. These hashes allow hosts and browsers to verify that the compiled code has not been tampered with.
 
-### Generating Hashes
-
 The hashes are generated automatically during the build process:
 - When running `npm run build` (or `build:dev` / `build:prod`), the build script automatically executes `node scripts/build.js --only-hashes` to generate:
   - `pkg-web/vm_core_bg.wasm.sha384` (for the web target)
   - `pkg-node/vm_core_bg.wasm.sha384` (for the Node.js target)
-- The v1.2.0 build pipeline and CI workflow (`.github/workflows/publish.yml`) incorporate reproducible builds via `npm ci`, block copyleft licenses via `cargo-deny`, run security audits via `npm audit` and `cargo-audit`, and automatically write the computed Web WASM SHA-384 hash to `WASM_INTEGRITY.txt` at the root of the workspace and in the `dist/` directory of the release artifacts.
+- The build pipeline and CI workflow (`.github/workflows/publish.yml`) incorporate reproducible builds via `npm ci`, block copyleft licenses via `cargo-deny`, run security audits via `npm audit` and `cargo-audit`, and automatically write the computed Web WASM SHA-384 hash to `WASM_INTEGRITY.txt` at the root of the workspace.
 
-### Verifying Hashes
-
-To verify the integrity of the WASM binary manually, you can compute its SHA-384 checksum:
-
-Using OpenSSL/shasum:
-```bash
-shasum -a 384 pkg-web/vm_core_bg.wasm
-```
-
-Or using Node.js:
-```bash
-node -e "console.log(require('crypto').createHash('sha384').update(require('fs').readFileSync('pkg-web/vm_core_bg.wasm')).digest('hex'))"
-```
-
-Compare the output with the content of `pkg-web/vm_core_bg.wasm.sha384` or `WASM_INTEGRITY.txt`.
-
-For browser delivery, you can use the Subresource Integrity (SRI) format by converting the hex hash into base64. For example:
-```bash
-cat pkg-web/vm_core_bg.wasm | openssl dgst -sha384 -binary | openssl base64 -A
-```
-This base64 string can be used inside your application loader to enforce cryptographic pinning of the WASM runtime.
+---
 
 ## References
-
----
-
-**Built by Luke Eldridge**
-[@system on Instagram](https://instagram.com/system)
-
----
 
 1. Robert Vähhi / TrustSig — *Building a Wasm-in-Wasm Virtualizer (with JIT Decrypted Paged Memory)* (2026) — trustsig.eu/blog/wasm-vm
 2. Cao et al. — *WASMixer: Binary Obfuscation for WebAssembly* (2023) — arxiv.org/abs/2308.03123
@@ -174,3 +125,8 @@ This base64 string can be used inside your application loader to enforce cryptog
 15. Fang, Zhou, He & Wang — *StackSight: Unveiling WebAssembly through Large Language Models and Neurosymbolic Chain-of-Thought Decompilation* (ICML 2024) — arxiv.org/abs/2406.04568
 16. Abrath et al. — *Code Renewability for Native Software Protection* (Ghent University, 2020) — arxiv.org/abs/2003.00916
 17. Tim Blazytko & Nicolò Altamura — *Breaking Mixed Boolean-Arithmetic Obfuscation in Real-World Applications* (Recon 2025) — recon.cx/cfp.recon.cx/recon-2025/talk/BKBQ37/index.html
+
+---
+
+**Built by Luke Eldridge**
+[@system on Instagram](https://instagram.com/system)

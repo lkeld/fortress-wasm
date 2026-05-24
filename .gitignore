@@ -15,3 +15,4 @@ compiler/node_modules/
 *.tgz
 # FORTRESS_SIGNING_PASSWORD must be set in the environment to derive the signing key
 /server/.signing_params*
+/server/.signing_key

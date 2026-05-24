@@ -1294,8 +1294,15 @@ pub fn op_strcharcodeat(vm: &mut Vm) -> Result<bool, VmError> {
 
 pub fn op_strfromcharcode(vm: &mut Vm) -> Result<bool, VmError> {
     let code = match vm.stack.pop()? {
-        Value::Int(i) => i as u16,
-        Value::Float(f) => f as u16,
+        Value::Int(i) => (i & 0xFFFF) as u16,
+        Value::Float(f) => {
+            if f.is_nan() || f.is_infinite() {
+                0
+            } else {
+                let val = (f % 65536.0) as i32;
+                if val < 0 { (val + 65536) as u16 } else { val as u16 }
+            }
+        }
         _ => return Err(VmError::TypeError),
     };
     let res = String::from_utf16_lossy(&[code]);

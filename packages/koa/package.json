@@ -1,6 +1,6 @@
 {
   "name": "@fortress-wasm/koa",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Koa integration for fortress-wasm",
   "main": "index.js"
 }

@@ -2,6 +2,18 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.3.0] - 2026-05-24
+
+### Added
+- **74 Native Opcodes**: Implemented 74 new native math, string, regex, array, typeof, and JSON opcodes in crates/vm-core. Supports zero-allocation string iterator operations and strict JS equivalence behaviors (including 16-bit truncation for String.fromCharCode and division-by-zero IEEE-754 rules).
+- **Regex LRU Cache**: Implemented a capacity-limited Regex compiler LRU cache in the Rust VM struct.
+- **JS-to-FVM Babel Transpiler**: Created a compiler/js-transpiler utilizing Babel for 40+ transformation rules, incorporating Map/Set standard library FVM bytecode.
+- **Scaffolding CLI (create-fortress-app)**: Added interactive CLI supporting 17+ frameworks, autodetecting project configurations and displaying progress bars.
+- **Framework Integrations**: Integrated Next, Vite, Svelte, Nuxt, Remix, Astro, Angular, Solid, Qwik, Express, Fastify, Hono, Koa, Nest, Bun, Deno, and Plain HTML to automatically serve worker.js at `/_fortress/worker.js`.
+- **Client SDK**: Added client SDK supporting dual worker load strategies (ESM URL and embedded IIFE worker bundle).
+- **Dev and @protect Scanner Tooling**: Implemented `fortress-wasm dev` command with file watcher and port resolver, and a build-time annotation scanner targeting functions decorated with `/** @protect */`.
+- **Playwright Security Verification**: Added `fortress-wasm verify` executing Playwright security checks, generating a 100/100 score and saving JSON report.
+
 ## [1.2.0] - 2026-05-24
 
 ### Added

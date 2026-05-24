@@ -4,10 +4,76 @@ import { Parser } from './parser';
 import { CodeGenerator } from './codegen';
 import { transpile, verifyEquivalenceSync } from './js-transpiler';
 import { stdlibSource } from './stdlib';
+import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
+import * as os from 'os';
+
+declare var process: any;
+
+function scanDirectorySync(dirPath: string, options?: any): string[] {
+    const include = options && options.include;
+    const matches = (filePath: string) => {
+        const includePat = include || /\.(js|ts)$/;
+        if (includePat instanceof RegExp) {
+            return includePat.test(filePath);
+        }
+        if (typeof includePat === 'function') {
+            return includePat(filePath);
+        }
+        if (Array.isArray(includePat)) {
+            return includePat.some(pat => {
+                if (pat instanceof RegExp) return pat.test(filePath);
+                return filePath.endsWith(pat) || filePath.includes(pat);
+            });
+        }
+        if (typeof includePat === 'string') {
+            return filePath.endsWith(includePat) || filePath.includes(includePat);
+        }
+        return true;
+    };
+    
+    let results: string[] = [];
+    if (!fs.existsSync(dirPath)) return results;
+    
+    const stat = fs.statSync(dirPath);
+    if (stat.isFile()) {
+        if (matches(dirPath)) {
+            return [dirPath];
+        }
+        return [];
+    }
+    
+    const files = fs.readdirSync(dirPath);
+    for (const file of files) {
+        if (file === 'node_modules' || file === '.git') continue;
+        const fullPath = path.join(dirPath, file);
+        const s = fs.statSync(fullPath);
+        if (s.isDirectory()) {
+            results = results.concat(scanDirectorySync(fullPath, options));
+        } else {
+            if (matches(fullPath)) {
+                results.push(fullPath);
+            }
+        }
+    }
+    return results;
+}
+
+if (!isMainThread && parentPort) {
+    parentPort.on('message', (msg: any) => {
+        if (msg && msg.type === 'SCAN_FILE') {
+            try {
+                const results = scanFile(msg.filePath);
+                parentPort!.postMessage({ type: 'SCAN_RESULT', results });
+            } catch (err: any) {
+                parentPort!.postMessage({ type: 'SCAN_ERROR', error: err.message });
+            }
+        }
+    });
+}
+
 const parser: any = require('@babel/parser');
 const t: any = require('@babel/types');
 const generate: any = require('@babel/generator').default;
-
 
 export interface ProtectedFunction {
     name: string;
@@ -258,4 +324,112 @@ export function scanDirectory(dirPath: string): ProtectedFunction[] {
         }
     }
     return results;
+}
+
+function findFilesRecursive(dir: string): string[] {
+    let results: string[] = [];
+    if (!fs.existsSync(dir)) return results;
+    const stat = fs.statSync(dir);
+    if (stat.isFile()) {
+        if (dir.endsWith('.js') || dir.endsWith('.ts')) {
+            results.push(dir);
+        }
+        return results;
+    }
+    const list = fs.readdirSync(dir);
+    for (const file of list) {
+        if (file === 'node_modules' || file === '.git' || file === 'dist') continue;
+        const fullPath = path.join(dir, file);
+        const s = fs.statSync(fullPath);
+        if (s.isDirectory()) {
+            results = results.concat(findFilesRecursive(fullPath));
+        } else if (file.endsWith('.js') || file.endsWith('.ts')) {
+            results.push(fullPath);
+        }
+    }
+    return results;
+}
+
+export async function scanDirectoryParallel(dirPath: string): Promise<ProtectedFunction[]> {
+    const files = findFilesRecursive(dirPath);
+    if (files.length === 0) return [];
+
+    let workerScript = __filename;
+    if (workerScript.endsWith('.ts')) {
+        const compiledPath = path.resolve(__dirname, '../dist/scanner.js');
+        if (fs.existsSync(compiledPath)) {
+            workerScript = compiledPath;
+        }
+    }
+
+    const limit = Math.min((os.cpus() || []).length || 4, 8);
+    const resultsArray: ProtectedFunction[][] = new Array(files.length);
+    let index = 0;
+
+    async function runWorker(file: string): Promise<ProtectedFunction[]> {
+        return new Promise<ProtectedFunction[]>((resolve) => {
+            let worker: Worker;
+            try {
+                worker = new Worker(workerScript);
+            } catch (err) {
+                return resolve(scanFile(file));
+            }
+
+            let resolved = false;
+            worker.on('message', (msg: any) => {
+                if (msg && msg.type === 'SCAN_RESULT') {
+                    if (!resolved) {
+                        resolved = true;
+                        worker.terminate();
+                        resolve(msg.results);
+                    }
+                } else if (msg && msg.type === 'SCAN_ERROR') {
+                    if (!resolved) {
+                        resolved = true;
+                        worker.terminate();
+                        resolve([]);
+                    }
+                }
+            });
+
+            worker.on('error', () => {
+                if (!resolved) {
+                    resolved = true;
+                    worker.terminate();
+                    resolve(scanFile(file));
+                }
+            });
+
+            worker.on('exit', () => {
+                if (!resolved) {
+                    resolved = true;
+                    resolve([]);
+                }
+            });
+
+            worker.postMessage({ type: 'SCAN_FILE', filePath: file });
+        });
+    }
+
+    async function workerPoolSlot() {
+        while (index < files.length) {
+            const currentIdx = index++;
+            const file = files[currentIdx];
+            resultsArray[currentIdx] = await runWorker(file);
+        }
+    }
+
+    const poolPromises: Promise<void>[] = [];
+    for (let i = 0; i < Math.min(limit, files.length); i++) {
+        poolPromises.push(workerPoolSlot());
+    }
+    await Promise.all(poolPromises);
+
+    const allFunctions: ProtectedFunction[] = [];
+    for (const res of resultsArray) {
+        if (res) {
+            allFunctions.push(...res);
+        }
+    }
+    return allFunctions;
 }

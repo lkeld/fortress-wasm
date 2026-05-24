@@ -233,7 +233,7 @@ async function scrambleSessionPayload(fvbcPath, originalMapPath, clientPublicKey
         const newByte = newMap[standardOpcode];
         newBytecode[i] = newByte;
         i++;
-        if (standardOpcode === opcodes_js_1.OpCode.PushString) {
+        if (standardOpcode === opcodes_js_1.OpCode.PushString && i + 8 <= limit) {
             const originalNonce = new Uint8Array(4);
             for (let j = 0; j < 4; j++) {
                 originalNonce[j] = originalBytecode[i + j];
@@ -247,58 +247,60 @@ async function scrambleSessionPayload(fvbcPath, originalMapPath, clientPublicKey
             }
             let len = 0;
             if (i + 3 < originalBytecode.length) {
-                len = originalBytecode[i] | (originalBytecode[i + 1] << 8) | (originalBytecode[i + 2] << 16) | (originalBytecode[i + 3] << 24);
-                for (let j = 0; j < 4; j++) {
-                    newBytecode[i] = originalBytecode[i];
-                    i++;
-                }
-            }
-            const keystream = new Uint8Array(len);
-            const keystreamAllZeros = new Uint8Array(len);
-            {
-                let offset = 0;
-                let blockIndex = 0;
-                while (offset < len) {
-                    const hasher = crypto.createHash('sha256');
-                    hasher.update(sessionKey);
-                    hasher.update(nonce);
-                    const blockBuf = Buffer.alloc(4);
-                    blockBuf.writeUInt32LE(blockIndex);
-                    hasher.update(blockBuf);
-                    const block = hasher.digest();
-                    for (let k = 0; k < block.length && offset < len; k++) {
-                        keystream[offset++] = block[k];
+                len = (originalBytecode[i] | (originalBytecode[i + 1] << 8) | (originalBytecode[i + 2] << 16) | (originalBytecode[i + 3] << 24)) >>> 0;
+                if (i + 4 + len <= limit) {
+                    for (let j = 0; j < 4; j++) {
+                        newBytecode[i] = originalBytecode[i];
+                        i++;
                     }
-                    blockIndex++;
-                }
-            }
-            {
-                let offset = 0;
-                let blockIndex = 0;
-                const zeroKey = new Uint8Array(32);
-                while (offset < len) {
-                    const hasher = crypto.createHash('sha256');
-                    hasher.update(zeroKey);
-                    hasher.update(originalNonce);
-                    const blockBuf = Buffer.alloc(4);
-                    blockBuf.writeUInt32LE(blockIndex);
-                    hasher.update(blockBuf);
-                    const block = hasher.digest();
-                    for (let k = 0; k < block.length && offset < len; k++) {
-                        keystreamAllZeros[offset++] = block[k];
+                    const keystream = new Uint8Array(len);
+                    const keystreamAllZeros = new Uint8Array(len);
+                    {
+                        let offset = 0;
+                        let blockIndex = 0;
+                        while (offset < len) {
+                            const hasher = crypto.createHash('sha256');
+                            hasher.update(sessionKey);
+                            hasher.update(nonce);
+                            const blockBuf = Buffer.alloc(4);
+                            blockBuf.writeUInt32LE(blockIndex);
+                            hasher.update(blockBuf);
+                            const block = hasher.digest();
+                            for (let k = 0; k < block.length && offset < len; k++) {
+                                keystream[offset++] = block[k];
+                            }
+                            blockIndex++;
+                        }
                     }
-                    blockIndex++;
-                }
-            }
-            for (let j = 0; j < len; j++) {
-                if (i < originalBytecode.length) {
-                    const encryptedByte = originalBytecode[i];
-                    newBytecode[i] = encryptedByte ^ keystreamAllZeros[j] ^ keystream[j];
-                    i++;
+                    {
+                        let offset = 0;
+                        let blockIndex = 0;
+                        const zeroKey = new Uint8Array(32);
+                        while (offset < len) {
+                            const hasher = crypto.createHash('sha256');
+                            hasher.update(zeroKey);
+                            hasher.update(originalNonce);
+                            const blockBuf = Buffer.alloc(4);
+                            blockBuf.writeUInt32LE(blockIndex);
+                            hasher.update(blockBuf);
+                            const block = hasher.digest();
+                            for (let k = 0; k < block.length && offset < len; k++) {
+                                keystreamAllZeros[offset++] = block[k];
+                            }
+                            blockIndex++;
+                        }
+                    }
+                    for (let j = 0; j < len; j++) {
+                        if (i < originalBytecode.length) {
+                            const encryptedByte = originalBytecode[i];
+                            newBytecode[i] = encryptedByte ^ keystreamAllZeros[j] ^ keystream[j];
+                            i++;
+                        }
+                    }
                 }
             }
         }
-        else if (standardOpcode === opcodes_js_1.OpCode.PushFloat || standardOpcode === opcodes_js_1.OpCode.CallNative || standardOpcode === opcodes_js_1.OpCode.Call) {
+        else if ((standardOpcode === opcodes_js_1.OpCode.PushFloat || standardOpcode === opcodes_js_1.OpCode.CallNative || standardOpcode === opcodes_js_1.OpCode.Call) && i + 8 <= limit) {
             for (let j = 0; j < 8; j++) {
                 if (i < originalBytecode.length) {
                     newBytecode[i] = originalBytecode[i];
@@ -306,14 +308,15 @@ async function scrambleSessionPayload(fvbcPath, originalMapPath, clientPublicKey
                 }
             }
         }
-        else if (standardOpcode === opcodes_js_1.OpCode.PushInt ||
+        else if ((standardOpcode === opcodes_js_1.OpCode.PushInt ||
             standardOpcode === opcodes_js_1.OpCode.PushBool ||
             standardOpcode === opcodes_js_1.OpCode.LoadLocal ||
             standardOpcode === opcodes_js_1.OpCode.StoreLocal ||
             standardOpcode === opcodes_js_1.OpCode.Jump ||
             standardOpcode === opcodes_js_1.OpCode.JumpIf ||
             standardOpcode === opcodes_js_1.OpCode.JumpIfNot ||
-            standardOpcode === opcodes_js_1.OpCode.JumpAndMul) {
+            standardOpcode === opcodes_js_1.OpCode.JumpAndMul) &&
+            i + 4 <= limit) {
             for (let j = 0; j < 4; j++) {
                 if (i < originalBytecode.length) {
                     newBytecode[i] = originalBytecode[i];
