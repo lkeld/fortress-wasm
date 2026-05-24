@@ -683,6 +683,198 @@ function askPassword(query) {
     });
 }
 
+// ─── Interactive Selection Helpers ─────────────────────────────────────────
+
+const C = {
+    reset:     '\x1b[0m',
+    bold:      '\x1b[1m',
+    dim:       '\x1b[2m',
+    cyan:      '\x1b[36m',
+    green:     '\x1b[32m',
+    yellow:    '\x1b[33m',
+    gray:      '\x1b[90m',
+    clearLine: '\x1b[2K\r',
+    up:        (n) => `\x1b[${n}A`,
+    hide:      '\x1b[?25l',
+    show:      '\x1b[?25h',
+};
+
+function renderLines(stdout, lines, lastCount) {
+    if (lastCount > 0) stdout.write(C.up(lastCount));
+    for (const line of lines) stdout.write(C.clearLine + line + '\n');
+    return lines.length;
+}
+
+async function promptSelect(message, options, { visibleCount = 10 } = {}) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.log(`\n${message}`);
+        options.forEach((o, i) => console.log(`${i + 1}) ${o}`));
+        const ans = await askQuestion(`Enter number (1-${options.length}): `);
+        return options[Math.max(0, parseInt(ans, 10) - 1)] || options[0];
+    }
+    return new Promise((resolve) => {
+        let idx = 0, scroll = 0, drawn = 0;
+        const { stdin, stdout } = process;
+        stdout.write(C.hide);
+        function paint() {
+            const lines = [`${C.bold}${message}${C.reset} ${C.dim}(↑↓ navigate, enter select)${C.reset}`];
+            const end = Math.min(scroll + visibleCount, options.length);
+            if (scroll > 0) lines.push(`${C.dim}  ↑ ${scroll} more${C.reset}`);
+            for (let i = scroll; i < end; i++) {
+                const active = i === idx;
+                lines.push(`${active ? C.cyan + '❯ ' + C.reset : '  '}${active ? C.cyan + C.bold : ''}${options[i]}${C.reset}`);
+            }
+            if (end < options.length) lines.push(`${C.dim}  ↓ ${options.length - end} more${C.reset}`);
+            drawn = renderLines(stdout, lines, drawn);
+        }
+        function done(val) {
+            stdin.setRawMode(false); stdin.removeListener('data', onKey); stdout.write(C.show);
+            stdout.write(C.up(drawn));
+            for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
+            stdout.write(C.up(drawn));
+            stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${val}${C.reset}\n`);
+            resolve(val);
+        }
+        function onKey(k) {
+            if (k === '\x03') { stdin.setRawMode(false); stdout.write(C.show); process.exit(130); }
+            if (k === '\x1b[A' && idx > 0) { idx--; if (idx < scroll) scroll = idx; }
+            else if (k === '\x1b[B' && idx < options.length - 1) { idx++; if (idx >= scroll + visibleCount) scroll = idx - visibleCount + 1; }
+            else if (k === '\r' || k === '\n') { done(options[idx]); return; }
+            paint();
+        }
+        stdin.setRawMode(true); stdin.resume(); stdin.setEncoding('utf8'); stdin.on('data', onKey); paint();
+    });
+}
+
+async function promptMultiSelect(message, options, { visibleCount = 10 } = {}) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.log(`\n${message} (enter numbers separated by commas, or 'a' for all)`);
+        options.forEach((o, i) => console.log(`${i + 1}) ${o}`));
+        const ans = await askQuestion('Enter selection: ');
+        if (ans.trim().toLowerCase() === 'a') return [...options];
+        const picks = ans.split(',').map(n => options[parseInt(n.trim(), 10) - 1]).filter(Boolean);
+        return picks.length > 0 ? picks : [options[0]];
+    }
+    return new Promise((resolve) => {
+        let idx = 0, scroll = 0, drawn = 0;
+        const selected = new Set();
+        const { stdin, stdout } = process;
+        stdout.write(C.hide);
+        function paint() {
+            const lines = [`${C.bold}${message}${C.reset} ${C.dim}(space select, 'a' all, enter confirm)${C.reset}`];
+            const end = Math.min(scroll + visibleCount, options.length);
+            if (scroll > 0) lines.push(`${C.dim}  ↑ ${scroll} more${C.reset}`);
+            for (let i = scroll; i < end; i++) {
+                const active = i === idx, sel = selected.has(i);
+                const dot = sel ? `${C.green}●${C.reset}` : `${C.dim}○${C.reset}`;
+                const cur = active ? `${C.cyan}❯${C.reset}` : ' ';
+                const lbl = active ? `${C.cyan}${C.bold}${options[i]}${C.reset}` : sel ? `${C.green}${options[i]}${C.reset}` : options[i];
+                lines.push(` ${cur} ${dot} ${lbl}`);
+            }
+            if (end < options.length) lines.push(`${C.dim}  ↓ ${options.length - end} more${C.reset}`);
+            drawn = renderLines(stdout, lines, drawn);
+        }
+        function done() {
+            stdin.setRawMode(false); stdin.removeListener('data', onKey); stdout.write(C.show);
+            const result = selected.size > 0 ? [...selected].sort((a,b)=>a-b).map(i => options[i]) : [options[idx]];
+            stdout.write(C.up(drawn));
+            for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
+            stdout.write(C.up(drawn));
+            stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${result.join(', ')}${C.reset}\n`);
+            resolve(result);
+        }
+        function onKey(k) {
+            if (k === '\x03') { stdin.setRawMode(false); stdout.write(C.show); process.exit(130); }
+            if (k === '\x1b[A' && idx > 0) { idx--; if (idx < scroll) scroll = idx; }
+            else if (k === '\x1b[B' && idx < options.length - 1) { idx++; if (idx >= scroll + visibleCount) scroll = idx - visibleCount + 1; }
+            else if (k === ' ') { selected.has(idx) ? selected.delete(idx) : selected.add(idx); }
+            else if (k === 'a' || k === 'A') { selected.size === options.length ? selected.clear() : options.forEach((_, i) => selected.add(i)); }
+            else if (k === '\r' || k === '\n') { done(); return; }
+            paint();
+        }
+        stdin.setRawMode(true); stdin.resume(); stdin.setEncoding('utf8'); stdin.on('data', onKey); paint();
+    });
+}
+
+async function promptFileSearch(message, files) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.log(`\n${message}`);
+        files.forEach((f, i) => console.log(`${i + 1}) ${f}`));
+        console.log(`${files.length + 1}) [Enter custom path]`);
+        const ans = await askQuestion(`Enter number (1-${files.length + 1}): `);
+        const n = parseInt(ans, 10);
+        if (n >= 1 && n <= files.length) return files[n - 1];
+        return await askQuestion('Enter custom file path: ');
+    }
+    return new Promise((resolve) => {
+        let query = '', idx = 0, scroll = 0, drawn = 0;
+        const VISIBLE = 10;
+        const { stdin, stdout } = process;
+        stdout.write(C.hide);
+        function getFiltered() {
+            const base = query ? files.filter(f => f.toLowerCase().includes(query.toLowerCase())) : [...files];
+            return [...base, '[Enter custom path]'];
+        }
+        function highlightMatch(str, q) {
+            if (!q) return str;
+            const lo = str.toLowerCase(), qi = lo.indexOf(q.toLowerCase());
+            if (qi < 0) return str;
+            return str.slice(0, qi) + C.yellow + C.bold + str.slice(qi, qi + q.length) + C.reset + str.slice(qi + q.length);
+        }
+        function paint() {
+            const filtered = getFiltered();
+            if (idx >= filtered.length) { idx = filtered.length - 1; scroll = Math.max(0, idx - VISIBLE + 1); }
+            const lines = [
+                `${C.bold}${message}${C.reset}`,
+                `  ${C.cyan}❯${C.reset} ${query}${C.dim}▌ type to filter, ↑↓ navigate, enter select${C.reset}`
+            ];
+            const end = Math.min(scroll + VISIBLE, filtered.length);
+            if (scroll > 0) lines.push(`${C.dim}  ↑ ${scroll} more${C.reset}`);
+            for (let i = scroll; i < end; i++) {
+                const active = i === idx, isCustom = filtered[i] === '[Enter custom path]';
+                const prefix = active ? `${C.cyan}❯ ${C.reset}` : '  ';
+                let lbl = isCustom ? `${C.dim}[Enter custom path]${C.reset}` : highlightMatch(filtered[i], query);
+                if (active) lbl = `${C.cyan}${C.bold}${isCustom ? '[Enter custom path]' : filtered[i]}${C.reset}`;
+                lines.push(`${prefix}${lbl}`);
+            }
+            if (end < filtered.length) lines.push(`${C.dim}  ↓ ${filtered.length - end} more${C.reset}`);
+            drawn = renderLines(stdout, lines, drawn);
+        }
+        function done(val) {
+            stdin.setRawMode(false); stdin.removeListener('data', onKey); stdout.write(C.show);
+            stdout.write(C.up(drawn));
+            for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
+            stdout.write(C.up(drawn));
+            if (val === '[Enter custom path]') {
+                stdout.write(`${C.bold}${message}${C.reset} ${C.dim}custom path${C.reset}\n`);
+                askQuestion('Enter custom file path: ').then(resolve);
+            } else {
+                stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${val}${C.reset}\n`);
+                resolve(val);
+            }
+        }
+        function onKey(k) {
+            if (k === '\x03') { stdin.setRawMode(false); stdout.write(C.show); process.exit(130); }
+            const filtered = getFiltered();
+            if (k === '\x1b[A' && idx > 0) { idx--; if (idx < scroll) scroll = idx; }
+            else if (k === '\x1b[B' && idx < filtered.length - 1) { idx++; if (idx >= scroll + VISIBLE) scroll = idx - VISIBLE + 1; }
+            else if (k === '\x7f' || k === '\b') { if (query.length > 0) { query = query.slice(0, -1); idx = 0; scroll = 0; } }
+            else if (k === '\r' || k === '\n') { done(filtered[idx]); return; }
+            else if (k.length === 1 && k >= ' ') { query += k; idx = 0; scroll = 0; }
+            paint();
+        }
+        stdin.setRawMode(true); stdin.resume(); stdin.setEncoding('utf8'); stdin.on('data', onKey); paint();
+    });
+}
+
+async function promptConfirm(message, defaultYes = true) {
+    const opts = defaultYes ? ['Yes', 'No'] : ['No', 'Yes'];
+    const result = await promptSelect(message, opts);
+    return result === 'Yes';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function showProgressBar(label, durationMs = 1000) {
     const width = 30;
     const steps = 10;
@@ -870,81 +1062,31 @@ async function runInteractive() {
     }
     
     const candidateFiles = findSourceFiles(targetDir);
-    let selectedFile = '';
-    if (candidateFiles.length > 0) {
-      console.log('\nChoose a file to protect:');
-      candidateFiles.forEach((file, idx) => {
-        console.log(`${idx + 1}) ${file}`);
-      });
-      console.log(`${candidateFiles.length + 1}) [Enter custom path]`);
-      
-      while (true) {
-        const choice = await askQuestion(`Enter number (1-${candidateFiles.length + 1}): `);
-        const num = parseInt(choice, 10);
-        if (num >= 1 && num <= candidateFiles.length) {
-          selectedFile = candidateFiles[num - 1];
-          break;
-        } else if (num === candidateFiles.length + 1) {
-          selectedFile = await askQuestion('Enter custom file path: ');
-          break;
-        } else {
-          console.log('Invalid selection.');
-        }
-      }
-    } else {
-      selectedFile = await askQuestion('\nNo JS/TS source files found. Enter custom file path to protect: ');
-    }
-    
+    const selectedFile = candidateFiles.length > 0
+        ? await promptFileSearch('Choose a file to protect:', candidateFiles)
+        : await askQuestion('\nNo JS/TS source files found. Enter custom file path to protect: ');
+
     let selectedFunctions = [];
     const fullFilePath = path.resolve(targetDir, selectedFile);
     if (!fullFilePath.startsWith(targetDir)) {
-        throw new Error("Directory traversal detected. Protected file path must be inside the target directory.");
+        throw new Error('Directory traversal detected. Protected file path must be inside the target directory.');
     }
     if (selectedFile && fs.existsSync(fullFilePath)) {
-      let content = '';
-      try {
-        content = fs.readFileSync(fullFilePath, 'utf8');
-      } catch (e) {}
-      
-      let detectedFunctions = [];
-      try {
-        detectedFunctions = babelParseExportedFunctions(content);
-      } catch (e) {
-        detectedFunctions = extractExportedFunctions(content);
-      }
-      
-      if (detectedFunctions.length > 0) {
-        console.log('\nChoose function(s) to protect:');
-        console.log('1) Protect all functions');
-        detectedFunctions.forEach((func, idx) => {
-          console.log(`${idx + 2}) ${func}`);
-        });
-        console.log(`${detectedFunctions.length + 2}) [Enter custom function name]`);
-        
-        while (true) {
-          const choice = await askQuestion(`Enter number (1-${detectedFunctions.length + 2}): `);
-          const num = parseInt(choice, 10);
-          if (num === 1) {
-            selectedFunctions = detectedFunctions;
-            break;
-          } else if (num >= 2 && num <= detectedFunctions.length + 1) {
-            selectedFunctions = [detectedFunctions[num - 2]];
-            break;
-          } else if (num === detectedFunctions.length + 2) {
-            const customFunc = await askQuestion('Enter custom function name: ');
-            selectedFunctions = [customFunc];
-            break;
-          } else {
-            console.log('Invalid selection.');
-          }
+        let content = '';
+        try { content = fs.readFileSync(fullFilePath, 'utf8'); } catch (e) {}
+        let detectedFunctions = [];
+        try { detectedFunctions = babelParseExportedFunctions(content); } catch (e) {
+            detectedFunctions = extractExportedFunctions(content);
         }
-      } else {
-        const customFunc = await askQuestion('\nNo exportable functions detected. Enter custom function name to protect: ');
-        selectedFunctions = [customFunc];
-      }
+        if (detectedFunctions.length > 0) {
+            selectedFunctions = await promptMultiSelect('Choose function(s) to protect:', detectedFunctions);
+        } else {
+            const customFunc = await askQuestion('\nNo exportable functions detected. Enter custom function name to protect: ');
+            selectedFunctions = [customFunc];
+        }
     } else {
-      const customFunc = await askQuestion('\nFile does not exist or empty. Enter custom function name to protect: ');
-      selectedFunctions = [customFunc];
+        const customFunc = await askQuestion('\nFile does not exist or empty. Enter custom function name to protect: ');
+        selectedFunctions = [customFunc];
     }
     
     let password = '';
@@ -965,8 +1107,7 @@ async function runInteractive() {
     
     const apiEndpoint = await askQuestion('\nConfirm API endpoint', '/api/fortress');
     const protectedDirName = await askQuestion('Confirm output directory', './protected');
-    const addToEnvAns = await askQuestion('Add signing password and keys path to .env? (y/n)', 'y');
-    const addToEnv = addToEnvAns.toLowerCase().startsWith('y');
+    const addToEnv = await promptConfirm('Add signing password and keys path to .env?', true);
     
     console.log('');
     await showProgressBar('Generating keypair files   ', 600);
