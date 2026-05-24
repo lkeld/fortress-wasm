@@ -1,8 +1,12 @@
 {
   "name": "@lkeld/fortress-wasm",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Virtualised, self-checksumming WebAssembly runtime with steganographic session keys",
   "main": "index.js",
+  "bin": {
+    "fortress": "./bin/index.js",
+    "create-fortress-app": "./packages/create-fortress-app/bin/index.js"
+  },
   "exports": {
     "./client": "./packages/sdk/index.js",
     "./sdk": "./packages/sdk/index.js",
@@ -88,11 +92,16 @@
   },
   "files": [
     "index.js",
+    "bin",
     "compiler/dist",
     "server/scrambler.js",
     "server/scrambler.d.ts",
+    "server/nonce-store.js",
+    "server/nonce-store.d.ts",
     "pkg-node",
     "pkg-web",
-    "scripts/generate_isa.js"
+    "packages",
+    "scripts/generate_isa.js",
+    "next.js"
   ]
 }
