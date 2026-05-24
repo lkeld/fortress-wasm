@@ -2,6 +2,14 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.2] - 2026-05-25
+
+### Fixed
+- **Consolidated VM Sandbox Worker Warnings**: Silenced the `isolated-vm` missing fallback warning on parallel worker threads by verifying `isMainThread` before emitting console warning outputs.
+- **Fixed Scanner False Positives**: Restricted the annotation scanner regex matcher to check for exact word boundaries (`/@protect\b/`), preventing false positive matches on common `@protected` JSDoc annotations from third-party modules.
+- **Excluded Build Directories**: Added `.next`, `build`, `out`, `.nuxt`, `.cache`, and `.fortress_keys` to the list of globally ignored directories in the recursive file scanner, preventing syntax errors when parsing build output chunks.
+- **Enriched Compiler Error Logging**: Added the file path context to compilation and scanner catch logs to make debugging syntax issues in external repositories simpler.
+
 ## [1.5.1] - 2026-05-25
 
 ### Fixed

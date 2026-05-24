@@ -1,4 +1,5 @@
 import * as vm from 'vm';
+import { isMainThread } from 'worker_threads';
 
 /**
  * RISK LEVELS & SANDBOX MODES:
@@ -27,11 +28,13 @@ class IsolatedVerifier {
             this.ivm = require('isolated-vm');
             this.hasIvm = true;
         } catch (e) {
-            console.warn(
-                "[WARNING] 'isolated-vm' is not installed. Falling back to Node.js built-in 'vm' module.\n" +
-                "RISK WARNING: The built-in 'vm' module does not provide a secure sandbox. " +
-                "Executing untrusted code can lead to Remote Code Execution (RCE) on the host system."
-            );
+            if (isMainThread) {
+                console.warn(
+                    "[WARNING] 'isolated-vm' is not installed. Falling back to Node.js built-in 'vm' module.\n" +
+                    "RISK WARNING: The built-in 'vm' module does not provide a secure sandbox. " +
+                    "Executing untrusted code can lead to Remote Code Execution (RCE) on the host system."
+                );
+            }
         }
     }
 

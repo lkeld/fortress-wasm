@@ -9,6 +9,8 @@ import * as os from 'os';
 
 declare var process: any;
 
+const IGNORED_DIRS = ['node_modules', '.git', 'dist', '.next', 'build', 'out', '.nuxt', '.cache', '.fortress_keys'];
+
 function scanDirectorySync(dirPath: string, options?: any): string[] {
     const include = options && options.include;
     const matches = (filePath: string) => {
@@ -44,7 +46,7 @@ function scanDirectorySync(dirPath: string, options?: any): string[] {
     
     const files = fs.readdirSync(dirPath);
     for (const file of files) {
-        if (file === 'node_modules' || file === '.git') continue;
+        if (IGNORED_DIRS.includes(file)) continue;
         const fullPath = path.join(dirPath, file);
         const s = fs.statSync(fullPath);
         if (s.isDirectory()) {
@@ -214,7 +216,7 @@ export function scanFile(filePath: string): ProtectedFunction[] {
     
     while ((match = JSDocRegex.exec(source)) !== null) {
         const commentContent = match[1];
-        if (!commentContent.includes('@protect')) continue;
+        if (!/@protect\b/.test(commentContent)) continue;
         
         let customName: string | undefined;
         let endpoint: string | undefined;
@@ -301,7 +303,7 @@ export function scanFile(filePath: string): ProtectedFunction[] {
             });
 
         } catch (e: any) {
-            console.error("Scanner Error:", e.stack || e);
+            console.error(`Scanner Error in ${filePath}:`, e.stack || e);
             // Silence/propagate compilation errors for scanner robustness
         }
     }
@@ -315,6 +317,7 @@ export function scanDirectory(dirPath: string): ProtectedFunction[] {
     
     const files = fs.readdirSync(dirPath);
     for (const file of files) {
+        if (IGNORED_DIRS.includes(file)) continue;
         const fullPath = path.join(dirPath, file);
         const stat = fs.statSync(fullPath);
         if (stat.isDirectory()) {
@@ -338,7 +341,7 @@ function findFilesRecursive(dir: string): string[] {
     }
     const list = fs.readdirSync(dir);
     for (const file of list) {
-        if (file === 'node_modules' || file === '.git' || file === 'dist') continue;
+        if (IGNORED_DIRS.includes(file)) continue;
         const fullPath = path.join(dir, file);
         const s = fs.statSync(fullPath);
         if (s.isDirectory()) {
