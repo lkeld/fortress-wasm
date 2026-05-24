@@ -5,6 +5,9 @@
     "create-fortress-app": "./bin/index.js"
   },
   "dependencies": {
-    "@babel/parser": "^7.0.0"
+    "@babel/parser": "^7.0.0",
+    "magicast": "^0.3.0",
+    "cross-spawn": "^7.0.3",
+    "tree-kill": "^2.1.2"
   }
 }

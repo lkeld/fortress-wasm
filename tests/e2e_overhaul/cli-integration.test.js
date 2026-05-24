@@ -309,5 +309,141 @@ runTestSuite('F4: create-fortress-app CLI E2E Overhaul Test Suite', {
         const envContent = fs.readFileSync(envPath, 'utf8');
         assert.ok(/FORTRESS_SIGNING_PASSWORD="[a-f0-9]{16}"/.test(envContent));
         cleanupDirs();
+    },
+
+    'Gitattributes Generation & Idempotency - correctly writes and updates .gitattributes': async () => {
+        const dir = getTempDir();
+        const gitattribPath = path.join(dir, '.gitattributes');
+        fs.writeFileSync(gitattribPath, '*.txt text\n');
+        
+        const result = await spawnProcess('node', [createStubPath, dir, '--framework', 'next']);
+        assertExitCode(result, 0);
+        
+        assert.ok(fs.existsSync(gitattribPath));
+        let content = fs.readFileSync(gitattribPath, 'utf8');
+        assert.ok(content.includes('*.fvbc binary'));
+        assert.ok(content.includes('*.opcodes.json binary'));
+        assert.ok(content.includes('# fortress-wasm-start'));
+        assert.ok(content.includes('# fortress-wasm-end'));
+        assert.ok(content.includes('*.txt text'));
+        
+        fs.unlinkSync(path.join(dir, 'fortress.config.js'));
+        fs.rmSync(path.join(dir, 'protected'), { recursive: true, force: true });
+        
+        const result2 = await spawnProcess('node', [createStubPath, dir, '--framework', 'next']);
+        assertExitCode(result2, 0);
+        
+        content = fs.readFileSync(gitattribPath, 'utf8');
+        const occurrences = (content.match(/# fortress-wasm-start/g) || []).length;
+        assert.strictEqual(occurrences, 1);
+        cleanupDirs();
+    },
+
+    'Husky Hook Setup - skips if not a Git repository': async () => {
+        const dir = getTempDir();
+        const result = await spawnProcess('node', [createStubPath, dir, '--framework', 'next']);
+        assertExitCode(result, 0);
+        assertStdoutContains(result, 'Git repository not detected. Skipping Husky pre-commit hook setup.');
+        assert.ok(!fs.existsSync(path.join(dir, '.husky')));
+        cleanupDirs();
+    },
+
+    'Husky Hook Setup - initializes Husky and creates pre-commit hook': async () => {
+        const dir = getTempDir();
+        fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+        
+        const result = await spawnProcess('node', [createStubPath, dir, '--framework', 'next']);
+        assertExitCode(result, 0);
+        
+        const preCommitPath = path.join(dir, '.husky/pre-commit');
+        assert.ok(fs.existsSync(preCommitPath));
+        const content = fs.readFileSync(preCommitPath, 'utf8');
+        assert.ok(content.includes('Recompiling protected functions...'));
+        assert.ok(content.includes('fortress build'));
+        
+        if (process.platform !== 'win32') {
+            const stats = fs.statSync(preCommitPath);
+            const isExecutable = (stats.mode & 0o111) !== 0;
+            assert.ok(isExecutable);
+        }
+        cleanupDirs();
+    },
+
+    'lint-staged Compatibility - prepends build to package.json and config files': async () => {
+        const dir = getTempDir();
+        
+        const pkg = {
+            dependencies: { next: '^13.0.0' },
+            'lint-staged': {
+                '*.js': 'eslint'
+            }
+        };
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
+        
+        fs.writeFileSync(path.join(dir, '.lintstagedrc.json'), JSON.stringify({
+            '*.ts': 'tsc'
+        }));
+        
+        fs.writeFileSync(path.join(dir, 'lint-staged.config.js'), 'module.exports = { "*.css": "stylelint" };');
+        
+        const result = await spawnProcess('node', [createStubPath, dir, '--framework', 'next']);
+        assertExitCode(result, 0);
+        
+        const updatedPkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+        assert.deepStrictEqual(updatedPkg['lint-staged']['protected/**'], ['fortress build']);
+        
+        const updatedJson = JSON.parse(fs.readFileSync(path.join(dir, '.lintstagedrc.json'), 'utf8'));
+        assert.deepStrictEqual(updatedJson['protected/**'], ['fortress build']);
+        
+        const updatedJs = fs.readFileSync(path.join(dir, 'lint-staged.config.js'), 'utf8');
+        assert.ok(updatedJs.includes('protected/**') && updatedJs.includes('fortress build'));
+        
+        cleanupDirs();
+    },
+
+    'Dev CLI Lazy Key Generation - generates key if missing': async () => {
+        const dir = getTempDir();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), 'module.exports = { serve: { port: 9876 }, protect: [] };');
+        fs.writeFileSync(path.join(dir, '.gitignore'), '# Gitignore\n');
+        
+        const fortressBin = path.join(__dirname, '../../bin/index.js');
+        const { spawn } = require('child_process');
+        
+        const child = spawn('node', [fortressBin, 'dev'], {
+            cwd: dir,
+            env: {
+                ...process.env,
+                FORTRESS_SIGNING_PASSWORD: ''
+            }
+        });
+        
+        let stdout = '';
+        await new Promise((resolve) => {
+            child.stdout.on('data', (data) => {
+                stdout += data.toString();
+                if (stdout.includes('Dev key created at .fortress_dev_key')) {
+                    resolve();
+                }
+            });
+            child.stderr.on('data', (data) => {
+                stdout += data.toString();
+            });
+            setTimeout(resolve, 3000);
+        });
+        
+        child.kill('SIGKILL');
+        
+        assert.ok(stdout.includes('[fortress] No .fortress_dev_key found. Generating local dev signing key...'));
+        assert.ok(stdout.includes('✓ Dev key created at .fortress_dev_key'));
+        
+        const devKeyPath = path.join(dir, '.fortress_dev_key');
+        assert.ok(fs.existsSync(devKeyPath));
+        const key = fs.readFileSync(devKeyPath, 'utf8').trim();
+        assert.strictEqual(key.length, 32);
+        
+        const gitignore = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
+        assert.ok(gitignore.includes('.fortress_dev_key'));
+        
+        cleanupDirs();
     }
 });

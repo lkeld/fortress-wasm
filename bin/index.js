@@ -90,11 +90,110 @@ if (!command || command === '--help' || command === '-h') {
         process.exit(0);
     }
 
-    if (command === 'dev') {
+    if (command === 'dev' || command === 'watch') {
+        if (!process.env.FORTRESS_SIGNING_PASSWORD) {
+            if (process.env.FORTRESS_DEV_KEY) {
+                process.env.FORTRESS_SIGNING_PASSWORD = process.env.FORTRESS_DEV_KEY;
+            } else {
+                const devKeyPath = path.resolve(process.cwd(), '.fortress_dev_key');
+                if (fs.existsSync(devKeyPath)) {
+                    process.env.FORTRESS_SIGNING_PASSWORD = fs.readFileSync(devKeyPath, 'utf8').trim();
+                } else {
+                    const devKey = crypto.randomBytes(16).toString('hex');
+                    fs.writeFileSync(devKeyPath, devKey + '\n');
+                    
+                    const gitignorePath = path.resolve(process.cwd(), '.gitignore');
+                    if (fs.existsSync(gitignorePath)) {
+                        let gitignoreContent = fs.readFileSync(gitignorePath, 'utf8');
+                        if (!gitignoreContent.includes('.fortress_dev_key')) {
+                            gitignoreContent = gitignoreContent.trimRight() + '\n.fortress_dev_key\n';
+                            fs.writeFileSync(gitignorePath, gitignoreContent);
+                        }
+                    }
+                    console.log('[fortress] No .fortress_dev_key found. Generating local dev signing key...');
+                    console.log('[fortress] ✓ Dev key created at .fortress_dev_key (gitignored — local to this machine)');
+                    process.env.FORTRESS_SIGNING_PASSWORD = devKey;
+                }
+            }
+        }
+
         let server = null;
         let watchers = [];
         let configWatcher = null;
         let rebuildTimeout = null;
+        let childProcess = null;
+        let isParentExiting = false;
+        let childExitCode = 0;
+
+        const dashDashIndex = process.argv.indexOf('--');
+        let childCmd = null;
+        let childArgs = [];
+        if (dashDashIndex !== -1 && dashDashIndex > 2) {
+            childCmd = process.argv[dashDashIndex + 1];
+            childArgs = process.argv.slice(dashDashIndex + 2);
+        }
+
+        function spawnChildProcess(port) {
+            if (childProcess) return;
+
+            const spawn = require('cross-spawn');
+            console.log(`[fortress] Spawning child command: ${childCmd} ${childArgs.join(' ')}`);
+            childProcess = spawn(childCmd, childArgs, {
+                stdio: 'inherit',
+                env: {
+                    ...process.env,
+                    FORTRESS_PORT: port.toString(),
+                    FORTRESS_DEV_PORT: port.toString()
+                }
+            });
+
+            childProcess.on('exit', (code, signal) => {
+                console.log(`[fortress] Child process exited with code ${code} (signal ${signal})`);
+                if (code !== null) {
+                    childExitCode = code;
+                } else {
+                    childExitCode = 1;
+                }
+                childProcess = null;
+
+                if (!isParentExiting) {
+                    isParentExiting = true;
+                    console.log(`[fortress] Child process exited spontaneously. Shutting down dev server...`);
+                    if (configWatcher) {
+                        try { configWatcher.close(); } catch (e) {}
+                    }
+                    stopDevServer(() => {
+                        process.exit(childExitCode);
+                    });
+                }
+            });
+
+            childProcess.on('error', (err) => {
+                console.error(`[fortress] Failed to start child process:`, err);
+                childProcess = null;
+                if (!isParentExiting) {
+                    isParentExiting = true;
+                    if (configWatcher) {
+                        try { configWatcher.close(); } catch (e) {}
+                    }
+                    stopDevServer(() => {
+                        process.exit(1);
+                    });
+                }
+            });
+        }
+
+        process.on('exit', () => {
+            if (childProcess && childProcess.pid) {
+                try {
+                    const treeKill = require('tree-kill');
+                    treeKill(childProcess.pid, 'SIGKILL');
+                } catch (e) {}
+                try {
+                    process.kill(childProcess.pid, 'SIGKILL');
+                } catch (e) {}
+            }
+        });
 
         function stopDevServer(callback) {
             watchers.forEach(w => {
@@ -209,6 +308,9 @@ if (!command || command === '--help' || command === '-h') {
                     console.log(`  Payloads:  http://localhost:${portToTry}/api/fortress`);
                     console.log(`  Worker:    http://localhost:${portToTry}/_fortress/worker.js`);
                     setupWatcher();
+                    if (childCmd && !childProcess) {
+                        spawnChildProcess(portToTry);
+                    }
                 });
             }
 
@@ -302,16 +404,73 @@ if (!command || command === '--help' || command === '-h') {
             }
         }
 
-        process.on('SIGINT', () => {
-            console.log('\n[fortress] Stopping dev server...');
+        function handleParentExitSignal(signal) {
+            if (isParentExiting) return;
+            isParentExiting = true;
+
+            console.log(`\n[fortress] Intercepted ${signal}. Initiating coordinated shutdown...`);
+
             if (configWatcher) {
                 try { configWatcher.close(); } catch (e) {}
             }
+
+            let serverStopped = false;
+            let treeKillStopped = false;
+
+            const checkExit = () => {
+                if (serverStopped && treeKillStopped) {
+                    process.exit(childExitCode);
+                }
+            };
+
+            // Global exit timeout fallback (3 seconds) to ensure parent process always exits
+            const globalFallbackTimer = setTimeout(() => {
+                console.warn('[fortress] Shutdown timeout. Forcing immediate parent exit.');
+                process.exit(childExitCode);
+            }, 3000);
+
+            // Shut down HTTP server and file watchers
             stopDevServer(() => {
-                console.log('[fortress] Dev server stopped.');
-                process.exit(0);
+                console.log('[fortress] Dev server and watchers stopped.');
+                serverStopped = true;
+                checkExit();
             });
-        });
+
+            if (childProcess && childProcess.pid) {
+                const killPid = childProcess.pid;
+                const treeKill = require('tree-kill');
+                let treeKillCompleted = false;
+
+                const done = (err) => {
+                    if (treeKillCompleted) return;
+                    treeKillCompleted = true;
+                    if (fallbackTimer) clearTimeout(fallbackTimer);
+                    
+                    if (err) {
+                        console.error('[fortress] tree-kill error:', err);
+                    } else {
+                        console.log(`[fortress] Successfully terminated child process tree for PID ${killPid}`);
+                    }
+                    
+                    treeKillStopped = true;
+                    checkExit();
+                };
+
+                const fallbackTimer = setTimeout(() => {
+                    console.warn('[fortress] tree-kill timeout. Forcing parent exit...');
+                    done();
+                }, 2000);
+
+                console.log(`[fortress] Terminating child process tree for PID ${killPid}...`);
+                treeKill(killPid, 'SIGTERM', done);
+            } else {
+                treeKillStopped = true;
+                checkExit();
+            }
+        }
+
+        process.on('SIGINT', () => handleParentExitSignal('SIGINT'));
+        process.on('SIGTERM', () => handleParentExitSignal('SIGTERM'));
 
         startDevServer();
         setupConfigWatcher();

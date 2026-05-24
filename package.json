@@ -46,6 +46,10 @@
     "test:opcodes": "node tests/e2e_overhaul/opcodes.test.js",
     "test:sdk": "node tests/e2e_overhaul/sdk.test.js",
     "test:complex": "node tests/e2e_overhaul/complex.test.js",
+    "test:auto-inject": "node tests/e2e_overhaul/auto-inject.test.js",
+    "test:ci-inject": "node tests/e2e_overhaul/ci-inject.test.js",
+    "test:version-compat": "node tests/e2e_overhaul/version-compat.test.js",
+    "test:idempotency": "node tests/e2e_overhaul/idempotency.test.js",
     "build:isa:dev": "DEV_MODE=true node scripts/generate_isa.js",
     "build:isa:prod": "node scripts/generate_isa.js",
     "build:compiler": "tsc -p compiler/tsconfig.json",
@@ -78,8 +82,11 @@
   "homepage": "https://github.com/lkeld/fortress-wasm#readme",
   "dependencies": {
     "argon2": "^0.40.3",
+    "cross-spawn": "^7.0.3",
     "jimp": "^1.6.1",
-    "pngjs": "^7.0.0"
+    "magicast": "^0.3.4",
+    "pngjs": "^7.0.0",
+    "tree-kill": "^1.2.2"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",

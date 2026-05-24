@@ -150,7 +150,7 @@ export async function generateHandshake(
         signature
     ]);
 
-    const sessionKeyUint8 = new Uint8Array(sessionKey);
+    const sessionKeyUint8 = new Uint8Array(sessionKey as ArrayBuffer).slice(0);
     const handshakeHeaderBase64 = handshakeHeader.toString('base64');
 
     if (Buffer.isBuffer(sharedSecret)) {

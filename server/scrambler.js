@@ -159,7 +159,7 @@ async function generateHandshake(clientPublicKey, nonceStore) {
         serverEphemeralPublicKeyRaw,
         signature
     ]);
-    const sessionKeyUint8 = new Uint8Array(sessionKey);
+    const sessionKeyUint8 = new Uint8Array(sessionKey).slice(0);
     const handshakeHeaderBase64 = handshakeHeader.toString('base64');
     if (Buffer.isBuffer(sharedSecret)) {
         sharedSecret.fill(0);

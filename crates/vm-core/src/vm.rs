@@ -342,6 +342,10 @@ impl Vm {
             let raw_instruction = self.read_byte()?;
             let opcode_val_translated = *self.opcode_map.get(raw_instruction as usize).ok_or(VmError::UnexpectedEndOfCode)?;
 
+            if opcode_val_translated == 0 && self.opcode_map.iter().all(|&x| x == 0) {
+                return Err(VmError::UnexpectedEndOfCode);
+            }
+
             let gas_cost = match crate::opcodes::OpCode::try_from(opcode_val_translated) {
                 Ok(crate::opcodes::OpCode::PushInt) | Ok(crate::opcodes::OpCode::Pop) | Ok(crate::opcodes::OpCode::Dup) | Ok(crate::opcodes::OpCode::PushFloat) |
                 Ok(crate::opcodes::OpCode::PushBool) | Ok(crate::opcodes::OpCode::PushNull) | Ok(crate::opcodes::OpCode::Swap) | Ok(crate::opcodes::OpCode::Rotate) |

@@ -1137,6 +1137,7 @@ mod tests {
         assert_eq!(vm.opcode_map, [0u8; 256]);
     }
 
+
     #[test]
     fn test_math_opcodes_all() {
         // Floor

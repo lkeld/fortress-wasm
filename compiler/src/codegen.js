@@ -568,12 +568,12 @@ var CodeGenerator = /** @class */ (function () {
                         this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpLeft));
                         this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpRight));
                         this.emit(opcodes_1.OpCode.BitXor);
-                        // ((x & y) << 1)
+                        // ((x & y) + (x & y))
                         this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpLeft));
                         this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpRight));
                         this.emit(opcodes_1.OpCode.BitAnd);
-                        this.emit(opcodes_1.OpCode.PushInt, 1);
-                        this.emit(opcodes_1.OpCode.Shl);
+                        this.emit(opcodes_1.OpCode.Dup);
+                        this.emit(opcodes_1.OpCode.Add);
                         this.emit(opcodes_1.OpCode.Add);
                         if (z1 && z2) {
                             // Compute ((z1 * z1 + z1) & 1)
@@ -610,8 +610,8 @@ var CodeGenerator = /** @class */ (function () {
                         this.emit(opcodes_1.OpCode.LoadLocal, this.resolveLocal(tmpRight));
                         this.emit(opcodes_1.OpCode.BitNot);
                         this.emit(opcodes_1.OpCode.BitAnd);
-                        this.emit(opcodes_1.OpCode.PushInt, 1);
-                        this.emit(opcodes_1.OpCode.Shl);
+                        this.emit(opcodes_1.OpCode.Dup);
+                        this.emit(opcodes_1.OpCode.Add);
                         this.emit(opcodes_1.OpCode.Add);
                         this.emit(opcodes_1.OpCode.PushInt, 1);
                         this.emit(opcodes_1.OpCode.Add);
@@ -718,8 +718,11 @@ var CodeGenerator = /** @class */ (function () {
                             break;
                         }
                         case '/': {
-                            var isIntMath = this.isIntExpression(expr.left) && this.isIntExpression(expr.right);
-                            var useMba = process.env.DEV_MODE !== 'true' && isIntMath;
+                            var isIntDivision = this.isIntExpression(expr.left) && this.isIntExpression(expr.right) &&
+                                expr.left.type === 'Literal' && expr.right.type === 'Literal' &&
+                                typeof expr.left.value === 'number' && typeof expr.right.value === 'number' &&
+                                expr.right.value !== 0 && (expr.left.value % expr.right.value === 0);
+                            var useMba = process.env.DEV_MODE !== 'true' && isIntDivision;
                             if (useMba) {
                                 /*
                                  * Mathematical Proof of Equivalence for Division Polynomial MBA Obfuscation:

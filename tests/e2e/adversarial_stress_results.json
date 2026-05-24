@@ -1,0 +1,526 @@
+[
+  {
+    "area": "1. Scanner",
+    "name": "Multiple JSDoc Comments and nested comments block extraction",
+    "status": "FAIL",
+    "details": "Failed: length=1"
+  },
+  {
+    "area": "1. Scanner",
+    "name": "Nested braces in regex block extraction",
+    "status": "FAIL",
+    "details": "Failed: length=0"
+  },
+  {
+    "area": "1. Scanner",
+    "name": "Division lookalike regex with braces",
+    "status": "FAIL",
+    "details": "Failed: scanned code contains followUp or invalid extraction."
+  },
+  {
+    "area": "1. Scanner",
+    "name": "Complex string escapes with braces block extraction",
+    "status": "FAIL",
+    "details": "Failed: scanned code contains followUp2 or invalid extraction."
+  },
+  {
+    "area": "2. Multi-Declarator",
+    "name": "Nested block multi-declarator",
+    "inputs": [],
+    "v8": {
+      "value": 3
+    },
+    "fvm": {
+      "value": 3
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "2. Multi-Declarator",
+    "name": "For loop initializer multi-declarator",
+    "inputs": [],
+    "v8": {
+      "value": 10
+    },
+    "fvm": {
+      "error": "Expected token type 34, got 36 at line 8"
+    },
+    "status": "FAIL",
+    "details": "Unmatched error. V8 Error: null, FVM Error: Expected token type 34, got 36 at line 8"
+  },
+  {
+    "area": "2. Multi-Declarator",
+    "name": "For loop initializer destructuring with defaults",
+    "inputs": [],
+    "v8": {
+      "value": 10
+    },
+    "fvm": {
+      "error": "Property right of AssignmentExpression expected node to be of a type [\"Expression\"] but instead got \"VariableDeclaration\""
+    },
+    "status": "FAIL",
+    "details": "Unmatched error. V8 Error: null, FVM Error: Property right of AssignmentExpression expected node to be of a type [\"Expression\"] but instead got \"VariableDeclaration\""
+  },
+  {
+    "area": "3. Destructuring Null/Undefined",
+    "name": "Destructuring null object",
+    "inputs": [],
+    "v8": {
+      "error": "Cannot destructure property 'a' of 'obj' as it is null."
+    },
+    "fvm": {
+      "error": "TypeError: trace: Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(Jump) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(Dup) -> Ok(Dup) -> Ok(Mul) -> Ok(Add) -> Ok(PushInt) -> Ok(BitAnd) -> Ok(PushInt) -> Ok(Eq) -> Ok(JumpIf) -> Ok(PushNull) -> Ok(StoreLocal) -> Ok(LoadLocal) -> Ok(PushString) -> Ok(GetMember)"
+    },
+    "status": "PASS",
+    "details": "Both V8 and FVM threw errors as expected."
+  },
+  {
+    "area": "3. Destructuring Null/Undefined",
+    "name": "Destructuring undefined object",
+    "inputs": [],
+    "v8": {
+      "error": "Cannot destructure property 'a' of 'obj' as it is undefined."
+    },
+    "fvm": {
+      "error": "Expected token type 21, got 34 at line 2"
+    },
+    "status": "PASS",
+    "details": "Both V8 and FVM threw errors as expected."
+  },
+  {
+    "area": "3. Destructuring Null/Undefined",
+    "name": "Destructuring valid array (checks for unintended TypeErrors on valid arrays)",
+    "inputs": [],
+    "v8": {
+      "value": 42
+    },
+    "fvm": {
+      "value": 42
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array.isArray double evaluation side-effects",
+    "inputs": [],
+    "v8": {
+      "value": [
+        true,
+        1
+      ]
+    },
+    "fvm": {
+      "error": "Function __call_closure_0 not found"
+    },
+    "status": "FAIL",
+    "details": "Unmatched error. V8 Error: null, FVM Error: Function __call_closure_0 not found"
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array.isArray type check - array",
+    "inputs": [
+      [
+        1,
+        2
+      ]
+    ],
+    "v8": {
+      "value": true
+    },
+    "fvm": {
+      "value": true
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array.isArray type check - object",
+    "inputs": [
+      {}
+    ],
+    "v8": {
+      "value": false
+    },
+    "fvm": {
+      "value": false
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array.isArray type check - null",
+    "inputs": [
+      null
+    ],
+    "v8": {
+      "value": false
+    },
+    "fvm": {
+      "value": false
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array.isArray type check - string starting with bracket",
+    "inputs": [
+      "[1,2]"
+    ],
+    "v8": {
+      "value": false
+    },
+    "fvm": {
+      "value": false
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array concat non-array value",
+    "inputs": [
+      [
+        1,
+        2
+      ],
+      3
+    ],
+    "v8": {
+      "value": [
+        1,
+        2,
+        3
+      ]
+    },
+    "fvm": {
+      "value": [
+        1,
+        2,
+        3
+      ]
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array concat array value",
+    "inputs": [
+      [
+        1,
+        2
+      ],
+      [
+        3,
+        4
+      ]
+    ],
+    "v8": {
+      "value": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    "fvm": {
+      "value": [
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array concat null value",
+    "inputs": [
+      [
+        1,
+        2
+      ],
+      null
+    ],
+    "v8": {
+      "value": [
+        1,
+        2,
+        null
+      ]
+    },
+    "fvm": {
+      "value": [
+        1,
+        2,
+        null
+      ]
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "4. Array.isArray & Concat",
+    "name": "Array concat string starting with bracket",
+    "inputs": [
+      [
+        1,
+        2
+      ],
+      "[3,4]"
+    ],
+    "v8": {
+      "value": [
+        1,
+        2,
+        "[3,4]"
+      ]
+    },
+    "fvm": {
+      "value": [
+        1,
+        2,
+        "[3,4]"
+      ]
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "5. Float Indexing",
+    "name": "List get integral float key",
+    "inputs": [],
+    "v8": {
+      "value": 20
+    },
+    "fvm": {
+      "value": 20
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "5. Float Indexing",
+    "name": "List get non-integral float key",
+    "inputs": [],
+    "v8": {},
+    "fvm": {
+      "value": null
+    },
+    "status": "PASS",
+    "details": "Expected discrepancy verified: V8 returned undefined, FVM returned null"
+  },
+  {
+    "area": "5. Float Indexing",
+    "name": "List set integral float key",
+    "inputs": [],
+    "v8": {
+      "value": 99
+    },
+    "fvm": {
+      "error": "TypeError: trace: Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(Jump) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(LoadLocal) -> Ok(PushNull) -> Ok(Eq) -> Ok(JumpIfNot) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(SetMember)"
+    },
+    "status": "FAIL",
+    "details": "Unmatched error. V8 Error: null, FVM Error: TypeError: trace: Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(Jump) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(LoadLocal) -> Ok(PushNull) -> Ok(Eq) -> Ok(JumpIfNot) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(SetMember)"
+  },
+  {
+    "area": "5. Float Indexing",
+    "name": "List set non-integral float key",
+    "inputs": [],
+    "v8": {
+      "value": 20
+    },
+    "fvm": {
+      "error": "TypeError: trace: Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(Jump) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(LoadLocal) -> Ok(PushNull) -> Ok(Eq) -> Ok(JumpIfNot) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(SetMember)"
+    },
+    "status": "FAIL",
+    "details": "Unmatched error. V8 Error: null, FVM Error: TypeError: trace: Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(Jump) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(LoadLocal) -> Ok(PushNull) -> Ok(Eq) -> Ok(JumpIfNot) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(SetMember)"
+  },
+  {
+    "area": "5. Float Indexing",
+    "name": "String get integral float key",
+    "inputs": [],
+    "v8": {
+      "value": "e"
+    },
+    "fvm": {
+      "value": "e"
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "5. Float Indexing",
+    "name": "String get non-integral float key",
+    "inputs": [],
+    "v8": {},
+    "fvm": {
+      "error": "TypeError: trace: Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(Jump) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(Dup) -> Ok(Dup) -> Ok(Mul) -> Ok(Add) -> Ok(PushInt) -> Ok(BitAnd) -> Ok(PushInt) -> Ok(Eq) -> Ok(JumpIf) -> Ok(PushString) -> Ok(StoreLocal) -> Ok(PushFloat) -> Ok(StoreLocal) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(GetMember)"
+    },
+    "status": "FAIL",
+    "details": "Unmatched error. V8 Error: null, FVM Error: TypeError: trace: Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(Jump) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(StoreLocal) -> Ok(PushInt) -> Ok(Dup) -> Ok(Dup) -> Ok(Mul) -> Ok(Add) -> Ok(PushInt) -> Ok(BitAnd) -> Ok(PushInt) -> Ok(Eq) -> Ok(JumpIf) -> Ok(PushString) -> Ok(StoreLocal) -> Ok(PushFloat) -> Ok(StoreLocal) -> Ok(LoadLocal) -> Ok(LoadLocal) -> Ok(GetMember)"
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float 0.000001",
+    "inputs": [],
+    "v8": {
+      "value": "0.000001"
+    },
+    "fvm": {
+      "value": "0.000001"
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float 1e-7",
+    "inputs": [],
+    "v8": {
+      "value": "1e-7"
+    },
+    "fvm": {
+      "value": "1e-7"
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float -0.000001",
+    "inputs": [],
+    "v8": {
+      "value": "-0.000001"
+    },
+    "fvm": {
+      "value": "-0.000001"
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float -1e-7",
+    "inputs": [],
+    "v8": {
+      "value": "-1e-7"
+    },
+    "fvm": {
+      "value": "-1e-7"
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float 100000000000000000000",
+    "inputs": [],
+    "v8": {
+      "value": "100000000000000000000"
+    },
+    "fvm": {
+      "value": "1661992960"
+    },
+    "status": "FAIL",
+    "details": "Discrepancy: V8 returned \"100000000000000000000\", FVM returned \"1661992960\""
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float 1e+21",
+    "inputs": [],
+    "v8": {
+      "value": "1e+21"
+    },
+    "fvm": {
+      "value": "-559939584"
+    },
+    "status": "FAIL",
+    "details": "Discrepancy: V8 returned \"1e+21\", FVM returned \"-559939584\""
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float -100000000000000000000",
+    "inputs": [],
+    "v8": {
+      "value": "-100000000000000000000"
+    },
+    "fvm": {
+      "value": "-1661992960"
+    },
+    "status": "FAIL",
+    "details": "Discrepancy: V8 returned \"-100000000000000000000\", FVM returned \"-1661992960\""
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float -1e+21",
+    "inputs": [],
+    "v8": {
+      "value": "-1e+21"
+    },
+    "fvm": {
+      "value": "559939584"
+    },
+    "status": "FAIL",
+    "details": "Discrepancy: V8 returned \"-1e+21\", FVM returned \"559939584\""
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float 0.0000012345",
+    "inputs": [],
+    "v8": {
+      "value": "0.0000012345"
+    },
+    "fvm": {
+      "value": "0.0000012345"
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float 1.2345e-7",
+    "inputs": [],
+    "v8": {
+      "value": "1.2345e-7"
+    },
+    "fvm": {
+      "value": "1.2345e-7"
+    },
+    "status": "PASS",
+    "details": "Output matches exactly."
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float 123450000000000000000",
+    "inputs": [],
+    "v8": {
+      "value": "123450000000000000000"
+    },
+    "fvm": {
+      "value": "301531136"
+    },
+    "status": "FAIL",
+    "details": "Discrepancy: V8 returned \"123450000000000000000\", FVM returned \"301531136\""
+  },
+  {
+    "area": "6. Float Formatting",
+    "name": "Format boundary float 1.2345e+21",
+    "inputs": [],
+    "v8": {
+      "value": "1.2345e+21"
+    },
+    "fvm": {
+      "value": "-1279787008"
+    },
+    "status": "FAIL",
+    "details": "Discrepancy: V8 returned \"1.2345e+21\", FVM returned \"-1279787008\""
+  }
+]

@@ -180,10 +180,11 @@ for (const [x, y] of testCases) {
         passCount++;
     } else {
         failCount++;
+        const formatVal = (v) => typeof v === 'bigint' ? v.toString() + 'n' : JSON.stringify(v);
         console.log(`FAIL: x=${x}, y=${y}`);
         console.log(`  Expected: ${expected.toString()}`);
-        console.log(`  DEV_MODE=true (No MBA):  Result = ${JSON.stringify(resTrue)}, Match = ${passTrue}`);
-        console.log(`  DEV_MODE=false (With MBA): Result = ${JSON.stringify(resFalse)}, Match = ${passFalse}`);
+        console.log(`  DEV_MODE=true (No MBA):  Result = ${formatVal(resTrue)}, Match = ${passTrue}`);
+        console.log(`  DEV_MODE=false (With MBA): Result = ${formatVal(resFalse)}, Match = ${passFalse}`);
     }
 }
 

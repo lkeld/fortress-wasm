@@ -85,3 +85,41 @@
 - **Tier 3 (Cross-Feature Combinations)**: ≥4 combinations (Total: 4)
 - **Tier 4 (Real-World Scenarios)**: ≥5 application scenarios (Total: 5)
 - **Total Minimum**: 49 tests.
+
+## DX Automation E2E Test Cases
+
+To support the zero-touch developer experience automation features in Fortress WASM, a new E2E test suite has been introduced under `tests/e2e_overhaul/`.
+
+### 1. Hook & CSP Auto-Injection (`auto-inject.test.js`)
+- **Features Tested**: Feature 1 (Hook and CSP Injection), Feature 5 (`fortress watch` command alias).
+- **Design**:
+  - Automatically seeds mock project structures for all 18 supported frameworks (Next.js App/Pages, Nuxt 3, SvelteKit, Remix, Astro, SolidJS, Qwik, Angular, Vite, HTML, Express, Fastify, Hono, Koa, NestJS, Bun, Deno).
+  - Invokes the `create-fortress-app` CLI on these folders.
+  - Verifies that frontend/fullstack frameworks generate the correct client hook file and automatically inject the hook import/initialization into the entry layout/app file with sentinel comments.
+  - Verifies that the CSP header configuration (`worker-src 'self' blob:;`) is injected into the appropriate framework config files.
+  - Verifies that server-only frameworks do not receive client hooks, and instead have a comment added to their API route file explaining the server-only endpoint usage.
+  - Verifies that the `fortress watch` command behaves as a dev server watcher process.
+
+### 2. CI/CD Pipeline Integration (`ci-inject.test.js`)
+- **Features Tested**: Feature 4 (CI/CD Pipeline Integration).
+- **Design**:
+  - Seeds configuration files for popular platforms (GitHub Actions, GitLab CI, CircleCI, Netlify, and Vercel).
+  - Runs scaffolding and asserts that the `npx fortress build` step is auto-injected before the framework build steps.
+  - Asserts that all injected YAML/TOML/JSON configurations remain syntactically valid and no existing steps/keys are deleted or reordered.
+
+### 3. Version Compatibility Handling (`version-compat.test.js`)
+- **Features Tested**: Feature 6 (Version Compatibility Handling).
+- **Design**:
+  - Asserts that Next.js major version detection selects Pages Router (Next.js 12-) or App Router (Next.js 13+).
+  - Asserts that Next.js 13+ App Router routes receive route segment exports (`runtime`, `dynamic`), while Pages Router routes do not.
+  - Asserts Remix v1/v2 (entry.server.tsx injection) vs React Router v7 (injects via root.tsx headers export when entry.server.tsx is absent).
+  - Asserts that Astro configs without an `output` field are detected and upgraded to `output: 'server'` or `output: 'hybrid'`.
+  - Asserts Angular 14 NgModule-based injection vs Angular 17+ standalone bootstrapApplication injection.
+
+### 4. Scaffolding Idempotency (`idempotency.test.js`)
+- **Features Tested**: Features 1.4 & 1.5 (Idempotency Tagging & Existing File Handling).
+- **Design**:
+  - Runs the scaffolding CLI on a target mock project, verifying initial injection.
+  - Simulates a second CLI run by removing target-aborted sentinel configurations (re-running on same codebase layout).
+  - Asserts that files contain exactly one occurrence of imports, CSP header configurations, comments, and CI/CD steps (no duplicates created).
+

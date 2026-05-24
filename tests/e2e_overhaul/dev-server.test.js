@@ -246,5 +246,191 @@ runTestSuite('F7: Dev/Protect CLI Watch E2E Overhaul Test Suite', {
         const occurrences = (result.stdout.match(/Change detected/g) || []).length;
         assert.ok(occurrences <= 3);
         cleanup();
+    },
+
+    'Command wrapping - spawns child process and prints output': async () => {
+        const dir = getTempWorkspace();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), `
+            module.exports = {
+                serve: { port: 13100 },
+                protect: [],
+                output: './protected'
+            };
+        `);
+
+        const procPromise = spawnProcess('node', [
+            cliPath, 
+            'dev', 
+            '--', 
+            'node', 
+            '-e', 
+            "console.log('child_started'); setTimeout(() => {}, 5000);"
+        ], { cwd: dir });
+
+        await new Promise(r => setTimeout(r, 1500));
+        procPromise.child.kill('SIGINT');
+        const result = await procPromise;
+
+        assertStdoutContains(result, 'child_started');
+    },
+
+    'Port propagation - propagates FORTRESS_PORT and FORTRESS_DEV_PORT': async () => {
+        const dir = getTempWorkspace();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), `
+            module.exports = {
+                serve: { port: 13110 },
+                protect: [],
+                output: './protected'
+            };
+        `);
+
+        const procPromise = spawnProcess('node', [
+            cliPath, 
+            'dev', 
+            '--', 
+            'node', 
+            '-e', 
+            "console.log('PORT:' + process.env.FORTRESS_PORT); console.log('DEV_PORT:' + process.env.FORTRESS_DEV_PORT);"
+        ], { cwd: dir });
+
+        await new Promise(r => setTimeout(r, 1500));
+        procPromise.child.kill('SIGINT');
+        const result = await procPromise;
+
+        const match = result.stdout.match(/listening on port (\d+)/);
+        const boundPort = match ? match[1] : '13110';
+        assertStdoutContains(result, `PORT:${boundPort}`);
+        assertStdoutContains(result, `DEV_PORT:${boundPort}`);
+    },
+
+    'Process tree cleanup - terminates child process and grandchildren on SIGINT': async () => {
+        const dir = getTempWorkspace();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), `
+            module.exports = {
+                serve: { port: 13120 },
+                protect: [],
+                output: './protected'
+            };
+        `);
+
+        const childCode = `
+            const cp = require('child_process');
+            const fs = require('fs');
+            const gc = cp.spawn('node', ['-e', 'setTimeout(() => {}, 60000)']);
+            fs.writeFileSync('pids.txt', process.pid + ',' + gc.pid);
+            setTimeout(() => {}, 60000);
+        `.replace(/\n/g, ' ');
+
+        const procPromise = spawnProcess('node', [
+            cliPath, 
+            'dev', 
+            '--', 
+            'node', 
+            '-e', 
+            childCode
+        ], { cwd: dir });
+
+        await new Promise(r => setTimeout(r, 2000));
+
+        const pidsPath = path.join(dir, 'pids.txt');
+        assert.ok(fs.existsSync(pidsPath), 'pids.txt should be written by child');
+        const [childPid, grandchildPid] = fs.readFileSync(pidsPath, 'utf8').split(',').map(Number);
+
+        const isPidRunning = (pid) => {
+            try {
+                process.kill(pid, 0);
+                return true;
+            } catch (e) {
+                return e.code === 'EPERM';
+            }
+        };
+
+        assert.ok(isPidRunning(childPid), 'Child should be running initially');
+        assert.ok(isPidRunning(grandchildPid), 'Grandchild should be running initially');
+
+        procPromise.child.kill('SIGINT');
+        await procPromise;
+
+        await new Promise(r => setTimeout(r, 500));
+
+        assert.strictEqual(isPidRunning(childPid), false, 'Child process should be terminated');
+        assert.strictEqual(isPidRunning(grandchildPid), false, 'Grandchild process should be terminated');
+    },
+
+    'Process tree cleanup - terminates child process and grandchildren on SIGTERM': async () => {
+        const dir = getTempWorkspace();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), `
+            module.exports = {
+                serve: { port: 13130 },
+                protect: [],
+                output: './protected'
+            };
+        `);
+
+        const childCode = `
+            const cp = require('child_process');
+            const fs = require('fs');
+            const gc = cp.spawn('node', ['-e', 'setTimeout(() => {}, 60000)']);
+            fs.writeFileSync('pids.txt', process.pid + ',' + gc.pid);
+            setTimeout(() => {}, 60000);
+        `.replace(/\n/g, ' ');
+
+        const procPromise = spawnProcess('node', [
+            cliPath, 
+            'dev', 
+            '--', 
+            'node', 
+            '-e', 
+            childCode
+        ], { cwd: dir });
+
+        await new Promise(r => setTimeout(r, 2000));
+
+        const pidsPath = path.join(dir, 'pids.txt');
+        assert.ok(fs.existsSync(pidsPath), 'pids.txt should be written by child');
+        const [childPid, grandchildPid] = fs.readFileSync(pidsPath, 'utf8').split(',').map(Number);
+
+        const isPidRunning = (pid) => {
+            try {
+                process.kill(pid, 0);
+                return true;
+            } catch (e) {
+                return e.code === 'EPERM';
+            }
+        };
+
+        assert.ok(isPidRunning(childPid), 'Child should be running initially');
+        assert.ok(isPidRunning(grandchildPid), 'Grandchild should be running initially');
+
+        procPromise.child.kill('SIGTERM');
+        await procPromise;
+
+        await new Promise(r => setTimeout(r, 500));
+
+        assert.strictEqual(isPidRunning(childPid), false, 'Child process should be terminated');
+        assert.strictEqual(isPidRunning(grandchildPid), false, 'Grandchild process should be terminated');
+    },
+
+    'Spontaneous exit propagation - exits parent with child exit code': async () => {
+        const dir = getTempWorkspace();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), `
+            module.exports = {
+                serve: { port: 13140 },
+                protect: [],
+                output: './protected'
+            };
+        `);
+
+        const result = await spawnProcess('node', [
+            cliPath, 
+            'dev', 
+            '--', 
+            'node', 
+            '-e', 
+            "setTimeout(() => { process.exit(3); }, 1000);"
+        ], { cwd: dir });
+
+        assertExitCode(result, 3);
+        cleanup();
     }
 });

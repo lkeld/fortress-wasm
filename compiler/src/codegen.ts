@@ -565,12 +565,12 @@ export class CodeGenerator {
                         this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
                         this.emit(OpCode.BitXor);
                         
-                        // ((x & y) << 1)
+                        // ((x & y) + (x & y))
                         this.emit(OpCode.LoadLocal, this.resolveLocal(tmpLeft));
                         this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
                         this.emit(OpCode.BitAnd);
-                        this.emit(OpCode.PushInt, 1);
-                        this.emit(OpCode.Shl);
+                        this.emit(OpCode.Dup);
+                        this.emit(OpCode.Add);
                         
                         this.emit(OpCode.Add);
                         
@@ -612,8 +612,8 @@ export class CodeGenerator {
                         this.emit(OpCode.LoadLocal, this.resolveLocal(tmpRight));
                         this.emit(OpCode.BitNot);
                         this.emit(OpCode.BitAnd);
-                        this.emit(OpCode.PushInt, 1);
-                        this.emit(OpCode.Shl);
+                        this.emit(OpCode.Dup);
+                        this.emit(OpCode.Add);
                         
                         this.emit(OpCode.Add);
                         
@@ -732,8 +732,11 @@ export class CodeGenerator {
                             break;
                         }
                         case '/': {
-                            const isIntMath = this.isIntExpression(expr.left) && this.isIntExpression(expr.right);
-                            const useMba = process.env.DEV_MODE !== 'true' && isIntMath;
+                            const isIntDivision = this.isIntExpression(expr.left) && this.isIntExpression(expr.right) &&
+                                expr.left.type === 'Literal' && expr.right.type === 'Literal' &&
+                                typeof expr.left.value === 'number' && typeof expr.right.value === 'number' &&
+                                expr.right.value !== 0 && (expr.left.value % expr.right.value === 0);
+                            const useMba = process.env.DEV_MODE !== 'true' && isIntDivision;
                             if (useMba) {
                                 /*
                                  * Mathematical Proof of Equivalence for Division Polynomial MBA Obfuscation:

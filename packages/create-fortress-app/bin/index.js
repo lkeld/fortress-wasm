@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
+const compatibility = require('../compatibility');
 
 console.log("create-fortress-app CLI - version 1.2.0");
 
@@ -136,7 +137,7 @@ function detectEnvironment(dir) {
             const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
             const deps = { ...pkg.dependencies, ...pkg.devDependencies };
             
-            if (deps['@angular/core']) {
+            if (deps['@angular/core'] || deps['angular']) {
                 detectedFramework = 'angular';
             } else if (deps['next']) {
                 const hasApp = fs.existsSync(path.join(dir, 'app')) || 
@@ -144,17 +145,17 @@ function detectEnvironment(dir) {
                 detectedFramework = hasApp ? 'next-app' : 'next-pages';
             } else if (deps['nuxt']) {
                 detectedFramework = 'nuxt';
-            } else if (deps['@sveltejs/kit']) {
+            } else if (deps['@sveltejs/kit'] || deps['sveltekit']) {
                 detectedFramework = 'sveltekit';
-            } else if (deps['@remix-run/react'] || deps['@remix-run/node'] || deps['@remix-run/serve']) {
+            } else if (deps['@remix-run/react'] || deps['@remix-run/node'] || deps['@remix-run/serve'] || deps['remix']) {
                 detectedFramework = 'remix';
             } else if (deps['astro']) {
                 detectedFramework = 'astro';
-            } else if (deps['solid-js']) {
+            } else if (deps['solid-js'] || deps['solid']) {
                 detectedFramework = 'solid';
-            } else if (deps['@builder.io/qwik']) {
+            } else if (deps['@builder.io/qwik'] || deps['qwik']) {
                 detectedFramework = 'qwik';
-            } else if (deps['@nestjs/core']) {
+            } else if (deps['@nestjs/core'] || deps['nestjs']) {
                 detectedFramework = 'nestjs';
             } else if (deps['express']) {
                 detectedFramework = 'express';
@@ -164,6 +165,12 @@ function detectEnvironment(dir) {
                 detectedFramework = 'hono';
             } else if (deps['koa']) {
                 detectedFramework = 'koa';
+            } else if (deps['bun']) {
+                detectedFramework = 'bun';
+            } else if (deps['deno']) {
+                detectedFramework = 'deno';
+            } else if (deps['html']) {
+                detectedFramework = 'html';
             } else if (deps['vite']) {
                 detectedFramework = 'vite';
             }
@@ -189,33 +196,44 @@ function detectEnvironment(dir) {
 
 const envDet = detectEnvironment(targetDir);
 const finalFramework = (overrideFramework || envDet.detectedFramework).toLowerCase();
-const finalTypeScript = isTypeScriptFlag || envDet.isTypeScript;
+const compatContext = compatibility.resolveFrameworkCompatibility(targetDir, finalFramework);
+const finalFrameworkVersion = compatContext.version;
+const tsDefaultFrameworks = [
+  'next', 'next-app', 'next-pages', 'nuxt', 'sveltekit', 'remix', 'astro', 'solid', 'solidjs',
+  'qwik', 'angular', 'nestjs', 'bun', 'deno', 'hono'
+];
+const finalTypeScript = isTypeScriptFlag || envDet.isTypeScript || tsDefaultFrameworks.includes(finalFramework);
 const finalPackageManager = packageManagerFlag || envDet.packageManager;
 
 const isInteractive = !!(process.stdin.isTTY && process.stdout.isTTY) || process.env.FORTRESS_CLI_INTERACTIVE === 'true';
 
 // Scaffold file functions
 const scaffoldFiles = {
-  next: (tDir, isTS) => {
+  next: (tDir, isTS, compatCtx) => {
     const base = fs.existsSync(path.join(tDir, 'src')) ? 'src' : '.';
     const ext = isTS ? 'ts' : 'js';
     const hookExt = isTS ? 'tsx' : 'jsx';
     
-    const routeDir = path.join(tDir, base, 'app/api/fortress');
-    fs.mkdirSync(routeDir, { recursive: true });
-    fs.writeFileSync(path.join(routeDir, `route.${ext}`), 
-      isTS ?
-      `import { NextResponse } from 'next/server';\nimport { vmNode } from '@lkeld/fortress-wasm';\n\nexport async function POST(request: Request) {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return NextResponse.json(JSON.parse(result));\n  } catch (err: any) {\n    return NextResponse.json({ error: err.message }, { status: 500 });\n  }\n}\n` :
-      `import { NextResponse } from 'next/server';\nimport { vmNode } from '@lkeld/fortress-wasm';\n\nexport async function POST(request) {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return NextResponse.json(JSON.parse(result));\n  } catch (err) {\n    return NextResponse.json({ error: err.message }, { status: 500 });\n  }\n}\n`
-    );
+    // Resolve App Router compatibility
+    const useAppRouter = compatCtx ? compatCtx.features.useAppRouter : (fs.existsSync(path.join(tDir, base, 'app')) || fs.existsSync(path.join(tDir, 'app')));
     
-    const pagesDir = path.join(tDir, base, 'pages/api');
-    fs.mkdirSync(pagesDir, { recursive: true });
-    fs.writeFileSync(path.join(pagesDir, `fortress.${ext}`),
-      isTS ?
-      `import { vmNode } from '@lkeld/fortress-wasm';\n\nexport default async function handler(req: any, res: any) {\n  if (req.method !== 'POST') {\n    return res.status(405).end();\n  }\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = req.body;\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return res.status(200).json(JSON.parse(result));\n  } catch (err: any) {\n    return res.status(500).json({ error: err.message });\n  }\n}\n` :
-      `const { vmNode } = require('@lkeld/fortress-wasm');\n\nmodule.exports = async function handler(req, res) {\n  if (req.method !== 'POST') {\n    return res.status(405).end();\n  }\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = req.body;\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return res.status(200).json(JSON.parse(result));\n  } catch (err) {\n    return res.status(500).json({ error: err.message });\n  }\n};\n`
-    );
+    if (useAppRouter) {
+      const routeDir = path.join(tDir, base, 'app/api/fortress');
+      fs.mkdirSync(routeDir, { recursive: true });
+      fs.writeFileSync(path.join(routeDir, `route.${ext}`), 
+        isTS ?
+        `import { NextResponse } from 'next/server';\nimport { vmNode } from '@lkeld/fortress-wasm';\n\nexport const runtime = 'nodejs';\nexport const dynamic = 'force-dynamic';\n\nexport async function POST(request: Request) {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return NextResponse.json(JSON.parse(result));\n  } catch (err: any) {\n    return NextResponse.json({ error: err.message }, { status: 500 });\n  }\n}\n` :
+        `import { NextResponse } from 'next/server';\nimport { vmNode } from '@lkeld/fortress-wasm';\n\nexport const runtime = 'nodejs';\nexport const dynamic = 'force-dynamic';\n\nexport async function POST(request) {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return NextResponse.json(JSON.parse(result));\n  } catch (err) {\n    return NextResponse.json({ error: err.message }, { status: 500 });\n  }\n}\n`
+      );
+    } else {
+      const pagesDir = path.join(tDir, base, 'pages/api');
+      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.writeFileSync(path.join(pagesDir, `fortress.${ext}`),
+        isTS ?
+        `import { vmNode } from '@lkeld/fortress-wasm';\n\nexport default async function handler(req: any, res: any) {\n  if (req.method !== 'POST') {\n    return res.status(405).end();\n  }\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = req.body;\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return res.status(200).json(JSON.parse(result));\n  } catch (err: any) {\n    return res.status(500).json({ error: err.message });\n  }\n}\n` :
+        `const { vmNode } = require('@lkeld/fortress-wasm');\n\nmodule.exports = async function handler(req, res) {\n  if (req.method !== 'POST') {\n    return res.status(405).end();\n  }\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = req.body;\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return res.status(200).json(JSON.parse(result));\n  } catch (err) {\n    return res.status(500).json({ error: err.message });\n  }\n};\n`
+      );
+    }
     
     const hooksDir = path.join(tDir, base, 'hooks');
     fs.mkdirSync(hooksDir, { recursive: true });
@@ -226,7 +244,7 @@ const scaffoldFiles = {
     );
   },
   
-  nuxt: (tDir, isTS) => {
+  nuxt: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const serverDir = path.join(tDir, 'server/api');
@@ -242,7 +260,7 @@ const scaffoldFiles = {
     );
   },
   
-  sveltekit: (tDir, isTS) => {
+  sveltekit: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const routeDir = path.join(tDir, 'src/routes/api/fortress');
@@ -260,16 +278,26 @@ const scaffoldFiles = {
     );
   },
   
-  remix: (tDir, isTS) => {
+  remix: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
+    const isRR7 = compatCtx ? compatCtx.features.reactRouter7 : false;
     
     const routesDir = path.join(tDir, 'app/routes');
     fs.mkdirSync(routesDir, { recursive: true });
-    fs.writeFileSync(path.join(routesDir, `api.fortress.${ext}`),
-      isTS ?
-      `import { json } from "@remix-run/node";\nimport type { ActionFunction } from "@remix-run/node";\nimport { vmNode } from '@lkeld/fortress-wasm';\n\nexport const action: ActionFunction = async ({ request }) => {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return json(JSON.parse(result));\n  } catch (err: any) {\n    return json({ error: err.message }, { status: 500 });\n  }\n};\n` :
-      `const { json } = require("@remix-run/node");\nconst { vmNode } = require('@lkeld/fortress-wasm');\n\nexport async function action({ request }) {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return json(JSON.parse(result));\n  } catch (err) {\n    return json({ error: err.message }, { status: 500 });\n  }\n}\n`
-    );
+    
+    if (isRR7) {
+      fs.writeFileSync(path.join(routesDir, `api.fortress.${ext}`),
+        isTS ?
+        `import { json } from "react-router";\nimport type { ActionFunction } from "react-router";\nimport { vmNode } from '@lkeld/fortress-wasm';\n\nexport const action: ActionFunction = async ({ request }) => {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return json(JSON.parse(result));\n  } catch (err: any) {\n    return json({ error: err.message }, { status: 500 });\n  }\n};\n` :
+        `const { json } = require("react-router");\nconst { vmNode } = require('@lkeld/fortress-wasm');\n\nexport async function action({ request }) {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return json(JSON.parse(result));\n  } catch (err) {\n    return json({ error: err.message }, { status: 500 });\n  }\n}\n`
+      );
+    } else {
+      fs.writeFileSync(path.join(routesDir, `api.fortress.${ext}`),
+        isTS ?
+        `import { json } from "@remix-run/node";\nimport type { ActionFunction } from "@remix-run/node";\nimport { vmNode } from '@lkeld/fortress-wasm';\n\nexport const action: ActionFunction = async ({ request }) => {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return json(JSON.parse(result));\n  } catch (err: any) {\n    return json({ error: err.message }, { status: 500 });\n  }\n};\n` :
+        `const { json } = require("@remix-run/node");\nconst { vmNode } = require('@lkeld/fortress-wasm');\n\nexport async function action({ request }) {\n  try {\n    const { bytecode, handshakeHeader, inputJson, opcodeMap } = await request.json();\n    const result = vmNode.execute(\n      new Uint8Array(bytecode || []),\n      new Uint8Array(handshakeHeader || []),\n      JSON.stringify(inputJson || []),\n      new Uint8Array(opcodeMap || [])\n    );\n    return json(JSON.parse(result));\n  } catch (err) {\n    return json({ error: err.message }, { status: 500 });\n  }\n}\n`
+      );
+    }
     
     const hooksDir = path.join(tDir, 'app/hooks');
     fs.mkdirSync(hooksDir, { recursive: true });
@@ -278,7 +306,7 @@ const scaffoldFiles = {
     );
   },
   
-  astro: (tDir, isTS) => {
+  astro: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const routeDir = path.join(tDir, 'src/pages/api');
@@ -296,8 +324,9 @@ const scaffoldFiles = {
     );
   },
   
-  angular: (tDir, isTS) => {
+  angular: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
+    const isStandalone = compatCtx ? compatCtx.features.standalone : false;
     
     const apiDir = path.join(tDir, 'src/app/api');
     fs.mkdirSync(apiDir, { recursive: true });
@@ -307,12 +336,19 @@ const scaffoldFiles = {
     
     const compDir = path.join(tDir, 'src/app/fortress');
     fs.mkdirSync(compDir, { recursive: true });
-    fs.writeFileSync(path.join(compDir, `fortress.component.${ext}`),
-      `import { Component } from '@angular/core';\nimport { FortressService } from '../api/fortress.service';\n\n@Component({\n  selector: 'app-fortress',\n  template: '<div>Secured by Fortress: {{ service.client ? "Active" : "Initializing" }}</div>'\n})\nexport class FortressComponent {\n  constructor(public service: FortressService) {}\n}\n`
-    );
+    
+    if (isStandalone) {
+      fs.writeFileSync(path.join(compDir, `fortress.component.${ext}`),
+        `import { Component } from '@angular/core';\nimport { CommonModule } from '@angular/common';\nimport { FortressService } from '../api/fortress.service';\n\n@Component({\n  selector: 'app-fortress',\n  standalone: true,\n  imports: [CommonModule],\n  template: '<div>Secured by Fortress: {{ service.client ? "Active" : "Initializing" }}</div>'\n})\nexport class FortressComponent {\n  constructor(public service: FortressService) {}\n}\n`
+      );
+    } else {
+      fs.writeFileSync(path.join(compDir, `fortress.component.${ext}`),
+        `import { Component } from '@angular/core';\nimport { FortressService } from '../api/fortress.service';\n\n@Component({\n  selector: 'app-fortress',\n  template: '<div>Secured by Fortress: {{ service.client ? "Active" : "Initializing" }}</div>'\n})\nexport class FortressComponent {\n  constructor(public service: FortressService) {}\n}\n`
+      );
+    }
   },
   
-  solid: (tDir, isTS) => {
+  solid: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     const hookExt = isTS ? 'tsx' : 'jsx';
     
@@ -329,7 +365,7 @@ const scaffoldFiles = {
     );
   },
   
-  qwik: (tDir, isTS) => {
+  qwik: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     const compExt = isTS ? 'tsx' : 'jsx';
     
@@ -346,7 +382,7 @@ const scaffoldFiles = {
     );
   },
   
-  vite: (tDir, isTS) => {
+  vite: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const serverDir = path.join(tDir, 'server/api');
@@ -362,7 +398,7 @@ const scaffoldFiles = {
     );
   },
   
-  express: (tDir, isTS) => {
+  express: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const routesDir = path.join(tDir, 'routes');
@@ -382,7 +418,7 @@ const scaffoldFiles = {
     );
   },
   
-  fastify: (tDir, isTS) => {
+  fastify: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const pluginsDir = path.join(tDir, 'plugins');
@@ -394,7 +430,7 @@ const scaffoldFiles = {
     );
   },
   
-  hono: (tDir, isTS) => {
+  hono: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const apiDir = path.join(tDir, 'src/api');
@@ -404,7 +440,7 @@ const scaffoldFiles = {
     );
   },
   
-  koa: (tDir, isTS) => {
+  koa: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const routesDir = path.join(tDir, 'routes');
@@ -416,7 +452,7 @@ const scaffoldFiles = {
     );
   },
   
-  nestjs: (tDir, isTS) => {
+  nestjs: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     const fortDir = path.join(tDir, 'src/fortress');
@@ -431,7 +467,7 @@ const scaffoldFiles = {
     );
   },
   
-  bun: (tDir, isTS) => {
+  bun: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     fs.writeFileSync(path.join(tDir, `server.${ext}`),
@@ -439,7 +475,7 @@ const scaffoldFiles = {
     );
   },
   
-  deno: (tDir, isTS) => {
+  deno: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     fs.writeFileSync(path.join(tDir, `server.${ext}`),
@@ -447,7 +483,7 @@ const scaffoldFiles = {
     );
   },
   
-  html: (tDir, isTS) => {
+  html: (tDir, isTS, compatCtx) => {
     const ext = isTS ? 'ts' : 'js';
     
     fs.writeFileSync(path.join(tDir, `fortress.${ext}`),
@@ -941,11 +977,934 @@ function getCanonicalFramework(fw) {
     return lower;
 }
 
-function writeConfigAndKeys(framework, isTS, pm, protectedDirName, password, addToEnv, selectedFunctions, selectedFilePath) {
+function prependServerComment(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  const content = fs.readFileSync(filePath, 'utf8');
+  if (content.includes('fortress-wasm-start')) return;
+  const comment = `// fortress-wasm-start\n// Server-only endpoint. No client hook is required.\n// fortress-wasm-end\n\n`;
+  fs.writeFileSync(filePath, comment + content);
+}
+
+function validateFileSyntax(filePath, content, isTS) {
+  if (filePath.endsWith('.html') || filePath.endsWith('.astro') || filePath.endsWith('.svelte') || filePath.endsWith('.vue')) {
+    return true;
+  }
+  const parser = require('@babel/parser');
+  try {
+    parser.parse(content, {
+      sourceType: 'module',
+      plugins: [
+        'jsx',
+        ...(isTS || filePath.endsWith('.ts') || filePath.endsWith('.tsx') ? ['typescript', 'decorators-legacy'] : [])
+      ]
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function safeModifyFile(filePath, modifierFn, isTS) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+  const originalContent = fs.readFileSync(filePath, 'utf8');
+  try {
+    const modifiedContent = modifierFn(originalContent);
+    if (modifiedContent === originalContent) {
+      return;
+    }
+    if (validateFileSyntax(filePath, modifiedContent, isTS)) {
+      fs.writeFileSync(filePath, modifiedContent);
+    } else {
+      throw new Error("Syntax validation failed after modification");
+    }
+  } catch (e) {
+    console.error(`[Fortress] Warning: Failed to parse/modify ${filePath}. Error: ${e.message}`);
+    console.log(`\nManual Instruction for ${path.basename(filePath)}: Please verify this file syntax.`);
+  }
+}
+
+async function injectNextCsp(filePath, isTS) {
+  if (!fs.existsSync(filePath)) return;
+  const original = fs.readFileSync(filePath, 'utf8');
+  if (original.includes('fortress-wasm-start') || original.includes('worker-src')) return;
+  
+  const { loadFile, writeFile, parseExpression } = require('magicast');
+  try {
+    const mod = await loadFile(filePath);
+    let options = mod.exports.default || mod.exports;
+    if (options.$type === 'function-call') {
+      options = options.$args[0];
+    }
+    
+    if (!options.headers) {
+      options.headers = parseExpression(`async () => {
+        return [
+          {
+            source: '/(.*)',
+            headers: [
+              {
+                key: 'Content-Security-Policy',
+                value: "worker-src 'self' blob:;"
+              }
+            ]
+          }
+        ];
+      }`);
+    }
+    await writeFile(mod, filePath);
+    
+    let updated = fs.readFileSync(filePath, 'utf8');
+    updated = updated.replace(
+      "worker-src 'self' blob:;",
+      "/* fortress-wasm-start */ \"worker-src 'self' blob:;\" /* fortress-wasm-end */"
+    );
+    fs.writeFileSync(filePath, updated);
+  } catch (e) {
+    console.error(`[Fortress] Magicast failed for Next.js CSP: ${e.message}`);
+    if (!original.includes('fortress-wasm-start')) {
+      const fallback = original.replace(
+        /module\.exports\s*=\s*\{/,
+        `module.exports = {\n  /* fortress-wasm-start */\n  async headers() {\n    return [\n      {\n        source: '/(.*)',\n        headers: [\n          {\n            key: 'Content-Security-Policy',\n            value: "worker-src 'self' blob:;"\n          }\n        ]\n      }\n    ];\n  },\n  /* fortress-wasm-end */`
+      );
+      if (validateFileSyntax(filePath, fallback, isTS)) {
+        fs.writeFileSync(filePath, fallback);
+      } else {
+        console.log(`\nManual Instruction for next.config.js: Add CSP 'worker-src 'self' blob:;' to headers.`);
+      }
+    }
+  }
+}
+
+async function injectNuxtCsp(filePath, isTS) {
+  if (!fs.existsSync(filePath)) return;
+  const original = fs.readFileSync(filePath, 'utf8');
+  if (original.includes('fortress-wasm-start') || original.includes('worker-src')) return;
+  
+  const { loadFile, writeFile } = require('magicast');
+  try {
+    const mod = await loadFile(filePath);
+    let options = mod.exports.default || mod.exports;
+    if (options.$type === 'function-call') {
+      options = options.$args[0];
+    }
+    options.routeRules = options.routeRules || {};
+    options.routeRules['/**'] = options.routeRules['/**'] || {};
+    options.routeRules['/**'].headers = options.routeRules['/**'].headers || {};
+    options.routeRules['/**'].headers['Content-Security-Policy'] = "worker-src 'self' blob:;";
+    await writeFile(mod, filePath);
+    
+    let updated = fs.readFileSync(filePath, 'utf8');
+    updated = updated.replace(
+      /['"]Content-Security-Policy['"]\s*:\s*['"]worker-src \\?'self\\?' blob:;['"]/g,
+      "/* fortress-wasm-start */ 'Content-Security-Policy': \"worker-src 'self' blob:;\" /* fortress-wasm-end */"
+    );
+    fs.writeFileSync(filePath, updated);
+  } catch (e) {
+    console.error(`[Fortress] Magicast failed for Nuxt CSP: ${e.message}`);
+    console.log(`\nManual Instruction for nuxt.config.ts: Add CSP 'worker-src 'self' blob:;' routeRules headers.`);
+  }
+}
+
+async function injectSvelteCsp(filePath, isTS) {
+  if (!fs.existsSync(filePath)) return;
+  const original = fs.readFileSync(filePath, 'utf8');
+  if (original.includes('fortress-wasm-start') || original.includes('worker-src')) return;
+  
+  const { loadFile, writeFile } = require('magicast');
+  try {
+    const mod = await loadFile(filePath);
+    let options = mod.exports.default || mod.exports;
+    if (options.$type === 'function-call') {
+      options = options.$args[0];
+    }
+    options.kit = options.kit || {};
+    options.kit.csp = options.kit.csp || {};
+    options.kit.csp.directives = options.kit.csp.directives || {};
+    
+    const existing = options.kit.csp.directives['worker-src'];
+    if (Array.isArray(existing)) {
+      if (!existing.includes("'self'")) existing.push("'self'");
+      if (!existing.includes("blob:")) existing.push("blob:");
+    } else if (typeof existing === 'string') {
+      const parts = existing.split(/\s+/);
+      if (!parts.includes("'self'")) parts.push("'self'");
+      if (!parts.includes("blob:")) parts.push("blob:");
+      options.kit.csp.directives['worker-src'] = parts;
+    } else {
+      options.kit.csp.directives['worker-src'] = ["'self'", "blob:"];
+    }
+    
+    await writeFile(mod, filePath);
+    
+    let updated = fs.readFileSync(filePath, 'utf8');
+    updated = updated.replace(
+      /['"]?worker-src['"]?:\s*\[[^\]]+\]/g,
+      (match) => `/* fortress-wasm-start */ ${match} /* fortress-wasm-end */`
+    );
+    fs.writeFileSync(filePath, updated);
+  } catch (e) {
+    console.error(`[Fortress] Magicast failed for Svelte CSP: ${e.message}`);
+    console.log(`\nManual Instruction for svelte.config.js: Add 'worker-src': ["'self'", "blob:"] to kit.csp.directives.`);
+  }
+}
+
+function injectSvelteServerHook(tDir, isTS) {
+  const ext = isTS ? 'ts' : 'js';
+  const filePath = path.join(tDir, `src/hooks.server.${ext}`);
+  if (fs.existsSync(filePath)) {
+    const original = fs.readFileSync(filePath, 'utf8');
+    if (original.includes('fortress-wasm-start')) return;
+    
+    let updated = original;
+    if (updated.includes('export const handle') || updated.includes('export async function handle')) {
+      updated = updated.replace('export const handle', 'const _originalHandle');
+      updated = updated.replace('export async function handle', 'async function _originalHandle');
+      
+      const chain = `\n// fortress-wasm-start\nimport { sequence } from '@sveltejs/kit/hooks';\nconst fortressHandle = async ({ event, resolve }) => {\n  return resolve(event, {\n    filterSerializedResponseHeaders: (name) => name === 'content-security-policy',\n    transformPageChunk: ({ html }) => html.replace('<head>', '<head><meta http-equiv="Content-Security-Policy" content="worker-src \\'self\\' blob:;">')\n  });\n};\nexport const handle = sequence(fortressHandle, _originalHandle);\n// fortress-wasm-end\n`;
+      fs.writeFileSync(filePath, updated + chain);
+    } else {
+      const code = `\n// fortress-wasm-start\nexport const handle = async ({ event, resolve }) => {\n  return resolve(event, {\n    transformPageChunk: ({ html }) => html.replace('<head>', '<head><meta http-equiv="Content-Security-Policy" content="worker-src \\'self\\' blob:;">')\n  });\n};\n// fortress-wasm-end\n`;
+      fs.writeFileSync(filePath, original + code);
+    }
+  }
+}
+
+function injectRemixCsp(tDir, isTS) {
+  const ext = isTS ? 'tsx' : 'jsx';
+  const filePath = path.join(tDir, `app/entry.server.${ext}`);
+  if (fs.existsSync(filePath)) {
+    const original = fs.readFileSync(filePath, 'utf8');
+    if (original.includes('fortress-wasm-start')) return;
+    
+    let updated = original;
+    const match = updated.match(/(export\s+default\s+function\s+handleRequest\s*\([^)]*\)\s*\{)/);
+    if (match) {
+      updated = updated.replace(match[0], `${match[0]}\n  // fortress-wasm-start\n  responseHeaders.set('Content-Security-Policy', "worker-src 'self' blob:;");\n  // fortress-wasm-end`);
+      fs.writeFileSync(filePath, updated);
+    } else {
+      console.log(`\nManual Instruction for entry.server.${ext}: Add responseHeaders.set('Content-Security-Policy', "worker-src 'self' blob:;") inside handleRequest.`);
+    }
+  }
+}
+
+function injectAstroMiddleware(tDir, isTS) {
+  const ext = isTS ? 'ts' : 'js';
+  const filePath = path.join(tDir, `src/middleware.${ext}`);
+  
+  if (fs.existsSync(filePath)) {
+    const original = fs.readFileSync(filePath, 'utf8');
+    if (original.includes('fortress-wasm-start')) return;
+    
+    let updated = original;
+    if (updated.includes('export const onRequest') || updated.includes('export async function onRequest')) {
+      updated = updated.replace('export const onRequest', 'const _originalOnRequest');
+      updated = updated.replace('export async function onRequest', 'async function _originalOnRequest');
+      
+      const chain = `\n// fortress-wasm-start\nimport { sequence } from 'astro:middleware';\nconst fortressMiddleware = async (context, next) => {\n  const response = await next();\n  response.headers.set('Content-Security-Policy', "worker-src 'self' blob:;");\n  return response;\n};\nexport const onRequest = sequence(fortressMiddleware, _originalOnRequest);\n// fortress-wasm-end\n`;
+      fs.writeFileSync(filePath, updated + chain);
+    } else {
+      const code = `\n// fortress-wasm-start\nexport const onRequest = async (context, next) => {\n  const response = await next();\n  response.headers.set('Content-Security-Policy', "worker-src 'self' blob:;");\n  return response;\n};\n// fortress-wasm-end\n`;
+      fs.writeFileSync(filePath, original + code);
+    }
+  } else {
+    const code = `// fortress-wasm-start\nimport { defineMiddleware } from 'astro:middleware';\nexport const onRequest = defineMiddleware(async (context, next) => {\n  const response = await next();\n  response.headers.set('Content-Security-Policy', "worker-src 'self' blob:;");\n  return response;\n});\n// fortress-wasm-end\n`;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, code);
+  }
+}
+
+async function injectViteCsp(filePath, isTS) {
+  if (!fs.existsSync(filePath)) return;
+  const original = fs.readFileSync(filePath, 'utf8');
+  if (original.includes('fortress-wasm-start') || original.includes('worker-src')) return;
+  
+  const { loadFile, writeFile } = require('magicast');
+  try {
+    const mod = await loadFile(filePath);
+    let options = mod.exports.default || mod.exports;
+    if (options.$type === 'function-call') {
+      options = options.$args[0];
+    }
+    options.server = options.server || {};
+    options.server.headers = options.server.headers || {};
+    options.server.headers['Content-Security-Policy'] = "worker-src 'self' blob:;";
+    await writeFile(mod, filePath);
+    
+    let updated = fs.readFileSync(filePath, 'utf8');
+    updated = updated.replace(
+      "worker-src 'self' blob:;",
+      "/* fortress-wasm-start */ \"worker-src 'self' blob:;\" /* fortress-wasm-end */"
+    );
+    fs.writeFileSync(filePath, updated);
+  } catch (e) {
+    console.error(`[Fortress] Magicast failed for Vite CSP: ${e.message}`);
+    console.log(`\nManual Instruction for vite.config.ts: Add server.headers['Content-Security-Policy'] = "worker-src 'self' blob:;".`);
+  }
+}
+
+async function performAutoInjection(targetDir, framework, isTS, compatCtx) {
+  const canonicalFw = getCanonicalFramework(framework);
+  
+  const fwMeta = {
+    'next-app': {
+      hookFile: 'hooks/useFortress.tsx',
+      entryFile: 'app/layout.tsx',
+      cspFile: 'next.config.js',
+    },
+    'next-pages': {
+      hookFile: 'hooks/useFortress.tsx',
+      entryFile: 'pages/_app.tsx',
+      cspFile: 'next.config.js',
+    },
+    'nuxt': {
+      hookFile: 'composables/useFortressInit.ts',
+      entryFile: 'app.vue',
+      cspFile: 'nuxt.config.ts',
+    },
+    'sveltekit': {
+      hookFile: 'src/lib/fortressStore.ts',
+      entryFile: 'src/routes/+layout.svelte',
+      cspFile: 'svelte.config.js',
+    },
+    'remix': {
+      hookFile: 'app/hooks/useFortress.ts',
+      entryFile: 'app/root.tsx',
+      cspFile: 'app/entry.server.tsx',
+    },
+    'astro': {
+      hookFile: 'src/components/FortressInit.astro',
+      entryFile: 'src/layouts/Layout.astro',
+      cspFile: 'src/middleware.ts',
+    },
+    'solid': {
+      hookFile: 'src/hooks/useFortress.tsx',
+      entryFile: 'src/root.tsx',
+      cspFile: 'vite.config.ts',
+    },
+    'solidjs': {
+      hookFile: 'src/hooks/useFortress.tsx',
+      entryFile: 'src/root.tsx',
+      cspFile: 'vite.config.ts',
+    },
+    'qwik': {
+      hookFile: 'src/components/fortress/fortress.tsx',
+      entryFile: 'src/routes/layout.tsx',
+      cspFile: 'vite.config.ts',
+    },
+    'angular': {
+      hookFile: 'src/app/api/fortress.service.ts',
+      entryFile: 'src/app/app.component.ts',
+      cspFile: 'src/app/app.component.ts',
+    },
+    'vite': {
+      hookFile: 'src/fortress.ts',
+      entryFile: 'src/App.tsx',
+      cspFile: 'vite.config.ts',
+    },
+    'html': {
+      hookFile: 'fortress.js',
+      entryFile: 'index.html',
+      cspFile: 'index.html',
+    },
+    'express': { routeFile: 'routes/fortress.js' },
+    'fastify': { routeFile: 'plugins/fortress.js' },
+    'hono': { routeFile: 'src/api/fortress.ts' },
+    'koa': { routeFile: 'routes/fortress.js' },
+    'nestjs': { routeFile: 'src/fortress/fortress.controller.ts' },
+    'bun': { routeFile: 'server.ts' },
+    'deno': { routeFile: 'server.ts' }
+  };
+
+  const meta = fwMeta[framework];
+  if (!meta) return;
+
+  if (meta.routeFile) {
+    let resolvedRoute = path.join(targetDir, meta.routeFile);
+    if (!fs.existsSync(resolvedRoute)) {
+      const tsPath = resolvedRoute.replace(/\.js$/, '.ts');
+      if (fs.existsSync(tsPath)) {
+        resolvedRoute = tsPath;
+      }
+    }
+    prependServerComment(resolvedRoute);
+    return;
+  }
+
+  // Hook writing
+  const hookPath = path.join(targetDir, meta.hookFile);
+  fs.mkdirSync(path.dirname(hookPath), { recursive: true });
+  
+  let hookContent = '';
+  switch (framework) {
+    case 'next-app':
+    case 'next-pages':
+      hookContent = `import { useState, useEffect } from 'react';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function useFortress() {\n  const [client, setClient] = useState<any>(null);\n  useEffect(() => {\n    FortressClient.init('/api/fortress').then(setClient).catch(console.error);\n  }, []);\n  return { client, secured: !!client };\n}\n`;
+      break;
+    case 'nuxt':
+      hookContent = `import FortressClient from '@lkeld/fortress-wasm/client';\nimport { useState } from '#app';\n\nexport const useFortress = () => {\n  const client = useState('fortress_client', () => null);\n  if (!client.value && typeof window !== 'undefined') {\n    FortressClient.init('/api/fortress').then(c => { client.value = c; }).catch(console.error);\n  }\n  return client;\n};\n`;
+      break;
+    case 'sveltekit':
+      hookContent = `import { writable } from 'svelte/store';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport const fortressStore = writable<any>(null);\nif (typeof window !== 'undefined') {\n  FortressClient.init('/api/fortress').then(c => fortressStore.set(c)).catch(console.error);\n}\n`;
+      break;
+    case 'remix':
+      hookContent = `import { useState, useEffect } from 'react';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function useFortress() {\n  const [client, setClient] = useState<any>(null);\n  useEffect(() => {\n    FortressClient.init('/api/fortress').then(setClient).catch(console.error);\n  }, []);\n  return client;\n}\n`;
+      break;
+    case 'astro':
+      hookContent = `---\n// Astro component\n---\n<div data-fortress>Secured by Fortress</div>\n<script>\n  import FortressClient from '@lkeld/fortress-wasm/client';\n  FortressClient.init('/api/fortress').then(() => {\n    console.log('Fortress initialized');\n  }).catch(console.error);\n</script>\n`;
+      break;
+    case 'solid':
+    case 'solidjs':
+      hookContent = `import { createSignal, createEffect } from 'solid-js';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function useFortress() {\n  const [client, setClient] = createSignal<any>(null);\n  createEffect(() => {\n    FortressClient.init('/api/fortress').then(setClient).catch(console.error);\n  });\n  return client;\n}\n`;
+      break;
+    case 'qwik':
+      hookContent = `import { component$, useVisibleTask$, useStore } from '@builder.io/qwik';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport const Fortress = component$(() => {\n  const state = useStore({ secured: false });\n  useVisibleTask$(() => {\n    FortressClient.init('/api/fortress').then(() => {\n      state.secured = true;\n    }).catch(console.error);\n  });\n  return <div>Secured by Fortress: {state.secured ? "Active" : "Initializing"}</div>;\n});\n`;
+      break;
+    case 'angular':
+      hookContent = `import { Injectable } from '@angular/core';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\n@Injectable({ providedIn: 'root' })\nexport class FortressService {\n  client: any = null;\n  constructor() {\n    if (typeof window !== 'undefined') {\n      FortressClient.init('/api/fortress').then(c => this.client = c).catch(console.error);\n    }\n  }\n}\n`;
+      break;
+    case 'vite':
+      hookContent = `import FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function initFortress() {\n  FortressClient.init('/api/fortress')\n    .then(() => console.log("Fortress initialized"))\n    .catch(console.error);\n}\n`;
+      break;
+    case 'html':
+      hookContent = `import FortressClient from '@lkeld/fortress-wasm/client';\n\nif (typeof window !== 'undefined') {\n  FortressClient.init('/api/fortress')\n    .then(() => console.log('Fortress HTML page integration loaded'))\n    .catch(console.error);\n}\n`;
+      break;
+  }
+  
+  if (hookContent) {
+    fs.writeFileSync(hookPath, hookContent);
+  }
+
+  // Entrypoint Injection
+  let entryResolved = path.join(targetDir, meta.entryFile);
+  if (!fs.existsSync(entryResolved)) {
+    const baseWithoutExt = entryResolved.slice(0, entryResolved.lastIndexOf('.'));
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.svelte', '.astro']) {
+      if (fs.existsSync(baseWithoutExt + ext)) {
+        entryResolved = baseWithoutExt + ext;
+        break;
+      }
+    }
+  }
+
+  if (fs.existsSync(entryResolved)) {
+    safeModifyFile(entryResolved, (content) => {
+      switch (framework) {
+        case 'next-app':
+          if (content.includes('fortress-wasm-start')) return content;
+          let naContent = `// fortress-wasm-start\nimport { useFortress } from '../hooks/useFortress';\n// fortress-wasm-end\n` + content;
+          const matchNA = naContent.match(/(export\s+default\s+function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*\{)/);
+          if (matchNA) {
+            naContent = naContent.replace(matchNA[0], `${matchNA[0]}\n  // fortress-wasm-start\n  useFortress();\n  // fortress-wasm-end\n`);
+          }
+          return naContent;
+
+        case 'next-pages':
+          if (content.includes('fortress-wasm-start')) return content;
+          let npContent = `// fortress-wasm-start\nimport { useFortress } from '../hooks/useFortress';\n// fortress-wasm-end\n` + content;
+          const matchNP = npContent.match(/(export\s+default\s+function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*\{)/);
+          if (matchNP) {
+            npContent = npContent.replace(matchNP[0], `${matchNP[0]}\n  // fortress-wasm-start\n  useFortress();\n  // fortress-wasm-end\n`);
+          }
+          return npContent;
+
+        case 'nuxt':
+          if (content.includes('fortress-wasm-start')) return content;
+          if (content.includes('<script setup>') || content.includes('<script setup ')) {
+            return content.replace('<script setup>', `<script setup>\n// fortress-wasm-start\nimport { useFortress } from './composables/useFortressInit';\n// useFortress client hook injection\nuseFortress();\n// fortress-wasm-end\n`);
+          } else if (content.includes('<script>') || content.includes('<script ')) {
+            return content.replace('<script>', `<script>\n// fortress-wasm-start\nimport { useFortress } from './composables/useFortressInit';\n// useFortress client hook injection\nuseFortress();\n// fortress-wasm-end\n`);
+          } else {
+            return `<!-- fortress-wasm-start -->\n<script setup>\nimport { useFortress } from './composables/useFortressInit';\n// useFortress client hook injection\nuseFortress();\n</script>\n<!-- fortress-wasm-end -->\n` + content;
+          }
+
+        case 'sveltekit':
+          if (content.includes('fortress-wasm-start')) return content;
+          if (content.includes('<script>') || content.includes('<script ')) {
+            return content.replace('<script>', `<script>\n// fortress-wasm-start\nimport { fortressStore } from '../lib/fortressStore';\n// useFortress client hook injection\n// fortress-wasm-end\n`);
+          } else {
+            return `<!-- fortress-wasm-start -->\n<script>\nimport { fortressStore } from '../lib/fortressStore';\n// useFortress client hook injection\n</script>\n<!-- fortress-wasm-end -->\n` + content;
+          }
+
+        case 'remix':
+          if (content.includes('fortress-wasm-start')) return content;
+          let rxContent = `// fortress-wasm-start\nimport { useFortress } from './hooks/useFortress';\n// fortress-wasm-end\n` + content;
+          const matchRX = rxContent.match(/(export\s+default\s+function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*\{)/);
+          if (matchRX) {
+            rxContent = rxContent.replace(matchRX[0], `${matchRX[0]}\n  // fortress-wasm-start\n  useFortress();\n  // fortress-wasm-end\n`);
+          }
+          return rxContent;
+
+        case 'astro':
+          if (content.includes('fortress-wasm-start')) return content;
+          let astContent = content;
+          if (astContent.includes('---')) {
+            astContent = astContent.replace('---', `---\n// fortress-wasm-start\nimport FortressInit from '../components/FortressInit.astro';\n// useFortress client hook injection\n// fortress-wasm-end`);
+          } else {
+            astContent = `---\n// fortress-wasm-start\nimport FortressInit from '../components/FortressInit.astro';\n// useFortress client hook injection\n// fortress-wasm-end\n---\n` + astContent;
+          }
+          if (astContent.includes('<body>')) {
+            astContent = astContent.replace('<body>', `<body>\n<!-- fortress-wasm-start -->\n<FortressInit />\n<!-- fortress-wasm-end -->`);
+          } else {
+            astContent = astContent + `\n<!-- fortress-wasm-start -->\n<FortressInit />\n<!-- fortress-wasm-end -->`;
+          }
+          return astContent;
+
+        case 'solid':
+        case 'solidjs':
+          if (content.includes('fortress-wasm-start')) return content;
+          let sdContent = `// fortress-wasm-start\nimport { useFortress } from './hooks/useFortress';\n// fortress-wasm-end\n` + content;
+          const matchSD = sdContent.match(/(export\s+default\s+function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*\{)/);
+          if (matchSD) {
+            sdContent = sdContent.replace(matchSD[0], `${matchSD[0]}\n  // fortress-wasm-start\n  useFortress();\n  // fortress-wasm-end\n`);
+          }
+          return sdContent;
+
+        case 'qwik':
+          if (content.includes('fortress-wasm-start')) return content;
+          let qwContent = `// fortress-wasm-start\nimport { Fortress } from '../../components/fortress/fortress';\n// useFortress client hook injection\n// fortress-wasm-end\n` + content;
+          const matchQW = qwContent.match(/(component\$\(\s*\(\s*\)\s*=>\s*\{)/);
+          if (matchQW) {
+            qwContent = qwContent.replace(matchQW[0], `${matchQW[0]}\n  // fortress-wasm-start\n  // useFortress\n  // fortress-wasm-end\n`);
+          }
+          if (qwContent.includes('<slot />')) {
+            qwContent = qwContent.replace('<slot />', `<><Fortress /><slot /></>`);
+          }
+          return qwContent;
+
+        case 'angular':
+          if (content.includes('fortress-wasm-start')) return content;
+          let agContent = `// fortress-wasm-start\nimport { inject } from '@angular/core';\nimport { FortressService } from './api/fortress.service';\n// useFortress client hook injection\n// fortress-wasm-end\n` + content;
+          const matchAG = agContent.match(/(export\s+class\s+AppComponent\s*(?:[^{]*)\{)/);
+          if (matchAG) {
+            agContent = agContent.replace(matchAG[0], `${matchAG[0]}\n  // fortress-wasm-start\n  fortressService = inject(FortressService);\n  // fortress-wasm-end\n`);
+          }
+          return agContent;
+
+        case 'vite':
+          if (content.includes('fortress-wasm-start')) return content;
+          let vtContent = `// fortress-wasm-start\nimport { initFortress } from './fortress';\n// useFortress client hook injection\n// fortress-wasm-end\n` + content;
+          const matchVT = vtContent.match(/(export\s+default\s+function\s+[A-Za-z0-9_]+\s*\([^)]*\)\s*\{)/);
+          if (matchVT) {
+            vtContent = vtContent.replace(matchVT[0], `${matchVT[0]}\n  // fortress-wasm-start\n  initFortress();\n  // fortress-wasm-end\n`);
+          }
+          return vtContent;
+
+        case 'html':
+          if (content.includes('fortress-wasm-start')) return content;
+          const htmlBlock = `<!-- fortress-wasm-start -->\n  <meta http-equiv="Content-Security-Policy" content="worker-src 'self' blob:;">\n  <script type="module" src="/fortress.js"></script>\n  <!-- useFortress client hook injection -->\n  <!-- fortress-wasm-end -->`;
+          if (content.includes('</head>')) {
+            return content.replace('</head>', `  ${htmlBlock}\n</head>`);
+          } else {
+            return content + `\n${htmlBlock}`;
+          }
+
+        default:
+          return content;
+      }
+    }, isTS);
+  }
+
+  // CSP Config file injection
+  let cspResolved = path.join(targetDir, meta.cspFile);
+  if (!fs.existsSync(cspResolved)) {
+    const baseWithoutExt = cspResolved.slice(0, cspResolved.lastIndexOf('.'));
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']) {
+      if (fs.existsSync(baseWithoutExt + ext)) {
+        cspResolved = baseWithoutExt + ext;
+        break;
+      }
+    }
+  }
+
+  switch (framework) {
+    case 'next-app':
+    case 'next-pages':
+      await injectNextCsp(cspResolved, isTS);
+      break;
+    case 'nuxt':
+      await injectNuxtCsp(cspResolved, isTS);
+      break;
+    case 'sveltekit':
+      await injectSvelteCsp(cspResolved, isTS);
+      injectSvelteServerHook(targetDir, isTS);
+      break;
+    case 'remix':
+      injectRemixCsp(targetDir, isTS);
+      break;
+    case 'astro':
+      injectAstroMiddleware(targetDir, isTS);
+      break;
+    case 'solid':
+    case 'solidjs':
+    case 'qwik':
+    case 'vite':
+      await injectViteCsp(cspResolved, isTS);
+      break;
+    default:
+      break;
+  }
+}
+
+function injectCiCdAndPackageJson(tDir) {
+  // Helpers
+  function isBuildRun(lines, i) {
+    const line = lines[i];
+    if (!line.includes('run:')) return false;
+    
+    const hasBuildKeyword = (str) => {
+      const s = str.toLowerCase();
+      return s.includes('build') || s.includes('compile') || s.includes('webpack') || s.includes('vite') || s.includes('next build');
+    };
+
+    if (hasBuildKeyword(line)) return true;
+    
+    const runIndent = line.match(/^\s*/)[0].length;
+    for (let k = i + 1; k < lines.length; k++) {
+      const nextLine = lines[k];
+      if (nextLine.trim() === '') continue;
+      const nextIndent = nextLine.match(/^\s*/)[0].length;
+      if (nextIndent <= runIndent) {
+        break;
+      }
+      if (hasBuildKeyword(nextLine)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function findStepStart(lines, runIndex) {
+    const runLine = lines[runIndex];
+    const runIndent = runLine.match(/^\s*/)[0].length;
+    for (let j = runIndex; j >= 0; j--) {
+      const line = lines[j];
+      const match = line.match(/^(\s*)-\s*/);
+      if (match) {
+        const stepIndent = match[1].length;
+        if (stepIndent <= runIndent) {
+          return j;
+        }
+      }
+    }
+    return runIndex;
+  }
+
+  function isGitLabBuildJob(job) {
+    const hasScript = job.lines.some(l => l.match(/^\s*script:\s*/));
+    if (!hasScript) return false;
+    if (job.name.toLowerCase().includes('build')) return true;
+    const hasStageBuild = job.lines.some(l => {
+      const match = l.match(/^\s*stage:\s*["']?([a-zA-Z0-9_-]+)["']?/);
+      return match && match[1].toLowerCase() === 'build';
+    });
+    if (hasStageBuild) return true;
+    const hasBuildScript = job.lines.some(l => {
+      return l.includes('build') || l.includes('npm run') || l.includes('npm ci');
+    });
+    if (hasBuildScript) return true;
+    return false;
+  }
+
+  // 1. package.json
+  const pkgPath = path.join(tDir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      if (pkg.scripts && pkg.scripts.build && !pkg.scripts.build.includes('fortress build')) {
+        pkg.scripts.build = 'fortress build && ' + pkg.scripts.build;
+        fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+      }
+    } catch (e) {}
+  }
+
+  // 2. GitHub Actions
+  const workflowsDir = path.join(tDir, '.github/workflows');
+  if (fs.existsSync(workflowsDir)) {
+    try {
+      const files = fs.readdirSync(workflowsDir);
+      for (const file of files) {
+        if (file.endsWith('.yml') || file.endsWith('.yaml')) {
+          const filePath = path.join(workflowsDir, file);
+          let content = fs.readFileSync(filePath, 'utf8');
+          if (!content.includes('fortress-wasm-start') && !content.includes('fortress build')) {
+            const lines = content.split('\n');
+            let injected = false;
+            for (let i = 0; i < lines.length; i++) {
+              if (isBuildRun(lines, i)) {
+                const stepStartIndex = findStepStart(lines, i);
+                const stepStartLine = lines[stepStartIndex];
+                const stepIndentMatch = stepStartLine.match(/^(\s*)-\s*/);
+                const leadingWhitespace = stepIndentMatch ? stepIndentMatch[1] : '    ';
+                
+                const step = leadingWhitespace + '# fortress-wasm-start\n' +
+                             leadingWhitespace + '- name: Run Fortress Build\n' +
+                             leadingWhitespace + '  run: npx fortress build\n' +
+                             leadingWhitespace + '  env:\n' +
+                             leadingWhitespace + '    FORTRESS_SIGNING_PASSWORD: ${{ secrets.FORTRESS_SIGNING_PASSWORD }}\n' +
+                             leadingWhitespace + '# fortress-wasm-end';
+                
+                lines.splice(stepStartIndex, 0, step);
+                injected = true;
+                break;
+              }
+            }
+            if (injected) {
+              fs.writeFileSync(filePath, lines.join('\n'));
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 3. GitLab CI
+  const gitlabPath = path.join(tDir, '.gitlab-ci.yml');
+  if (fs.existsSync(gitlabPath)) {
+    try {
+      let content = fs.readFileSync(gitlabPath, 'utf8');
+      if (!content.includes('fortress-wasm-start') && !content.includes('fortress build')) {
+        const lines = content.split('\n');
+        const jobs = [];
+        let currentJob = null;
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const topLevelMatch = line.match(/^([a-zA-Z0-9_-]+):\s*/);
+          if (topLevelMatch) {
+            if (currentJob) {
+              currentJob.endIndex = i;
+              jobs.push(currentJob);
+            }
+            currentJob = {
+              name: topLevelMatch[1],
+              startIndex: i,
+              endIndex: -1,
+              lines: [line]
+            };
+          } else {
+            if (currentJob) {
+              currentJob.lines.push(line);
+            } else {
+              jobs.push({
+                name: '',
+                startIndex: i,
+                endIndex: i + 1,
+                lines: [line],
+                isGlobal: true
+              });
+            }
+          }
+        }
+        if (currentJob) {
+          currentJob.endIndex = lines.length;
+          jobs.push(currentJob);
+        }
+
+        let modified = false;
+        for (const job of jobs) {
+          if (job.isGlobal) continue;
+          if (isGitLabBuildJob(job)) {
+            // 1. Modify script section
+            const scriptLineIndex = job.lines.findIndex(l => l.match(/^\s*script:\s*/));
+            if (scriptLineIndex !== -1) {
+              const scriptLine = job.lines[scriptLineIndex];
+              const blockMatch = scriptLine.match(/^\s*script:\s*(?:\|\-?|>\-?)\s*$/);
+              if (blockMatch) {
+                let firstBlockLineIndex = -1;
+                const scriptIndent = scriptLine.match(/^\s*/)[0].length;
+                for (let j = scriptLineIndex + 1; j < job.lines.length; j++) {
+                  const line = job.lines[j];
+                  if (line.trim() === '') continue;
+                  const lineIndent = line.match(/^\s*/)[0].length;
+                  if (lineIndent > scriptIndent) {
+                    firstBlockLineIndex = j;
+                    break;
+                  }
+                }
+                if (firstBlockLineIndex !== -1) {
+                  const blockLineIndent = job.lines[firstBlockLineIndex].match(/^\s*/)[0];
+                  job.lines.splice(firstBlockLineIndex, 0, `${blockLineIndent}npx fortress build`);
+                  modified = true;
+                }
+              } else {
+                const inlineMatch = scriptLine.match(/^(\s*)script:\s*(.*)$/);
+                if (inlineMatch && inlineMatch[2].trim() !== '') {
+                  let cmd = inlineMatch[2].trim();
+                  let quote = '';
+                  if ((cmd.startsWith('"') && cmd.endsWith('"')) || (cmd.startsWith("'") && cmd.endsWith("'"))) {
+                    quote = cmd[0];
+                    cmd = cmd.slice(1, -1);
+                  }
+                  const indent = inlineMatch[1];
+                  job.lines[scriptLineIndex] = `${indent}script: ${quote}npx fortress build && ${cmd}${quote}`;
+                  modified = true;
+                } else {
+                  let firstItemIndex = -1;
+                  for (let j = scriptLineIndex + 1; j < job.lines.length; j++) {
+                    const line = job.lines[j];
+                    if (line.trim() === '') continue;
+                    if (line.match(/^\s*-\s*/)) {
+                      firstItemIndex = j;
+                      break;
+                    }
+                  }
+                  if (firstItemIndex !== -1) {
+                    const firstItemLine = job.lines[firstItemIndex];
+                    const itemIndent = firstItemLine.match(/^(\s*)-\s*/)[1];
+                    job.lines.splice(firstItemIndex, 0, `${itemIndent}- npx fortress build`);
+                    modified = true;
+                  }
+                }
+              }
+            }
+
+            // 2. Add variables
+            const variablesLineIndex = job.lines.findIndex(l => l.match(/^\s*variables:\s*$/));
+            if (variablesLineIndex !== -1) {
+              const varIndent = job.lines[variablesLineIndex].match(/^\s*/)[0];
+              const innerIndent = varIndent + '  ';
+              job.lines.splice(variablesLineIndex + 1, 0, `${innerIndent}FORTRESS_SIGNING_PASSWORD: $FORTRESS_SIGNING_PASSWORD`);
+            } else {
+              job.lines.splice(1, 0, 
+                `  variables:`,
+                `    FORTRESS_SIGNING_PASSWORD: $FORTRESS_SIGNING_PASSWORD`
+              );
+            }
+            modified = true;
+          }
+        }
+
+        if (modified) {
+          const allLines = [];
+          for (const job of jobs) {
+            allLines.push(...job.lines);
+          }
+          fs.writeFileSync(gitlabPath, allLines.join('\n'));
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 4. CircleCI
+  const circleDir = path.join(tDir, '.circleci');
+  if (fs.existsSync(circleDir)) {
+    try {
+      const files = fs.readdirSync(circleDir);
+      for (const file of files) {
+        if (file === 'config.yml' || file === 'config.yaml') {
+          const filePath = path.join(circleDir, file);
+          let content = fs.readFileSync(filePath, 'utf8');
+          if (!content.includes('fortress-wasm-start') && !content.includes('fortress build')) {
+            const lines = content.split('\n');
+            let injected = false;
+            for (let i = 0; i < lines.length; i++) {
+              if (isBuildRun(lines, i)) {
+                const stepStartIndex = findStepStart(lines, i);
+                const stepStartLine = lines[stepStartIndex];
+                const stepIndentMatch = stepStartLine.match(/^(\s*)-\s*/);
+                const leadingWhitespace = stepIndentMatch ? stepIndentMatch[1] : '      ';
+                
+                const step = leadingWhitespace + '# fortress-wasm-start\n' +
+                             leadingWhitespace + '- run:\n' +
+                             leadingWhitespace + '    name: Fortress Build\n' +
+                             leadingWhitespace + '    command: npx fortress build\n' +
+                             leadingWhitespace + '# fortress-wasm-end';
+                
+                lines.splice(stepStartIndex, 0, step);
+                injected = true;
+                break;
+              }
+            }
+            if (injected) {
+              fs.writeFileSync(filePath, lines.join('\n'));
+            }
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 5. Netlify
+  const netlifyPath = path.join(tDir, 'netlify.toml');
+  if (fs.existsSync(netlifyPath)) {
+    try {
+      let content = fs.readFileSync(netlifyPath, 'utf8');
+      let replaced = false;
+      let hasCommand = /command\s*=/i.test(content);
+      
+      if (hasCommand) {
+        content = content.replace(/command\s*=\s*(["'])(.*?)\1/gi, (match, quote, cmd) => {
+          if (cmd.includes('fortress build')) {
+            replaced = true;
+            return match;
+          }
+          const isPkgManager = /^(npm run|yarn|pnpm|bun run|npm exec|npx)/.test(cmd.trim());
+          let pkgUpdated = false;
+          const pkgPath = path.join(tDir, 'package.json');
+          if (fs.existsSync(pkgPath)) {
+            try {
+              const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+              if (pkg.scripts && pkg.scripts.build && pkg.scripts.build.includes('fortress build')) {
+                pkgUpdated = true;
+              }
+            } catch (e) {}
+          }
+          if (pkgUpdated && isPkgManager) {
+            replaced = true;
+            return match;
+          }
+          replaced = true;
+          return `command = ${quote}npx fortress build && ${cmd}${quote}`;
+        });
+      }
+      
+      if (!replaced && !content.includes('fortress build')) {
+        if (/\[build\]/i.test(content)) {
+          content = content.replace(/\[build\]/i, '[build]\n  command = "npx fortress build && npm run build"');
+        } else {
+          content = content.trim() + '\n\n[build]\n  command = "npx fortress build && npm run build"\n';
+        }
+      }
+      fs.writeFileSync(netlifyPath, content);
+    } catch (e) {}
+  }
+
+  // 6. Vercel
+  const vercelPath = path.join(tDir, 'vercel.json');
+  if (fs.existsSync(vercelPath)) {
+    try {
+      const vercelConfig = JSON.parse(fs.readFileSync(vercelPath, 'utf8'));
+      if (vercelConfig && vercelConfig.buildCommand) {
+        if (!vercelConfig.buildCommand.includes('fortress build')) {
+          vercelConfig.buildCommand = 'npx fortress build && ' + vercelConfig.buildCommand;
+          fs.writeFileSync(vercelPath, JSON.stringify(vercelConfig, null, 2) + '\n');
+        }
+      }
+    } catch (e) {}
+  }
+}
+
+function printSecretReminder() {
+  console.log(`
+⚠️  Action required: Add FORTRESS_SIGNING_PASSWORD to your CI/CD secrets.
+
+  GitHub Actions:  Settings → Secrets and variables → Actions → New repository secret
+  Vercel:          vercel env add FORTRESS_SIGNING_PASSWORD
+  Netlify:         Site settings → Environment variables
+  GitLab:          Settings → CI/CD → Variables
+
+  This is the same password you set during create-fortress-app.
+  Do not commit it to your repository.
+`);
+}
+
+async function writeConfigAndKeys(framework, isTS, pm, protectedDirName, password, addToEnv, selectedFunctions, selectedFilePath) {
     const canonicalFw = getCanonicalFramework(framework);
     
     const resolvedProtectedDir = path.resolve(targetDir, protectedDirName);
-    if (!resolvedProtectedDir.startsWith(targetDir)) {
+    if (resolvedProtectedDir !== targetDir && !resolvedProtectedDir.startsWith(targetDir + path.sep)) {
         throw new Error("Directory traversal detected. Protected directory must be inside the target directory.");
     }
     
@@ -996,12 +1955,25 @@ module.exports = {
 `;
     fs.writeFileSync(configPath, configContent);
     
+    const compatCtx = compatibility.resolveFrameworkCompatibility(targetDir, canonicalFw);
     if (scaffoldFiles[canonicalFw]) {
       try {
-        scaffoldFiles[canonicalFw](targetDir, isTS);
+        scaffoldFiles[canonicalFw](targetDir, isTS, compatCtx);
       } catch (e) {
         // ignore
       }
+    }
+    
+    // Auto-inject CSP, Client Hooks, and CI/CD/package.json
+    try {
+      await performAutoInjection(targetDir, framework, isTS, compatCtx);
+    } catch (e) {
+      console.error("[Fortress] Auto-injection error:", e);
+    }
+    try {
+      injectCiCdAndPackageJson(targetDir);
+    } catch (e) {
+      console.error("[Fortress] CI/CD/package.json auto-injection error:", e);
     }
     
     if (addToEnv && password) {
@@ -1033,9 +2005,358 @@ module.exports = {
       gitignoreContent += `\n.env`;
       updatedGitignore = true;
     }
+    if (!overridePassword) {
+      const devKey = crypto.randomBytes(16).toString('hex');
+      fs.writeFileSync(path.join(targetDir, '.fortress_dev_key'), devKey + '\n');
+      if (!gitignoreContent.includes('.fortress_dev_key')) {
+        gitignoreContent += `\n.fortress_dev_key`;
+        updatedGitignore = true;
+      }
+    }
     if (updatedGitignore) {
       fs.writeFileSync(gitignorePath, gitignoreContent.trim() + '\n');
     }
+
+    // Binary merge prevention for .gitattributes
+    const gitattributesPath = path.join(targetDir, '.gitattributes');
+    let gitattributesContent = '';
+    if (fs.existsSync(gitattributesPath)) {
+      gitattributesContent = fs.readFileSync(gitattributesPath, 'utf8');
+    }
+    const gitattributesBlock = `# fortress-wasm-start\n# Fortress WASM compiled payloads — binary files, no text merge\n*.fvbc binary\n*.opcodes.json binary\n# fortress-wasm-end`;
+    if (gitattributesContent.includes('# fortress-wasm-start') && gitattributesContent.includes('# fortress-wasm-end')) {
+      gitattributesContent = gitattributesContent.replace(
+        /# fortress-wasm-start[\s\S]*?# fortress-wasm-end/,
+        gitattributesBlock
+      );
+    } else {
+      gitattributesContent = gitattributesContent.trim() + '\n\n' + gitattributesBlock + '\n';
+    }
+    fs.writeFileSync(gitattributesPath, gitattributesContent.trim() + '\n');
+
+    const relativeProtectedDir = path.relative(targetDir, resolvedProtectedDir).replace(/\\/g, '/');
+    setupHuskyPreCommitHook(targetDir, relativeProtectedDir);
+    setupLintStagedCompatibility(targetDir, relativeProtectedDir);
+}
+
+function setupHuskyPreCommitHook(targetDir, relativeProtectedDir) {
+  const { execSync } = require('child_process');
+  let isGit = false;
+  try {
+    if (fs.existsSync(path.join(targetDir, '.git'))) {
+      isGit = true;
+    } else {
+      execSync('git rev-parse --is-inside-work-tree', { cwd: targetDir, stdio: 'ignore' });
+      isGit = true;
+    }
+  } catch (e) {
+    isGit = false;
+  }
+  
+  if (!isGit) {
+    console.log('[Fortress] Git repository not detected. Skipping Husky pre-commit hook setup.');
+    return;
+  }
+  
+  const huskyDir = path.join(targetDir, '.husky');
+  let hasHusky = fs.existsSync(huskyDir);
+  const pkgJsonPath = path.join(targetDir, 'package.json');
+  
+  if (!hasHusky && fs.existsSync(pkgJsonPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      if (
+        (pkg.dependencies && pkg.dependencies.husky) ||
+        (pkg.devDependencies && pkg.devDependencies.husky)
+      ) {
+        hasHusky = true;
+      }
+    } catch (e) {}
+  }
+  
+  if (!hasHusky) {
+    try {
+      execSync('npx husky init', { cwd: targetDir, stdio: 'ignore' });
+    } catch (e) {
+      console.error('[Fortress] Failed to initialize Husky:', e.message);
+    }
+  }
+  
+  if (!fs.existsSync(huskyDir)) {
+    try {
+      fs.mkdirSync(huskyDir, { recursive: true });
+    } catch (e) {}
+  }
+  
+  const preCommitPath = path.join(huskyDir, 'pre-commit');
+  let preCommitContent = '';
+  if (fs.existsSync(preCommitPath)) {
+    preCommitContent = fs.readFileSync(preCommitPath, 'utf8');
+  }
+  
+  const scriptBlock = `# fortress-wasm-start
+if git diff --cached --name-only | grep -q "^${relativeProtectedDir}/"; then
+  echo "Detected changes in ${relativeProtectedDir}/ directory. Recompiling protected functions..."
+  # Resolve key
+  if [ -f .env ]; then
+    FORTRESS_SIGNING_PASSWORD=$(grep -E "^FORTRESS_SIGNING_PASSWORD=" .env | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+  fi
+  KEY="\${FORTRESS_DEV_KEY:-\$(cat .fortress_dev_key 2>/dev/null || echo \$FORTRESS_SIGNING_PASSWORD)}"
+  if [ -z "\$KEY" ]; then
+    # Lazily generate local dev key if missing entirely
+    echo "[fortress] No dev key found. Generating local dev signing key..."
+    node -e "const fs = require('fs'); const crypto = require('crypto'); fs.writeFileSync('.fortress_dev_key', crypto.randomBytes(16).toString('hex') + '\\n');"
+    if [ -f .gitignore ]; then
+      if ! grep -q ".fortress_dev_key" .gitignore; then
+        echo "" >> .gitignore
+        echo ".fortress_dev_key" >> .gitignore
+      fi
+    fi
+    KEY=\$(cat .fortress_dev_key)
+  fi
+  if ! FORTRESS_SIGNING_PASSWORD="\$KEY" npx fortress build; then
+    echo "Error: Fortress build failed. Commit aborted."
+    exit 1
+  fi
+  git add ${relativeProtectedDir}/*.fvbc ${relativeProtectedDir}/*.opcodes.json 2>/dev/null
+fi
+# fortress-wasm-end`;
+
+  if (preCommitContent.includes('# fortress-wasm-start') && preCommitContent.includes('# fortress-wasm-end')) {
+    preCommitContent = preCommitContent.replace(
+      /# fortress-wasm-start[\s\S]*?# fortress-wasm-end/,
+      scriptBlock
+    );
+  } else {
+    preCommitContent = preCommitContent.trim() + '\n\n' + scriptBlock + '\n';
+  }
+  
+  fs.writeFileSync(preCommitPath, preCommitContent.trim() + '\n');
+  
+  try {
+    fs.chmodSync(preCommitPath, '755');
+  } catch (e) {
+    try {
+      fs.chmodSync(preCommitPath, 0o755);
+    } catch (err) {}
+  }
+}
+
+function modifyYamlConfig(content, relativeProtectedDir) {
+  const pattern = `${relativeProtectedDir}/**`;
+  const escapedPattern = pattern.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+  const regex = new RegExp(`(['"]?${escapedPattern}['"]?\\s*:\\s*)([\\s\\S]*?)(?=\\n\\S|\\n$|$)`);
+  const match = content.match(regex);
+  
+  if (match) {
+    const prefix = match[1];
+    const body = match[2];
+    
+    if (body.includes('fortress build') || body.includes('npx fortress build')) {
+      return content;
+    }
+    
+    if (body.includes('-')) {
+      const indentMatch = body.match(/\n(\s*)-/);
+      const indent = indentMatch ? indentMatch[1] : '  ';
+      const updatedBody = `\n${indent}- fortress build` + body;
+      return content.replace(regex, prefix + updatedBody);
+    } else {
+      const trimmedBody = body.trim();
+      if (trimmedBody) {
+        return content.replace(regex, `${prefix}\n  - fortress build\n  - ${trimmedBody}`);
+      } else {
+        return content.replace(regex, `${prefix}\n  - fortress build`);
+      }
+    }
+  } else {
+    return content.trim() + `\n\n"${pattern}":\n  - fortress build\n`;
+  }
+}
+
+function modifyJsConfig(content, relativeProtectedDir) {
+  const { parseModule, generateCode } = require('magicast');
+  const mod = parseModule(content);
+  const pattern = `${relativeProtectedDir}/**`;
+  
+  function updateObjectProxy(obj) {
+    let existing = obj[pattern];
+    if (!existing) {
+      obj[pattern] = ["fortress build"];
+    } else if (typeof existing === 'string') {
+      if (existing !== 'fortress build' && existing !== 'npx fortress build') {
+        obj[pattern] = ["fortress build", existing];
+      }
+    } else if (Array.isArray(existing)) {
+      if (!existing.includes('fortress build') && !existing.includes('npx fortress build')) {
+        existing.unshift('fortress build');
+        obj[pattern] = existing;
+      }
+    }
+  }
+
+  if (mod.exports.default) {
+    updateObjectProxy(mod.exports.default);
+    return generateCode(mod).code;
+  }
+  
+  let modified = false;
+  for (const node of mod.$ast.body) {
+    if (
+      node.type === 'ExpressionStatement' &&
+      node.expression.type === 'AssignmentExpression' &&
+      node.expression.operator === '='
+    ) {
+      const left = node.expression.left;
+      const right = node.expression.right;
+      
+      const isModuleExports = 
+        (left.type === 'MemberExpression' &&
+         left.object.name === 'module' &&
+         left.property.name === 'exports') ||
+        (left.type === 'Identifier' && left.name === 'exports');
+        
+      if (isModuleExports && right.type === 'ObjectExpression') {
+        let existingProp = null;
+        for (const prop of right.properties) {
+          if (
+            prop.type === 'ObjectProperty' &&
+            ((prop.key.type === 'Identifier' && prop.key.name === pattern) ||
+             (prop.key.type === 'StringLiteral' && prop.key.value === pattern))
+          ) {
+            existingProp = prop;
+            break;
+          }
+        }
+        
+        if (existingProp) {
+          const valNode = existingProp.value;
+          if (valNode.type === 'StringLiteral') {
+            const val = valNode.value;
+            if (val !== 'fortress build' && val !== 'npx fortress build') {
+              existingProp.value = {
+                type: 'ArrayExpression',
+                elements: [
+                  { type: 'StringLiteral', value: 'fortress build' },
+                  { type: 'StringLiteral', value: val }
+                ]
+              };
+              modified = true;
+            }
+          } else if (valNode.type === 'ArrayExpression') {
+            const hasBuild = valNode.elements.some(
+              el => el.type === 'StringLiteral' && (el.value === 'fortress build' || el.value === 'npx fortress build')
+            );
+            if (!hasBuild) {
+              valNode.elements.unshift({ type: 'StringLiteral', value: 'fortress build' });
+              modified = true;
+            }
+          }
+        } else {
+          right.properties.push({
+            type: 'ObjectProperty',
+            key: { type: 'StringLiteral', value: pattern },
+            value: {
+              type: 'ArrayExpression',
+              elements: [
+                { type: 'StringLiteral', value: 'fortress build' }
+              ]
+            },
+            computed: false,
+            shorthand: false
+          });
+          modified = true;
+        }
+      }
+    }
+  }
+  
+  if (modified) {
+    return generateCode(mod).code;
+  }
+  return content;
+}
+
+function setupLintStagedCompatibility(targetDir, relativeProtectedDir) {
+  const pattern = `${relativeProtectedDir}/**`;
+  
+  function modifyLintStagedObject(config, pattern) {
+    let existing = config[pattern];
+    if (!existing) {
+      config[pattern] = ["fortress build"];
+    } else if (typeof existing === 'string') {
+      if (existing !== 'fortress build' && existing !== 'npx fortress build') {
+        config[pattern] = ["fortress build", existing];
+      }
+    } else if (Array.isArray(existing)) {
+      if (!existing.includes('fortress build') && !existing.includes('npx fortress build')) {
+        existing.unshift('fortress build');
+      }
+    }
+  }
+
+  const pkgPath = path.join(targetDir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkgContent = fs.readFileSync(pkgPath, 'utf8');
+      const pkg = JSON.parse(pkgContent);
+      if (pkg['lint-staged']) {
+        modifyLintStagedObject(pkg['lint-staged'], pattern);
+        fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+      }
+    } catch (e) {}
+  }
+
+  function modifyJsonConfigFile(filePath) {
+    if (fs.existsSync(filePath)) {
+      try {
+        const content = fs.readFileSync(filePath, 'utf8').trim();
+        if (content.startsWith('{')) {
+          const config = JSON.parse(content);
+          modifyLintStagedObject(config, pattern);
+          fs.writeFileSync(filePath, JSON.stringify(config, null, 2) + '\n');
+        }
+      } catch (e) {}
+    }
+  }
+
+  function modifyYamlConfigFile(filePath) {
+    if (fs.existsSync(filePath)) {
+      try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const modified = modifyYamlConfig(content, relativeProtectedDir);
+        fs.writeFileSync(filePath, modified);
+      } catch (e) {}
+    }
+  }
+
+  function modifyJsConfigFile(filePath) {
+    if (fs.existsSync(filePath)) {
+      try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const modified = modifyJsConfig(content, relativeProtectedDir);
+        fs.writeFileSync(filePath, modified);
+      } catch (e) {}
+    }
+  }
+
+  modifyJsonConfigFile(path.join(targetDir, '.lintstagedrc.json'));
+  modifyYamlConfigFile(path.join(targetDir, '.lintstagedrc.yaml'));
+  modifyYamlConfigFile(path.join(targetDir, '.lintstagedrc.yml'));
+  modifyJsConfigFile(path.join(targetDir, '.lintstagedrc.js'));
+  modifyJsConfigFile(path.join(targetDir, 'lint-staged.config.js'));
+
+  const rcPath = path.join(targetDir, '.lintstagedrc');
+  if (fs.existsSync(rcPath)) {
+    try {
+      const content = fs.readFileSync(rcPath, 'utf8').trim();
+      if (content.startsWith('{') || content.startsWith('[')) {
+        modifyJsonConfigFile(rcPath);
+      } else {
+        modifyYamlConfigFile(rcPath);
+      }
+    } catch (e) {}
+  }
 }
 
 async function runInteractive() {
@@ -1068,7 +2389,7 @@ async function runInteractive() {
 
     let selectedFunctions = [];
     const fullFilePath = path.resolve(targetDir, selectedFile);
-    if (!fullFilePath.startsWith(targetDir)) {
+    if (fullFilePath !== targetDir && !fullFilePath.startsWith(targetDir + path.sep)) {
         throw new Error('Directory traversal detected. Protected file path must be inside the target directory.');
     }
     if (selectedFile && fs.existsSync(fullFilePath)) {
@@ -1107,6 +2428,10 @@ async function runInteractive() {
     
     const apiEndpoint = await askQuestion('\nConfirm API endpoint', '/api/fortress');
     const protectedDirName = await askQuestion('Confirm output directory', './protected');
+    const resolvedProtectedDir = path.resolve(targetDir, protectedDirName);
+    if (resolvedProtectedDir !== targetDir && !resolvedProtectedDir.startsWith(targetDir + path.sep)) {
+        throw new Error("Directory traversal detected. Protected directory must be inside the target directory.");
+    }
     const addToEnv = await promptConfirm('Add signing password and keys path to .env?', true);
     
     console.log('');
@@ -1115,7 +2440,7 @@ async function runInteractive() {
     await showProgressBar('Compiling configurations     ', 800);
     
     const fullSelectedFilePath = selectedFile ? path.resolve(targetDir, selectedFile) : null;
-    writeConfigAndKeys(framework, finalTypeScript, finalPackageManager, protectedDirName, password, addToEnv, selectedFunctions, fullSelectedFilePath);
+    await writeConfigAndKeys(framework, finalTypeScript, finalPackageManager, protectedDirName, password, addToEnv, selectedFunctions, fullSelectedFilePath);
     
     const summaryLines = [
       `Framework:       ${getFriendlyName(framework)}`,
@@ -1153,9 +2478,10 @@ async function runInteractive() {
         console.log('\n⚠️  Scaffolding complete, but auto-build failed. Run manually:');
         console.log(`  FORTRESS_SIGNING_PASSWORD="<your-password>" npx fortress build\n`);
     }
+    printSecretReminder();
 }
 
-function runNonInteractive() {
+async function runNonInteractive() {
     let pw;
     if (overridePassword) {
         if (overridePassword.length < 12) {
@@ -1167,13 +2493,14 @@ function runNonInteractive() {
         pw = crypto.randomBytes(8).toString('hex');
         console.log('Auto-generated signing password: ' + pw);
     }
-    writeConfigAndKeys(finalFramework, finalTypeScript, finalPackageManager, './protected', pw, true, []);
+    await writeConfigAndKeys(finalFramework, finalTypeScript, finalPackageManager, './protected', pw, true, []);
     
     console.log(`Successfully scaffolded fortress-wasm application!`);
     console.log(`Framework: ${getCanonicalFramework(finalFramework)}`);
     console.log(`TypeScript: ${finalTypeScript}`);
     console.log(`Package Manager: ${finalPackageManager}`);
     console.log(`Protected directory: ${path.join(targetDir, 'protected')}`);
+    printSecretReminder();
 }
 
 if (isInteractive) {
@@ -1182,5 +2509,8 @@ if (isInteractive) {
         process.exit(1);
     });
 } else {
-    runNonInteractive();
+    runNonInteractive().catch(err => {
+        console.error(err);
+        process.exit(1);
+    });
 }
