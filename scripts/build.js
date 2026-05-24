@@ -74,6 +74,12 @@ function generateHashes(requireExists = false) {
     if (fs.existsSync(pkgWebPath)) {
         const hashWeb = crypto.createHash('sha384').update(fs.readFileSync(pkgWebPath)).digest('hex');
         fs.writeFileSync(pkgWebPath + '.sha384', hashWeb);
+        fs.writeFileSync(path.join(ROOT_DIR, 'WASM_INTEGRITY.txt'), hashWeb);
+        const distIntegrityDir = path.join(ROOT_DIR, 'dist');
+        if (!fs.existsSync(distIntegrityDir)) {
+            fs.mkdirSync(distIntegrityDir, { recursive: true });
+        }
+        fs.writeFileSync(path.join(distIntegrityDir, 'WASM_INTEGRITY.txt'), hashWeb);
         console.log(`Generated pkg-web/vm_core_bg.wasm.sha384: ${hashWeb}`);
     } else {
         console.warn(`Warning: Web WASM binary not found at ${pkgWebPath}`);

@@ -87,6 +87,108 @@ class NodeWorkerWrapper {
     }
 }
 
+async function verifyWasmSRI() {
+    let wasmBytes = null;
+    let expectedHash = 'b0af87a20779f263e471b5bfcc6af471a19a40d69b2e87f57ee5e87bef1f8dc3235f22875f71142502ae8497e4e1d4ef';
+
+    // 1. Try to read expected hash from WASM_INTEGRITY.txt
+    if (isNode) {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            const possibleIntegrityPaths = [
+                path.join(process.cwd(), 'WASM_INTEGRITY.txt'),
+                path.join(__dirname, 'WASM_INTEGRITY.txt'),
+                path.join(__dirname, '../WASM_INTEGRITY.txt'),
+                path.join(__dirname, '../../WASM_INTEGRITY.txt'),
+                path.join(__dirname, '../../../WASM_INTEGRITY.txt')
+            ];
+            for (const p of possibleIntegrityPaths) {
+                if (fs.existsSync(p)) {
+                    expectedHash = fs.readFileSync(p, 'utf8').trim();
+                    break;
+                }
+            }
+        } catch (e) {}
+    } else {
+        try {
+            const response = await fetch('/WASM_INTEGRITY.txt');
+            if (response.ok) {
+                expectedHash = (await response.text()).trim();
+            }
+        } catch (e) {
+            try {
+                const response = await fetch('WASM_INTEGRITY.txt');
+                if (response.ok) {
+                    expectedHash = (await response.text()).trim();
+                }
+            } catch (err) {}
+        }
+    }
+
+    // 2. Read vm_core_bg.wasm
+    if (isNode) {
+        const fs = require('fs');
+        const path = require('path');
+        const possibleWasmPaths = [
+            path.join(__dirname, '../../pkg-node/vm_core_bg.wasm'),
+            path.join(__dirname, '../pkg-node/vm_core_bg.wasm'),
+            path.join(__dirname, './pkg-node/vm_core_bg.wasm'),
+            path.join(__dirname, '../../pkg-web/vm_core_bg.wasm'),
+            path.join(__dirname, '../pkg-web/vm_core_bg.wasm'),
+            path.join(__dirname, './pkg-web/vm_core_bg.wasm'),
+            path.join(process.cwd(), 'pkg-node/vm_core_bg.wasm'),
+            path.join(process.cwd(), 'pkg-web/vm_core_bg.wasm'),
+            path.join(process.cwd(), 'vm_core_bg.wasm')
+        ];
+        for (const p of possibleWasmPaths) {
+            if (fs.existsSync(p)) {
+                wasmBytes = new Uint8Array(fs.readFileSync(p));
+                break;
+            }
+        }
+        if (!wasmBytes) {
+            throw new Error('vm_core_bg.wasm not found on disk');
+        }
+    } else {
+        const metaUrl = getImportMetaUrl();
+        const wasmUrl = new URL('vm_core_bg.wasm', metaUrl);
+        try {
+            const response = await fetch(wasmUrl);
+            if (!response.ok) throw new Error(`Status ${response.status}`);
+            const ab = await response.arrayBuffer();
+            wasmBytes = new Uint8Array(ab);
+        } catch (e) {
+            try {
+                const response = await fetch('/vm_core_bg.wasm');
+                if (!response.ok) throw new Error(`Status ${response.status}`);
+                const ab = await response.arrayBuffer();
+                wasmBytes = new Uint8Array(ab);
+            } catch (err) {
+                throw new Error('Failed to fetch vm_core_bg.wasm: ' + e.message);
+            }
+        }
+    }
+
+    // 3. Compute SHA-384 hash of wasmBytes
+    let computedHash = '';
+    if (isNode) {
+        const crypto = require('crypto');
+        computedHash = crypto.createHash('sha384').update(wasmBytes).digest('hex');
+    } else {
+        const hashBuffer = await crypto.subtle.digest('SHA-384', wasmBytes);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        computedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // 4. Compare
+    if (computedHash !== expectedHash) {
+        throw new Error(`Subresource Integrity (SRI) verification failed for vm_core_bg.wasm. Expected: ${expectedHash}, Computed: ${computedHash}`);
+    }
+
+    return wasmBytes;
+}
+
 class FortressClient {
     constructor() {
         this.worker = null;
@@ -130,7 +232,8 @@ class FortressClient {
             window.__fortress_latest_opcodeMap = opcodeMap;
         }
 
-        const initPayload = { bytecode, handshakeHeader: handshakeBytes, opcodeMap };
+        const vmCoreBytes = await verifyWasmSRI();
+        const initPayload = { bytecode, handshakeHeader: handshakeBytes, opcodeMap, vmCoreBytes };
         if (clientPrivateKey) {
             initPayload.clientPrivateKey = Array.isArray(clientPrivateKey)
                 ? new Uint8Array(clientPrivateKey)

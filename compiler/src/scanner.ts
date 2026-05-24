@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Parser } from './parser';
 import { CodeGenerator } from './codegen';
-import { transpile, verifyEquivalenceSync } from './js-transpiler';
+import { transpile, verifyEquivalenceSync } from './transpiler';
 import { stdlibSource } from './stdlib';
 import { Worker, isMainThread, parentPort, workerData } from 'worker_threads';
 import * as os from 'os';

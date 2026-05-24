@@ -87,6 +87,9 @@
     "@types/pngjs": "^6.0.5",
     "typescript": "^5.0.0"
   },
+  "optionalDependencies": {
+    "isolated-vm": "^5.0.0"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
