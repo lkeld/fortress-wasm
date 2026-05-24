@@ -23,9 +23,13 @@ jobs:
         with:
           node-version: '20.x'
           registry-url: 'https://npm.pkg.github.com'
+          cache: 'npm'
 
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@23bde3305096680d1a6925154d72ec2864996d1c
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
@@ -40,16 +44,15 @@ jobs:
         run: npm audit --audit-level=high
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@100cc647b0a7dbfaef6a26cf03fcf22880cf5581
+        with:
+          tool: cargo-audit
 
       - name: Run cargo audit check
         run: cargo audit
 
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-
       - name: Run cargo-deny checks
-        run: cargo deny check
+        uses: EmbarkStudios/cargo-deny-action@3f4a382bd2309854e487dbcc0e1e240573c74877
 
       - name: Run Tests
         run: npm test
