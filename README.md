@@ -1,10 +1,8 @@
 # Fortress WASM
 
-I built proprietary software for a client—a complex coaching dashboard with significant, high-value business logic embedded directly in it. When the client relationship deteriorated, I found myself in a position where they had the financial resources and the motivation to simply hire someone to reverse engineer my compiled WebAssembly, extract my proprietary logic, and replicate the core system without my involvement. That isn't a hypothetical threat model; it was a real, immediate risk to my intellectual property. 
+Standard WebAssembly is essentially human-readable. It has a highly structured AST and lacks the hardware-level obscurity of native binaries. Deploy proprietary logic in standard Wasm and you have effectively open-sourced it — a well-funded adversary with a decompiler and an afternoon can extract your core business logic with minimal friction.
 
-I needed to make that mathematically and practically as difficult as possible. Standard WebAssembly is essentially human-readable. It has a highly structured AST and lacks the hardware-level obscurity of native binaries. If you deploy your proprietary logic in standard Wasm, you are effectively open-sourcing it. This project is my answer to that problem. I built this at 4am because I was genuinely obsessed with getting it right, and I've cleaned it up to share.
-
-Fortress WASM serves both as a passively hardened virtual machine and as the foundational runtime substrate for an active Runtime Application Self-Protection (RASP) layer, capable of actively defending client-side logic against host-based tampering, dynamic extraction, and automated deobfuscation.
+Fortress WASM exists because that threat is real and the existing tooling does nothing about it. It is a hardened virtual machine that compiles your JavaScript into encrypted bytecode, executes it inside a heavily obfuscated Rust VM, and serves as the foundational runtime for an active RASP layer capable of defending client-side logic against host-based tampering, dynamic extraction, and automated deobfuscation.
 
 ---
 
