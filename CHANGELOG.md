@@ -2,6 +2,12 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.4] - 2026-05-25
+
+### Changed
+- **Dependencies Upgrade**: Merged Dependabot package upgrades. Bumped `argon2` to `^0.44.0`, `magicast` to `^0.5.3`, `@types/node` to `^25.9.1`, and `isolated-vm` optional dependency to `^6.1.2`.
+- **GitHub Actions Upgrades**: Upgraded `actions/checkout` and `actions/setup-node` workflow actions to `@v6`.
+
 ## [1.5.3] - 2026-05-25
 
 ### Added
