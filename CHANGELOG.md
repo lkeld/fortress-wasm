@@ -2,6 +2,16 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.0] - 2026-05-25
+
+### Added
+- **18-Framework Zero-Touch Integration**: Full automation support across Next.js (App & Pages), Nuxt, SvelteKit, Remix, Astro, SolidJS, Qwik, Angular, Vite, Plain HTML, Express, Fastify, Hono, Koa, NestJS, Bun, and Deno.
+- **Auto Hook & CSP Injection**: CLI dynamically injects frontend framework hook initialization (`useFortress`) and configures Content Security Policy (`worker-src 'self' blob:;`) response headers cleanly, avoiding duplicate blocks via sentinel comment markers.
+- **Wrapper Process Dev Watcher**: Enhanced `fortress dev` (and `fortress watch` alias) to serve local payloads, watch source files, support rapid write debouncing, propagate custom dev ports, and recursively clean up child processes on shutdown (SIGINT/SIGTERM).
+- **CI/CD Pipeline Auto-Generation**: Automatically detects and injects a `fortress build` execution step before framework compilation steps across GitHub Actions, GitLab CI, CircleCI, Netlify, and Vercel.
+- **Pre-commit Hook Generation**: Auto-generates husky pre-commit hooks and gitattributes settings during scaffolding, with lazy developer-key auto-generation to prevent team members' commits from failing.
+- **Version Compatibility Matrix**: Implemented dynamic semver-based dependency resolution and features mappings to cleanly support historical and modern boundaries (e.g. Next.js Pages vs App router, SvelteKit v2, Astro v5, Angular standalone components, Remix v2, and React Router v7).
+
 ## [1.3.0] - 2026-05-24
 
 ### Added
