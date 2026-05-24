@@ -81,10 +81,10 @@
   },
   "homepage": "https://github.com/lkeld/fortress-wasm#readme",
   "dependencies": {
-    "argon2": "^0.40.3",
+    "argon2": "^0.44.0",
     "cross-spawn": "^7.0.3",
     "jimp": "^1.6.1",
-    "magicast": "^0.3.4",
+    "magicast": "^0.5.3",
     "pngjs": "^7.0.0",
     "tree-kill": "^1.2.2"
   },
@@ -92,12 +92,12 @@
     "@babel/traverse": "^7.29.0",
     "@playwright/test": "^1.60.0",
     "@types/babel__traverse": "^7.28.0",
-    "@types/node": "^20.0.0",
+    "@types/node": "^25.9.1",
     "@types/pngjs": "^6.0.5",
     "typescript": "^5.0.0"
   },
   "optionalDependencies": {
-    "isolated-vm": "^5.0.0"
+    "isolated-vm": "^6.1.2"
   },
   "engines": {
     "node": ">=18.0.0"
