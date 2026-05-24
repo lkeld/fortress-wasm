@@ -285,7 +285,7 @@ export function scanFile(filePath: string): ProtectedFunction[] {
 
             // Compile to bytecode
             const codegen = new CodeGenerator();
-            const { code, opcodeMap } = codegen.generate(fvmAst);
+            const { code, opcodeMap } = codegen.generate(fvmAst, functionName);
 
             // Run Equivalence Verification
             verifyEquivalenceSync(originalJsCode, code, Array.from(opcodeMap));

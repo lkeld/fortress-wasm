@@ -71,6 +71,8 @@ pub struct Vm {
     pub(crate) gas_limit: u64,
     pub(crate) gas_used: u64,
     pub(crate) regex_cache: RegexCache,
+    pub trace: Vec<String>,
+    pub error_detail: Option<String>,
 }
 
 impl Vm {
@@ -116,6 +118,8 @@ impl Vm {
             gas_limit: 1_000_000,
             gas_used: 0,
             regex_cache: RegexCache::new(32),
+            trace: Vec::new(),
+            error_detail: None,
         }
     }
 
@@ -379,10 +383,27 @@ impl Vm {
 
             let handler = *dispatch_table.get(opcode_val_translated as usize).ok_or(VmError::InvalidOpCode(opcode_val_translated))?;
             
+            #[cfg(feature = "dev")]
+            {
+                println!("FVM TRACE: Executing opcode {:?}", crate::opcodes::OpCode::try_from(opcode_val_translated));
+            }
+
+            #[cfg(feature = "dev")]
+            {
+                let opcode_name = format!("{:?}", crate::opcodes::OpCode::try_from(opcode_val_translated));
+                self.trace.push(opcode_name);
+                if self.trace.len() > 100 {
+                    self.trace.remove(0);
+                }
+            }
+
             match handler(self) {
                 Ok(true) => break,
                 Ok(false) => continue,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    eprintln!("FVM Error occurred: {:?} on opcode {:?}", e, crate::opcodes::OpCode::try_from(opcode_val_translated));
+                    return Err(e);
+                }
             }
         }
 

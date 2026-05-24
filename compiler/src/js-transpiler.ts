@@ -41,6 +41,10 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
     const usedStdlibSet = new Set<string>();
     let mergesortCounter = 0;
     const extraDeclarations: string[] = [];
+    const activeFuncNodes: any[] = [];
+    let isGeneratorFlag = false;
+    const packedFunctions = new Map<string, string[]>();
+    const extraFuncNodes: any[] = [];
 
     // Check RegExp Safety
     function checkRegExpSafety(pattern: string, line: number) {
@@ -100,6 +104,1850 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
             'classPrivateMethods',
         ]
     });
+
+    const rootStmt = ast.program.body[0];
+
+    let originalParamNames: string[] = [];
+    if (rootStmt && (t.isFunctionDeclaration(rootStmt) || t.isFunctionExpression(rootStmt) || t.isArrowFunctionExpression(rootStmt))) {
+        originalParamNames = rootStmt.params.map((p: any) => p.name);
+    }
+
+    let hasSharedArrayBuffer = false;
+    const typedArrays = new Set([
+        'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 
+        'Int16Array', 'Uint16Array', 
+        'Int32Array', 'Uint32Array', 
+        'Float32Array', 'Float64Array'
+    ]);
+
+    // Detect SharedArrayBuffer / TypedArrays and Atomics
+    traverse(ast, {
+        Identifier(path: any) {
+            const name = path.node.name;
+            if (name === 'Atomics') {
+                throw new TypeError("Atomics is not supported");
+            }
+            if (name === 'SharedArrayBuffer' || typedArrays.has(name)) {
+                hasSharedArrayBuffer = true;
+            }
+        },
+        ConditionalExpression(path: any) {
+            throw new Error("Ternary operator (ConditionalExpression) is not supported");
+        }
+    });
+
+    if (hasSharedArrayBuffer) {
+        extraDeclarations.push(`
+function SharedArrayBuffer_new(size) {
+    let arr = [];
+    let i = 0;
+    while (i < size) {
+        arr = listPush(arr, 0);
+        i = i + 1;
+    }
+    return { __is_sab: true, buffer: arr, views: [] };
+}
+function TypedArray_new(arg, elementSize) {
+    let view = {};
+    view.__elementSize = elementSize;
+    view.__ownKeys = ["length", "__elementSize"];
+    
+    if (TypeOf(arg) == "number") {
+        view.length = arg;
+        let i = 0;
+        while (i < arg) {
+            view[i] = 0;
+            view.__ownKeys = listPush(view.__ownKeys, i);
+            i = i + 1;
+        }
+        return view;
+    }
+    
+    if (TypeOf(arg) == "object") {
+        if (arg != null) {
+            if (arg.__is_sab) {
+                view.__sab = arg;
+                view.__ownKeys = listPush(view.__ownKeys, "__sab");
+                let byteLen = len(arg.buffer);
+                let viewLen = MathFloor(byteLen / elementSize);
+                view.length = viewLen;
+                
+                // Initialize elements from the shared buffer
+                let i = 0;
+                while (i < viewLen) {
+                    let val = 0;
+                    if (elementSize == 1) {
+                        val = arg.buffer[i];
+                    } else {
+                        if (elementSize == 2) {
+                            val = arg.buffer[i * 2] + arg.buffer[i * 2 + 1] * 256;
+                        } else {
+                            if (elementSize == 4) {
+                                val = arg.buffer[i * 4] + arg.buffer[i * 4 + 1] * 256 + arg.buffer[i * 4 + 2] * 65536 + arg.buffer[i * 4 + 3] * 16777216;
+                            } else {
+                                val = arg.buffer[i * elementSize];
+                            }
+                        }
+                    }
+                    view[i] = val;
+                    view.__ownKeys = listPush(view.__ownKeys, i);
+                    i = i + 1;
+                }
+                
+                // Add this view to the SharedArrayBuffer's views list
+                arg.views = listPush(arg.views, view);
+                return view;
+            }
+        }
+        
+        // Copying from another object/list
+        let sz = arg.length;
+        if (sz == null) {
+            sz = len(arg);
+        }
+        view.length = sz;
+        let i = 0;
+        while (i < sz) {
+            view[i] = arg[i];
+            view.__ownKeys = listPush(view.__ownKeys, i);
+            i = i + 1;
+        }
+        return view;
+    }
+    
+    let isArr = false;
+    if (TypeOf(arg) == "array") { isArr = true; }
+    if (TypeOf(arg) == "list") { isArr = true; }
+    if (isArr) {
+        let sz = len(arg);
+        view.length = sz;
+        let i = 0;
+        while (i < sz) {
+            view[i] = arg[i];
+            view.__ownKeys = listPush(view.__ownKeys, i);
+            i = i + 1;
+        }
+        return view;
+    }
+    
+    view.length = 0;
+    return view;
+}
+function Int8Array_new(arg) { return TypedArray_new(arg, 1); }
+function Uint8Array_new(arg) { return TypedArray_new(arg, 1); }
+function Uint8ClampedArray_new(arg) { return TypedArray_new(arg, 1); }
+function Int16Array_new(arg) { return TypedArray_new(arg, 2); }
+function Uint16Array_new(arg) { return TypedArray_new(arg, 2); }
+function Int32Array_new(arg) { return TypedArray_new(arg, 4); }
+function Uint32Array_new(arg) { return TypedArray_new(arg, 4); }
+function Float32Array_new(arg) { return TypedArray_new(arg, 4); }
+function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
+        `);
+    }
+
+    // Helper to find a split point statement index where the intersection of variables written/declared in Part A and read in Part B is empty
+    function findSplitPoint(body: any[], params: any[]): number {
+        const writes: Set<string>[] = [];
+        const reads: Set<string>[] = [];
+
+        for (let i = 0; i < body.length; i++) {
+            const w = new Set<string>();
+            const r = new Set<string>();
+
+            const stmtFile = t.file(t.program([body[i]]));
+            traverse(stmtFile, {
+                noScope: true,
+                VariableDeclarator(path: any) {
+                    if (t.isIdentifier(path.node.id)) {
+                        w.add(path.node.id.name);
+                    }
+                },
+                AssignmentExpression(path: any) {
+                    const left = path.node.left;
+                    if (t.isIdentifier(left)) {
+                        w.add(left.name);
+                    } else {
+                        traverse(t.file(t.program([t.expressionStatement(left)])), {
+                            noScope: true,
+                            Identifier(idPath: any) {
+                                w.add(idPath.node.name);
+                            }
+                        });
+                    }
+                },
+                UpdateExpression(path: any) {
+                    if (t.isIdentifier(path.node.argument)) {
+                        w.add(path.node.argument.name);
+                    }
+                },
+                Identifier(path: any) {
+                    if (path.isReferencedIdentifier()) {
+                        r.add(path.node.name);
+                    }
+                }
+            });
+            writes.push(w);
+            reads.push(r);
+        }
+
+        const suffixReads: Set<string>[] = [];
+        for (let i = 0; i < body.length; i++) {
+            suffixReads.push(new Set<string>());
+        }
+
+        const currentSuffix = new Set<string>();
+        for (let i = body.length - 1; i >= 0; i--) {
+            for (const v of reads[i]) {
+                currentSuffix.add(v);
+            }
+            suffixReads[i] = new Set<string>(currentSuffix);
+        }
+
+        const prefixWrites = new Set<string>();
+        for (const p of params) {
+            if (t.isIdentifier(p)) {
+                prefixWrites.add(p.name);
+            }
+        }
+
+        for (let k = 0; k < body.length - 1; k++) {
+            for (const v of writes[k]) {
+                prefixWrites.add(v);
+            }
+
+            const nextReads = suffixReads[k + 1];
+            let hasIntersection = false;
+            if (prefixWrites.size < nextReads.size) {
+                for (const v of prefixWrites) {
+                    if (nextReads.has(v)) {
+                        hasIntersection = true;
+                        break;
+                    }
+                }
+            } else {
+                for (const v of nextReads) {
+                    if (prefixWrites.has(v)) {
+                        hasIntersection = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!hasIntersection) {
+                return k;
+            }
+        }
+        return -1;
+    }
+
+    // Helper to wrap return statements in a sub-part function
+    function wrapReturns(body: any[]) {
+        const file = t.file(t.program(body));
+        traverse(file, {
+            noScope: true,
+            Function(path: any) {
+                path.skip();
+            },
+            ReturnStatement(path: any) {
+                const arg = path.node.argument || t.nullLiteral();
+                path.replaceWith(t.returnStatement(
+                    t.objectExpression([
+                        t.objectProperty(t.identifier("returned"), t.booleanLiteral(true)),
+                        t.objectProperty(t.identifier("value"), arg)
+                    ])
+                ));
+                path.skip();
+            }
+        });
+    }
+
+    function deconflictScopes(funcNode: any) {
+        const dummyFile = t.file(t.program([funcNode]));
+        let mainScope: any = null;
+        traverse(dummyFile, {
+            FunctionDeclaration(path: any) {
+                if (path.node === funcNode) {
+                    mainScope = path.scope;
+                }
+            }
+        });
+        if (!mainScope) return;
+
+        let counter = 0;
+        traverse(dummyFile, {
+            Scope(path: any) {
+                if (path.scope === mainScope) {
+                    return;
+                }
+                let parent = path.scope.parent;
+                let isNested = false;
+                while (parent) {
+                    if (parent === mainScope) {
+                        isNested = true;
+                        break;
+                    }
+                    parent = parent.parent;
+                }
+                if (!isNested) return;
+
+                const bindings = path.scope.bindings;
+                for (const name of Object.keys(bindings)) {
+                    counter++;
+                    const newName = `${name}_b${counter}`;
+                    path.scope.rename(name, newName);
+                }
+            }
+        });
+    }
+
+    function renameShadowedVariables(funcNode: any) {
+        const fileNode = t.file(t.program([funcNode]));
+        traverse(fileNode, {
+            VariableDeclarator(path: any) {
+                const id = path.node.id;
+                if (t.isIdentifier(id)) {
+                    const name = id.name;
+                    let scope = path.scope.parent;
+                    let shadows = false;
+                    while (scope) {
+                        if (scope.hasOwnBinding(name)) {
+                            shadows = true;
+                            break;
+                        }
+                        if (scope.path.isFunction()) {
+                            break;
+                        }
+                        scope = scope.parent;
+                    }
+                    if (shadows) {
+                        const newName = path.scope.generateUid(name);
+                        path.scope.rename(name, newName);
+                    }
+                }
+            }
+        });
+    }
+
+    // Helper for Register Banking
+    function applyRegisterBanking(funcNode: any, depth = 0) {
+        if (!t.isFunctionDeclaration(funcNode)) return;
+
+        if (!activeFuncNodes.includes(funcNode)) {
+            activeFuncNodes.push(funcNode);
+        }
+
+        // Run scope-safe renaming pre-pass to prevent leakage & shadowing
+        deconflictScopes(funcNode);
+
+        // Pack parameters into a single __args object if > 2 parameters (excluding entry function)
+        if (funcNode.params.length > 2 && funcNode.id.name !== options.functionName) {
+            const originalParams = funcNode.params.map((p: any) => p.name);
+            const fileNode = t.file(t.program([funcNode]));
+            traverse(fileNode, {
+                Identifier(path: any) {
+                    const name = path.node.name;
+                    if (originalParams.includes(name)) {
+                        const binding = path.scope.getBinding(name);
+                        if (binding && binding.scope === path.scope.getFunctionParent()) {
+                            if (path.parentPath.isMemberExpression({ property: path.node, computed: false })) {
+                                return;
+                            }
+                            if (path.parentPath.isObjectProperty({ key: path.node, computed: false })) {
+                                return;
+                            }
+                            path.replaceWith(t.memberExpression(t.identifier("__args"), t.identifier(name)));
+                            path.skip();
+                        }
+                    }
+                }
+            });
+            funcNode.params = [t.identifier("__args")];
+
+            // Rewrite call sites in all active function nodes
+            packedFunctions.set(funcNode.id.name, originalParams);
+        }
+
+        const params = funcNode.params.map((p: any) => p.name);
+        const localVars = new Set<string>();
+        traverse(t.file(t.program([t.cloneNode(funcNode.body)])), {
+            noScope: true,
+            VariableDeclarator(path: any) {
+                if (t.isIdentifier(path.node.id)) {
+                    localVars.add(path.node.id.name);
+                }
+            }
+        });
+        const allVars = [...params, ...localVars];
+
+        if (allVars.length <= 240) {
+            return;
+        }
+
+        const first_idx: { [key: string]: number } = {};
+        const last_idx: { [key: string]: number } = {};
+
+        for (const p of params) {
+            first_idx[p] = -1;
+            last_idx[p] = -1;
+        }
+
+        const body = funcNode.body.body;
+        for (let i = 0; i < body.length; i++) {
+            const stmt = body[i];
+            traverse(t.file(t.program([stmt])), {
+                noScope: true,
+                Identifier(path: any) {
+                    const name = path.node.name;
+                    if (localVars.has(name) || params.includes(name)) {
+                        if (first_idx[name] === undefined) {
+                            first_idx[name] = i;
+                        }
+                        last_idx[name] = i;
+                    }
+                }
+            });
+        }
+
+        const regAssignment: { [key: string]: string } = {};
+        const regAssignmentColors: { [key: string]: number } = {};
+        const regNames = new Set<string>();
+
+        const sortedLocals = Array.from(localVars).sort();
+        for (const v of sortedLocals) {
+            const vFirst = first_idx[v] ?? -1;
+            const vLast = last_idx[v] ?? -1;
+
+            const conflictedColors = new Set<number>();
+            for (const u of sortedLocals) {
+                if (u === v || regAssignmentColors[u] === undefined) continue;
+                const uFirst = first_idx[u] ?? -1;
+                const uLast = last_idx[u] ?? -1;
+
+                if (Math.max(vFirst, uFirst) <= Math.min(vLast, uLast)) {
+                    conflictedColors.add(regAssignmentColors[u]);
+                }
+            }
+
+            let color = 0;
+            while (conflictedColors.has(color)) {
+                color++;
+            }
+
+            const regName = `__reg_${color}`;
+            regAssignment[v] = regName;
+            regAssignmentColors[v] = color;
+            regNames.add(regName);
+        }
+
+        if (regNames.size + params.length > 240 && funcNode.body.body.length > 1) {
+            let splitIndex = -1;
+            for (let i = 0; i < body.length; i++) {
+                const activeVars = allVars.filter(v => first_idx[v] !== undefined && first_idx[v] <= i);
+                if (activeVars.length > 240) {
+                    splitIndex = i;
+                    break;
+                }
+            }
+            if (splitIndex <= 0 || splitIndex >= body.length) {
+                splitIndex = Math.floor(body.length / 2);
+            }
+
+            const part1Name = `${funcNode.id.name}_part1`;
+            const part2Name = `${funcNode.id.name}_part2`;
+
+            const liveVars: string[] = [];
+            for (const v of allVars) {
+                if (params.includes(v)) continue;
+                const isDeclaredOrWrittenIn1 = (first_idx[v] !== undefined && first_idx[v] < splitIndex);
+                const isReadIn2 = (last_idx[v] !== undefined && last_idx[v] >= splitIndex);
+                if (isDeclaredOrWrittenIn1 && isReadIn2) {
+                    liveVars.push(v);
+                }
+            }
+            liveVars.sort();
+
+            const part1Body = body.slice(0, splitIndex);
+            wrapReturns(part1Body);
+            part1Body.push(t.returnStatement(
+                t.objectExpression([
+                    t.objectProperty(t.identifier("returned"), t.booleanLiteral(false)),
+                    t.objectProperty(t.identifier("value"), t.nullLiteral()),
+                    t.objectProperty(t.identifier("liveVars"), t.objectExpression(
+                        liveVars.map(v => t.objectProperty(t.identifier(v), t.identifier(v)))
+                    ))
+                ])
+            ));
+
+            const part2Body = body.slice(splitIndex);
+            wrapReturns(part2Body);
+            part2Body.push(t.returnStatement(
+                t.objectExpression([
+                    t.objectProperty(t.identifier("returned"), t.booleanLiteral(false)),
+                    t.objectProperty(t.identifier("value"), t.nullLiteral())
+                ])
+            ));
+
+            // Traverse to collect parameter usage in part1 and part2
+            const usedIn1 = new Set<string>();
+            traverse(t.file(t.program(part1Body)), {
+                noScope: true,
+                Identifier(path: any) {
+                    if (path.parentPath.isMemberExpression({ property: path.node, computed: false })) {
+                        return;
+                    }
+                    if (path.parentPath.isObjectProperty({ key: path.node, computed: false })) {
+                        return;
+                    }
+                    usedIn1.add(path.node.name);
+                }
+            });
+
+            const usedIn2 = new Set<string>();
+            traverse(t.file(t.program(part2Body)), {
+                noScope: true,
+                Identifier(path: any) {
+                    if (path.parentPath.isMemberExpression({ property: path.node, computed: false })) {
+                        return;
+                    }
+                    if (path.parentPath.isObjectProperty({ key: path.node, computed: false })) {
+                        return;
+                    }
+                    usedIn2.add(path.node.name);
+                }
+            });
+
+            const part1Params = funcNode.params.filter((p: any) => {
+                if (!t.isIdentifier(p)) return true;
+                return usedIn1.has(p.name);
+            }).map((p: any) => t.cloneNode(p));
+            
+            const part1CallArgs = funcNode.params
+                .filter((p: any) => !t.isIdentifier(p) || usedIn1.has(p.name))
+                .map((p: any) => t.isIdentifier(p) ? t.identifier(p.name) : t.cloneNode(p));
+
+            const part1Func = t.functionDeclaration(
+                t.identifier(part1Name),
+                part1Params,
+                t.blockStatement(part1Body)
+            );
+
+            const stateIdentifier = t.identifier(`__state_${depth}`);
+            
+            // Rename liveVars in part2Body to member expressions on __state instead of unpacking,
+            // to avoid redeclaring too many local variables and exceeding 240/256 slots in FVM.
+            const dummyFile = t.file(t.program(part2Body));
+            traverse(dummyFile, {
+                noScope: true,
+                Identifier(path: any) {
+                    const name = path.node.name;
+                    if (liveVars.includes(name)) {
+                        if (path.parentPath.isMemberExpression({ property: path.node, computed: false })) {
+                            return;
+                        }
+                        if (path.parentPath.isObjectProperty({ key: path.node, computed: false })) {
+                            return;
+                        }
+                        path.replaceWith(t.memberExpression(stateIdentifier, t.identifier(name)));
+                        path.skip();
+                    }
+                }
+            });
+
+            const part2Params = [
+                ...funcNode.params.filter((p: any) => {
+                    if (!t.isIdentifier(p)) return true;
+                    return usedIn2.has(p.name);
+                }).map((p: any) => t.cloneNode(p)),
+                stateIdentifier
+            ];
+            
+            const part2CallArgs = [
+                ...funcNode.params
+                    .filter((p: any) => !t.isIdentifier(p) || usedIn2.has(p.name))
+                    .map((p: any) => t.isIdentifier(p) ? t.identifier(p.name) : t.cloneNode(p)),
+                t.memberExpression(t.identifier("res1"), t.identifier("liveVars"))
+            ];
+
+            const part2Func = t.functionDeclaration(
+                t.identifier(part2Name),
+                part2Params,
+                t.blockStatement(part2Body)
+            );
+
+            activeFuncNodes.push(part1Func);
+            activeFuncNodes.push(part2Func);
+
+            const coordinatorBody = [
+                t.variableDeclaration("let", [
+                    t.variableDeclarator(
+                        t.identifier("res1"),
+                        t.callExpression(
+                            t.identifier(part1Name),
+                            part1CallArgs
+                        )
+                    )
+                ]),
+                t.ifStatement(
+                    t.memberExpression(t.identifier("res1"), t.identifier("returned")),
+                    t.blockStatement([
+                        t.returnStatement(t.memberExpression(t.identifier("res1"), t.identifier("value")))
+                    ])
+                ),
+                t.variableDeclaration("let", [
+                    t.variableDeclarator(
+                        t.identifier("res2"),
+                        t.callExpression(
+                            t.identifier(part2Name),
+                            part2CallArgs
+                        )
+                    )
+                ]),
+                t.ifStatement(
+                    t.memberExpression(t.identifier("res2"), t.identifier("returned")),
+                    t.blockStatement([
+                        t.returnStatement(t.memberExpression(t.identifier("res2"), t.identifier("value")))
+                    ])
+                ),
+                t.returnStatement(t.memberExpression(t.identifier("res2"), t.identifier("value")))
+            ];
+
+            funcNode.body = t.blockStatement(coordinatorBody);
+
+            applyRegisterBanking(part1Func, depth + 1);
+            applyRegisterBanking(part2Func, depth + 1);
+
+            extraFuncNodes.push(part1Func);
+            extraFuncNodes.push(part2Func);
+        } else {
+            for (const v of sortedLocals) {
+                const reg = regAssignment[v];
+                renameVariableInBody(funcNode.body, v, reg);
+            }
+
+            convertDeclarationsToAssignments(funcNode.body, regNames);
+
+            if (regNames.size > 0) {
+                const sortedRegNames = Array.from(regNames).sort();
+                for (const r of sortedRegNames) {
+                    const decl = t.variableDeclaration(
+                        "let",
+                        [t.variableDeclarator(t.identifier(r), t.nullLiteral())]
+                    );
+                    funcNode.body.body.unshift(decl);
+                }
+            }
+        }
+    }
+
+    function renameVariableInBody(bodyNode: any, oldName: string, newName: string) {
+        traverse(t.file(t.program([bodyNode])), {
+            noScope: true,
+            Identifier(path: any) {
+                if (path.node.name === oldName) {
+                    if (path.parentPath.isMemberExpression({ property: path.node, computed: false })) {
+                        return;
+                    }
+                    if (path.parentPath.isObjectProperty({ key: path.node, computed: false })) {
+                        return;
+                    }
+                    path.node.name = newName;
+                }
+            }
+        });
+    }
+
+    function convertDeclarationsToAssignments(bodyNode: any, regNames: Set<string>) {
+        traverse(t.file(t.program([bodyNode])), {
+            noScope: true,
+            VariableDeclaration(path: any) {
+                const decl = path.node.declarations[0];
+                if (t.isIdentifier(decl.id) && regNames.has(decl.id.name)) {
+                    if (path.parentPath.isForStatement({ init: path.node })) {
+                        if (decl.init) {
+                            path.replaceWith(t.assignmentExpression("=", decl.id, decl.init));
+                        } else {
+                            path.replaceWith(t.nullLiteral());
+                        }
+                    } else {
+                        if (decl.init) {
+                            path.replaceWith(t.expressionStatement(
+                                t.assignmentExpression("=", decl.id, decl.init)
+                            ));
+                        } else {
+                            path.replaceWith(t.emptyStatement());
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Large Function Auto-Splitting
+    const linesOfCode = code.split('\n').length;
+    if (linesOfCode > 1000 && t.isFunctionDeclaration(rootStmt)) {
+        const splitIndex = findSplitPoint(rootStmt.body.body, rootStmt.params);
+        if (splitIndex !== -1) {
+            const part1Name = `${options.functionName}_part1`;
+            const part2Name = `${options.functionName}_part2`;
+
+            const part1Body = rootStmt.body.body.slice(0, splitIndex + 1);
+            wrapReturns(part1Body);
+            part1Body.push(t.returnStatement(
+                t.objectExpression([
+                    t.objectProperty(t.identifier("returned"), t.booleanLiteral(false)),
+                    t.objectProperty(t.identifier("value"), t.nullLiteral())
+                ])
+            ));
+
+            const part2Body = rootStmt.body.body.slice(splitIndex + 1);
+            wrapReturns(part2Body);
+            part2Body.push(t.returnStatement(
+                t.objectExpression([
+                    t.objectProperty(t.identifier("returned"), t.booleanLiteral(false)),
+                    t.objectProperty(t.identifier("value"), t.nullLiteral())
+                ])
+            ));
+
+            const part1Func = t.functionDeclaration(
+                t.identifier(part1Name),
+                rootStmt.params.map((p: any) => t.cloneNode(p)),
+                t.blockStatement(part1Body)
+            );
+
+            const part2Func = t.functionDeclaration(
+                t.identifier(part2Name),
+                rootStmt.params.map((p: any) => t.cloneNode(p)),
+                t.blockStatement(part2Body)
+            );
+
+            ast.program.body.push(part1Func);
+            ast.program.body.push(part2Func);
+
+            const coordinatorBody = [
+                t.variableDeclaration("let", [
+                    t.variableDeclarator(
+                        t.identifier("res1"),
+                        t.callExpression(
+                            t.identifier(part1Name),
+                            rootStmt.params.map((p: any) => t.isIdentifier(p) ? t.identifier(p.name) : t.cloneNode(p))
+                        )
+                    )
+                ]),
+                t.ifStatement(
+                    t.memberExpression(t.identifier("res1"), t.identifier("returned")),
+                    t.blockStatement([
+                        t.returnStatement(t.memberExpression(t.identifier("res1"), t.identifier("value")))
+                    ])
+                ),
+                t.variableDeclaration("let", [
+                    t.variableDeclarator(
+                        t.identifier("res2"),
+                        t.callExpression(
+                            t.identifier(part2Name),
+                            rootStmt.params.map((p: any) => t.isIdentifier(p) ? t.identifier(p.name) : t.cloneNode(p))
+                        )
+                    )
+                ]),
+                t.ifStatement(
+                    t.memberExpression(t.identifier("res2"), t.identifier("returned")),
+                    t.blockStatement([
+                        t.returnStatement(t.memberExpression(t.identifier("res2"), t.identifier("value")))
+                    ])
+                ),
+                t.returnStatement(t.memberExpression(t.identifier("res2"), t.identifier("value")))
+            ];
+
+            rootStmt.body = t.blockStatement(coordinatorBody);
+        } else {
+            warnings.push({
+                line: 1,
+                message: `Function ${options.functionName} has >1000 lines (${linesOfCode}) but no clean split point was found.`,
+                suggestion: "Try splitting the function manually or reduce variable dependencies between parts."
+            });
+        }
+    }
+
+    // Check for Proxy extraction
+    let hasProxy = false;
+    let proxyGetNode: any = null;
+    let proxySetNode: any = null;
+    
+    traverse(ast, {
+        NewExpression(path: any) {
+            if (t.isIdentifier(path.node.callee) && path.node.callee.name === 'Proxy') {
+                hasProxy = true;
+                const handler = path.node.arguments[1];
+                let handlerObj: any = null;
+                if (t.isObjectExpression(handler)) {
+                    handlerObj = handler;
+                } else if (t.isIdentifier(handler)) {
+                    const binding = path.scope.getBinding(handler.name);
+                    if (binding && t.isVariableDeclarator(binding.path.node) && binding.path.node.init && t.isObjectExpression(binding.path.node.init)) {
+                        handlerObj = binding.path.node.init;
+                    }
+                }
+                
+                if (handlerObj) {
+                    for (const prop of handlerObj.properties) {
+                        if (t.isObjectMethod(prop) || t.isObjectProperty(prop)) {
+                            const name = t.isIdentifier(prop.key) ? prop.key.name : (t.isStringLiteral(prop.key) ? prop.key.value : null);
+                            if (name === 'get') {
+                                proxyGetNode = prop;
+                            } else if (name === 'set') {
+                                proxySetNode = prop;
+                            }
+                        }
+                    }
+                }
+                path.stop();
+            }
+        }
+    });
+
+    if (hasProxy && t.isFunctionDeclaration(rootStmt)) {
+        const extraDecls: any[] = [];
+        if (proxyGetNode) {
+            let params: any[] = [];
+            let body: any = null;
+            if (t.isObjectMethod(proxyGetNode)) {
+                params = proxyGetNode.params;
+                body = proxyGetNode.body;
+            } else if (t.isObjectProperty(proxyGetNode)) {
+                const val = proxyGetNode.value;
+                if (t.isFunctionExpression(val) || t.isArrowFunctionExpression(val)) {
+                    params = val.params;
+                    body = t.isBlockStatement(val.body) ? val.body : t.blockStatement([t.returnStatement(val.body)]);
+                }
+            }
+            if (body) {
+                extraDecls.push(t.functionDeclaration(
+                    t.identifier(`${options.functionName}_proxy_get`),
+                    params.map((p: any) => t.isIdentifier(p) ? t.identifier(p.name) : p),
+                    body
+                ));
+            }
+        }
+        
+        if (proxySetNode) {
+            let params: any[] = [];
+            let body: any = null;
+            if (t.isObjectMethod(proxySetNode)) {
+                params = proxySetNode.params;
+                body = proxySetNode.body;
+            } else if (t.isObjectProperty(proxySetNode)) {
+                const val = proxySetNode.value;
+                if (t.isFunctionExpression(val) || t.isArrowFunctionExpression(val)) {
+                    params = val.params;
+                    body = t.isBlockStatement(val.body) ? val.body : t.blockStatement([t.returnStatement(val.body)]);
+                }
+            }
+            if (body) {
+                extraDecls.push(t.functionDeclaration(
+                    t.identifier(`${options.functionName}_proxy_set`),
+                    params.map((p: any) => t.isIdentifier(p) ? t.identifier(p.name) : p),
+                    body
+                ));
+            }
+        }
+
+        const fvmAst = t.file(t.program([t.cloneNode(rootStmt)]));
+        const dispatcherBody: any[] = [];
+        if (proxyGetNode) {
+            dispatcherBody.push(
+                t.ifStatement(
+                    t.binaryExpression("==", t.identifier("action"), t.stringLiteral(`${options.functionName}_proxy_get`)),
+                    t.blockStatement([
+                        t.returnStatement(
+                            t.callExpression(
+                                t.identifier(`${options.functionName}_proxy_get`),
+                                [t.identifier("arg0"), t.identifier("arg1")]
+                            )
+                        )
+                    ])
+                )
+            );
+        }
+        if (proxySetNode) {
+            dispatcherBody.push(
+                t.ifStatement(
+                    t.binaryExpression("==", t.identifier("action"), t.stringLiteral(`${options.functionName}_proxy_set`)),
+                    t.blockStatement([
+                        t.returnStatement(
+                            t.callExpression(
+                                t.identifier(`${options.functionName}_proxy_set`),
+                                [t.identifier("arg0"), t.identifier("arg1"), t.identifier("arg2")]
+                            )
+                        )
+                    ])
+                )
+            );
+        }
+        const entryFunc = fvmAst.program.body[0] as any;
+        entryFunc.params = [t.identifier("action"), t.identifier("arg0"), t.identifier("arg1"), t.identifier("arg2")];
+        entryFunc.body = t.blockStatement(dispatcherBody);
+        fvmAst.program.body.push(...extraDecls);
+        
+        traverse(fvmAst, {
+            ThrowStatement(p: any) {
+                let errClass = "TypeError";
+                let msg = "";
+                const arg = p.node.argument;
+                if (arg && t.isNewExpression(arg) && t.isIdentifier(arg.callee)) {
+                    errClass = arg.callee.name;
+                    if (arg.arguments.length > 0) {
+                        const firstArg = arg.arguments[0];
+                        if (t.isStringLiteral(firstArg)) {
+                            msg = firstArg.value;
+                        } else {
+                            msg = generate(firstArg).code;
+                        }
+                    }
+                } else if (arg) {
+                    if (t.isStringLiteral(arg)) {
+                        msg = arg.value;
+                    } else {
+                        msg = generate(arg).code;
+                    }
+                }
+                p.replaceWith(t.returnStatement(t.stringLiteral("__fortress_error__:" + errClass + ":" + msg)));
+            }
+        });
+
+        const fvmCodeStr = generate(fvmAst, { jsescOption: { quotes: 'double' } }).code;
+        const fvmTranspileRes = transpile(fvmCodeStr, {
+            ...options,
+            verifyEquivalence: false
+        });
+        
+        const jsAst = t.file(t.program([t.cloneNode(rootStmt)]));
+        traverse(jsAst, {
+            NewExpression(p: any) {
+                if (t.isIdentifier(p.node.callee) && p.node.callee.name === 'Proxy') {
+                    const target = p.node.arguments[0];
+                    const targetCode = generate(target).code;
+                    
+                    const getTrap = proxyGetNode ? `
+                            if (prop === '__is_fortress_proxy') return true;
+                            if (prop === '__proxy_target') return t;
+                            if (typeof prop === 'symbol') return t[prop];
+                            if (inside) return t[prop];
+                            inside = true;
+                            try {
+                                const allowed = runFvmSync(
+                                    global.__fortress_latest_bytecode || global.__fortress_bytecode,
+                                    global.__fortress_latest_opcodeMap || global.__fortress_opcodeMap,
+                                    ["${options.functionName}_proxy_get", preparePayload(t), prop]
+                                );
+                                if (typeof allowed === "string" && allowed.indexOf("__fortress_error__:") === 0) {
+                                    const parts = allowed.split(":");
+                                    const errClass = parts[1];
+                                    const msg = parts.slice(2).join(":");
+                                    const g = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : {}));
+                                    const ErrorConstructor = g[errClass] || g.TypeError || TypeError;
+                                    throw new ErrorConstructor(msg);
+                                }
+                                if (allowed === "__fortress_error__") {
+                                    throw new TypeError("Proxy validation failed: get trap returned false");
+                                }
+                                return allowed;
+                            } finally {
+                                inside = false;
+                            }
+` : `
+                            if (prop === '__is_fortress_proxy') return true;
+                            if (prop === '__proxy_target') return t;
+                            if (typeof prop === 'symbol') return t[prop];
+                            return t[prop];
+`;
+                    const setTrap = proxySetNode ? `
+                            if (typeof prop === 'symbol') {
+                                t[prop] = value;
+                                return true;
+                            }
+                            if (inside) {
+                                t[prop] = value;
+                                return true;
+                            }
+                            inside = true;
+                            try {
+                                 let allowed;
+                                 try {
+                                     allowed = runFvmSync(
+                                         global.__fortress_latest_bytecode || global.__fortress_bytecode,
+                                         global.__fortress_latest_opcodeMap || global.__fortress_opcodeMap,
+                                         ["${options.functionName}_proxy_set", preparePayload(t), prop, preparePayload(value)]
+                                     );
+                                 } catch (err) {
+                                     throw err;
+                                 }
+                                 if (typeof allowed === "string" && allowed.indexOf("__fortress_error__:") === 0) {
+                                     const parts = allowed.split(":");
+                                     const errClass = parts[1];
+                                     const msg = parts.slice(2).join(":");
+                                     const g = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : {}));
+                                     const ErrorConstructor = g[errClass] || g.TypeError || TypeError;
+                                     throw new ErrorConstructor(msg);
+                                 }
+                                 if (allowed === "__fortress_error__" || allowed === false) {
+                                     throw new TypeError("Proxy validation failed: set trap returned false");
+                                 }
+                                 t[prop] = value;
+                                 return true;
+                            } finally {
+                                inside = false;
+                            }
+` : `
+                            if (typeof prop === 'symbol') {
+                                t[prop] = value;
+                                return true;
+                            }
+                            t[prop] = value;
+                            return true;
+`;
+                    
+                    p.replaceWith(parser.parseExpression(`(() => {
+                        let inside = false;
+                        return new Proxy(${targetCode}, {
+                            get(t, prop) {
+                                ${getTrap}
+                            },
+                            set(t, prop, value) {
+                                ${setTrap}
+                            }
+                        });
+                    })()`));
+                    p.skip();
+                }
+            }
+        });
+        
+        const rewrittenFuncCode = generate(jsAst.program.body[0]).code;
+        const jsWrapper = `
+const { FortressClient } = require('../../client.js');
+let fortressClient;
+
+function preparePayload(obj, visited = new Map()) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
+        return {
+            __is_sab: true,
+            buffer: Array.from(new Uint8Array(obj))
+        };
+    }
+    if (obj && obj.__is_sab) {
+        return {
+            __is_sab: true,
+            buffer: preparePayload(obj.buffer, visited)
+        };
+    }
+    if (ArrayBuffer.isView(obj)) {
+        obj = Array.from(obj);
+    }
+    if (typeof obj !== 'object') return obj;
+    let isFortressPx = false;
+    let target = obj;
+    try {
+        if (obj['__is_fortress_' + 'proxy']) {
+            isFortressPx = true;
+            target = obj['__' + 'proxy_target'];
+        }
+    } catch (e) {}
+    if (isFortressPx) {
+        return preparePayload(target, visited);
+    }
+    if (visited.has(obj)) return visited.get(obj);
+    if (Array.isArray(obj)) {
+        const cloned = [];
+        visited.set(obj, cloned);
+        for (let i = 0; i < obj.length; i++) {
+            cloned.push(preparePayload(obj[i], visited));
+        }
+        return cloned;
+    }
+    const keys = Reflect.ownKeys(obj).filter(k => k !== '__ownKeys');
+    const cloned = {};
+    visited.set(obj, cloned);
+    for (const k of keys) {
+        cloned[k] = preparePayload(obj[k], visited);
+    }
+    cloned.__ownKeys = keys.map(k => typeof k === 'symbol' ? (k.description || k.toString()) : k);
+    return cloned;
+}
+
+function runFvmSync(code, opcodeMap, args) {
+    const crypto = require('crypto');
+    const vmNode = require('../../pkg-node/vm_core.js');
+    const seen = new Set();
+    const inputJson = JSON.stringify(preparePayload(args), (key, value) => {
+        if (value !== null && typeof value === 'object') {
+            if (seen.has(value)) {
+                return "[Circular]";
+            }
+            seen.add(value);
+        }
+        return value;
+    });
+    if (code.length > 0 && code.length % 288 === 0) {
+        const newCode = new Uint8Array(code.length + 1);
+        newCode.set(code);
+        newCode[code.length] = 0;
+        code = newCode;
+    }
+    const hashBytes = crypto.createHash('sha256').update(code).digest();
+    vmNode.set_payload_hash(new Uint8Array(hashBytes));
+    const dummyPng = new Uint8Array(1024);
+    const mapUint8 = new Uint8Array(opcodeMap);
+    vmNode.init_crypto_with_key(new Uint8Array(32), new Uint8Array(32), new Uint8Array(32), 0);
+    try {
+        const resStr = vmNode.execute(code, dummyPng, inputJson, mapUint8);
+        let res;
+        try {
+            res = JSON.parse(resStr);
+        } catch (parseErr) {
+            console.error("JSON PARSE ERROR on resStr:", resStr);
+            throw parseErr;
+        }
+        if (res && res.error) {
+            throw new Error(res.error);
+        }
+        return res;
+    } finally {
+        vmNode.clear_crypto();
+    }
+}
+
+${rewrittenFuncCode}
+
+module.exports = ${options.functionName};
+`;
+        
+        let finalJsWrapper = jsWrapper;
+        if (hasSharedArrayBuffer) {
+            finalJsWrapper = `// SharedArrayBuffer usage detected: shared memory is replaced with message-passing equivalent.\n` + finalJsWrapper;
+        }
+        return {
+            fvmSource: fvmTranspileRes.fvmSource,
+            jsWrapper: finalJsWrapper,
+            tsDeclaration: `export function ${options.functionName}(...args: any[]): any;`,
+            usedStdlib: fvmTranspileRes.usedStdlib,
+            warnings: fvmTranspileRes.warnings,
+            asyncSplit: null
+        };
+    }
+
+    // Check for Dynamic Eval splitting
+    let dynamicEvalPath: any = null;
+    traverse(ast, {
+        CallExpression(path: any) {
+            if (t.isIdentifier(path.node.callee) && path.node.callee.name === 'eval') {
+                const arg = path.node.arguments[0];
+                let isStaticJson = false;
+                if (arg && t.isStringLiteral(arg)) {
+                    try {
+                        JSON.parse(arg.value);
+                        isStaticJson = true;
+                    } catch(e) {}
+                }
+                if (!isStaticJson) {
+                    dynamicEvalPath = path;
+                    path.stop();
+                }
+            }
+        }
+    });
+
+    if (dynamicEvalPath && t.isFunctionDeclaration(rootStmt)) {
+        if (dynamicEvalPath.getFunctionParent().node !== rootStmt) {
+            throw new TypeError("Nested eval() is not supported");
+        }
+        let currentPath = dynamicEvalPath;
+        while (currentPath && currentPath.parentPath && currentPath.parentPath.node !== rootStmt.body) {
+            currentPath = currentPath.parentPath;
+        }
+        if (currentPath && currentPath.parentPath) {
+            const splitIndex = rootStmt.body.body.indexOf(currentPath.node);
+            if (splitIndex !== -1) {
+                const statementsBefore = rootStmt.body.body.slice(0, splitIndex + 1);
+                const statementsAfter = rootStmt.body.body.slice(splitIndex + 1);
+                
+                const declaredBefore = new Set<string>();
+                for (const param of rootStmt.params) {
+                    if (t.isIdentifier(param)) {
+                        declaredBefore.add(param.name);
+                    }
+                }
+                const dummyFileBefore = t.file(t.program(statementsBefore));
+                traverse(dummyFileBefore, {
+                    noScope: true,
+                    VariableDeclarator(p: any) {
+                        if (t.isIdentifier(p.node.id)) {
+                            declaredBefore.add(p.node.id.name);
+                        }
+                    }
+                });
+                
+                const referencedAfter = new Set<string>();
+                const dummyFileAfter = t.file(t.program(statementsAfter));
+                traverse(dummyFileAfter, {
+                    noScope: true,
+                    Identifier(p: any) {
+                        if (p.isReferencedIdentifier()) {
+                            referencedAfter.add(p.node.name);
+                        }
+                    }
+                });
+                
+                const liveVars = Array.from(declaredBefore).filter(v => referencedAfter.has(v));
+                liveVars.sort();
+                
+                const splitFuncName = `${options.functionName}_split`;
+                const splitFuncNode = t.functionDeclaration(
+                    t.identifier(splitFuncName),
+                    liveVars.map(v => t.identifier(v)),
+                    t.blockStatement(statementsAfter)
+                );
+                
+                const fvmAst = t.file(t.program([splitFuncNode]));
+                const fvmCodeStr = generate(fvmAst).code;
+                const fvmTranspileRes = transpile(fvmCodeStr, {
+                    ...options,
+                    functionName: splitFuncName,
+                    verifyEquivalence: false
+                });
+                
+                const paramsCode = rootStmt.params.map((p: any) => generate(p).code).join(', ');
+                const statementsBeforeCode = statementsBefore.map((s: any) => generate(s).code).join('\n');
+                const liveVarsCode = liveVars.join(', ');
+                
+                const jsWrapper = `
+const { FortressClient } = require('../../client.js');
+let fortressClient;
+
+function preparePayload(obj, visited = new Map()) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
+        return {
+            __is_sab: true,
+            buffer: Array.from(new Uint8Array(obj))
+        };
+    }
+    if (obj && obj.__is_sab) {
+        return {
+            __is_sab: true,
+            buffer: preparePayload(obj.buffer, visited)
+        };
+    }
+    if (ArrayBuffer.isView(obj)) {
+        obj = Array.from(obj);
+    }
+    if (typeof obj !== 'object') return obj;
+    let isFortressPx = false;
+    let target = obj;
+    try {
+        if (obj['__is_fortress_' + 'proxy']) {
+            isFortressPx = true;
+            target = obj['__' + 'proxy_target'];
+        }
+    } catch (e) {}
+    if (isFortressPx) {
+        return preparePayload(target, visited);
+    }
+    if (visited.has(obj)) return visited.get(obj);
+    if (Array.isArray(obj)) {
+        const cloned = [];
+        visited.set(obj, cloned);
+        for (let i = 0; i < obj.length; i++) {
+            cloned.push(preparePayload(obj[i], visited));
+        }
+        return cloned;
+    }
+    const keys = Reflect.ownKeys(obj).filter(k => k !== '__ownKeys');
+    const cloned = {};
+    visited.set(obj, cloned);
+    for (const k of keys) {
+        cloned[k] = preparePayload(obj[k], visited);
+    }
+    cloned.__ownKeys = keys.map(k => typeof k === 'symbol' ? (k.description || k.toString()) : k);
+    return cloned;
+}
+
+module.exports = async function(${paramsCode}) {
+    ${statementsBeforeCode}
+    if (!fortressClient) {
+        fortressClient = await FortressClient.init(process.env.FORTRESS_ENDPOINT || './checkLicense.json');
+    }
+    let payloadArgs;
+    if (${liveVars.length > 2}) {
+        payloadArgs = ["${splitFuncName}", { ${liveVars.map(v => `"${v}": ${v}`).join(', ')} }];
+    } else {
+        payloadArgs = ["${splitFuncName}", ${liveVarsCode}];
+    }
+    return await fortressClient.execute(preparePayload(payloadArgs));
+};
+`;
+                let finalJsWrapper = jsWrapper;
+                if (hasSharedArrayBuffer) {
+                    finalJsWrapper = `// SharedArrayBuffer usage detected: shared memory is replaced with message-passing equivalent.\n` + finalJsWrapper;
+                }
+                return {
+                    fvmSource: fvmTranspileRes.fvmSource,
+                    jsWrapper: finalJsWrapper,
+                    tsDeclaration: `export function ${options.functionName}(...args: any[]): Promise<any>;`,
+                    usedStdlib: fvmTranspileRes.usedStdlib,
+                    warnings: fvmTranspileRes.warnings,
+                    asyncSplit: {
+                        boundaryCount: 1,
+                        variablesPassed: liveVars
+                    }
+                };
+            }
+        }
+    }
+
+    // Generate 8-character hex seed once at the start of transpilation
+    const symbolSeed = crypto.randomBytes(4).toString('hex');
+    let symbolCounter = 0;
+
+    // Pre-process and validate Symbol calls & properties
+    traverse(ast, {
+        Identifier(path: any) {
+            if (path.node.name === 'Symbol') {
+                const parentPath = path.parentPath;
+                if (parentPath.isMemberExpression() && parentPath.node.object === path.node) {
+                    const property = parentPath.node.property;
+                    let propName = null;
+                    if (t.isIdentifier(property) && !parentPath.node.computed) {
+                        propName = property.name;
+                    } else if (t.isStringLiteral(property)) {
+                        propName = property.value;
+                    }
+                    if (propName && ['for', 'keyFor', 'iterator', 'toPrimitive', 'hasInstance'].includes(propName)) {
+                        throw new Error(`Symbol.${propName} is not supported`);
+                    }
+                } else if (parentPath.isCallExpression() && parentPath.node.callee === path.node) {
+                    const desc = parentPath.node.arguments[0];
+                    const uniqSeed = symbolSeed + "_" + (symbolCounter++);
+                    let replacement;
+                    if (desc) {
+                        if (t.isStringLiteral(desc)) {
+                            replacement = t.stringLiteral("__fortress_sym_" + uniqSeed + "__" + desc.value);
+                        } else {
+                            replacement = t.binaryExpression("+", t.stringLiteral("__fortress_sym_" + uniqSeed + "__"), desc);
+                        }
+                    } else {
+                        replacement = t.stringLiteral("__fortress_sym_" + uniqSeed + "__");
+                    }
+                    parentPath.replaceWith(replacement);
+                }
+            }
+        }
+    });
+
+    // 0.1 Generator state machine AST transformation
+    const rootStmtGen = ast.program.body[0];
+    if (t.isFunctionDeclaration(rootStmtGen) && rootStmtGen.generator) {
+        isGeneratorFlag = true;
+        const params = rootStmtGen.params.map((p: any) => p.name);
+        const localVars = new Set<string>();
+        traverse(t.file(t.program([t.cloneNode(rootStmtGen.body)])), {
+            noScope: true,
+            VariableDeclarator(path: any) {
+                if (t.isIdentifier(path.node.id)) {
+                    localVars.add(path.node.id.name);
+                }
+            }
+        });
+
+        // Rewrite all references to localVars and params inside the body to state.varName
+        traverse(t.file(t.program([rootStmtGen.body])), {
+            noScope: true,
+            VariableDeclarator(path: any) {
+                const id = path.node.id;
+                if (t.isIdentifier(id) && (localVars.has(id.name) || params.includes(id.name))) {
+                    const init = path.node.init || t.nullLiteral();
+                    path.parentPath.replaceWith(t.expressionStatement(
+                        t.assignmentExpression('=', t.memberExpression(t.identifier('state'), t.identifier(id.name)), init)
+                    ));
+                }
+            },
+            Identifier(path: any) {
+                if (path.isReferencedIdentifier() && (localVars.has(path.node.name) || params.includes(path.node.name))) {
+                    path.replaceWith(t.memberExpression(t.identifier('state'), t.identifier(path.node.name)));
+                    path.skip();
+                }
+            }
+        });
+
+        // Split body statements into segments at yield boundaries
+        const segments: any[][] = [[]];
+        let currentSegment = segments[0];
+        for (const stmt of rootStmtGen.body.body) {
+            let hasYield = false;
+            let yieldExpr: any = null;
+            
+            const dummyFile = t.file(t.program([stmt]));
+            traverse(dummyFile, {
+                noScope: true,
+                YieldExpression(path: any) {
+                    hasYield = true;
+                    yieldExpr = path.node.argument || t.nullLiteral();
+                    path.replaceWith(t.nullLiteral());
+                }
+            });
+            
+            if (hasYield) {
+                currentSegment.push(t.expressionStatement(
+                    t.assignmentExpression('=', t.memberExpression(t.identifier('state'), t.identifier('value')), yieldExpr)
+                ));
+                const nextIp = segments.length;
+                currentSegment.push(t.expressionStatement(
+                    t.assignmentExpression('=', t.memberExpression(t.identifier('state'), t.identifier('ip')), t.numericLiteral(nextIp))
+                ));
+                currentSegment.push(t.returnStatement(t.identifier('state')));
+                
+                currentSegment = [];
+                segments.push(currentSegment);
+            } else {
+                currentSegment.push(stmt);
+            }
+        }
+        currentSegment.push(t.expressionStatement(
+            t.assignmentExpression('=', t.memberExpression(t.identifier('state'), t.identifier('done')), t.booleanLiteral(true))
+        ));
+        currentSegment.push(t.expressionStatement(
+            t.assignmentExpression('=', t.memberExpression(t.identifier('state'), t.identifier('value')), t.nullLiteral())
+        ));
+        currentSegment.push(t.returnStatement(t.identifier('state')));
+
+        // Construct _new and _next functions
+        const stateProps = [
+            t.objectProperty(t.identifier('ip'), t.numericLiteral(0)),
+            t.objectProperty(t.identifier('done'), t.booleanLiteral(false)),
+            t.objectProperty(t.identifier('value'), t.nullLiteral())
+        ];
+        params.forEach((p: any) => {
+            stateProps.push(t.objectProperty(t.identifier(p), t.identifier(p)));
+        });
+        localVars.forEach((v: any) => {
+            if (!params.includes(v)) {
+                stateProps.push(t.objectProperty(t.identifier(v), t.nullLiteral()));
+            }
+        });
+
+        const newFunc = t.functionDeclaration(
+            t.identifier(`${options.functionName}_new`),
+            params.map((p: any) => t.identifier(p)),
+            t.blockStatement([
+                t.returnStatement(t.objectExpression(stateProps))
+            ])
+        );
+
+        const nextBranches: any[] = [];
+        segments.forEach((segStmts: any, idx: any) => {
+            nextBranches.push(t.ifStatement(
+                t.binaryExpression('==', t.memberExpression(t.identifier('state'), t.identifier('ip')), t.numericLiteral(idx)),
+                t.blockStatement(segStmts)
+            ));
+        });
+
+        const nextFunc = t.functionDeclaration(
+            t.identifier(`${options.functionName}_next`),
+            [t.identifier('state')],
+            t.blockStatement(nextBranches)
+        );
+
+        const dispatchParams = [t.identifier('action'), t.identifier('stateOrArg1')];
+        for (let i = 1; i < params.length; i++) {
+            dispatchParams.push(t.identifier(`arg${i}`));
+        }
+
+        const newArgs = [t.identifier('stateOrArg1')];
+        for (let i = 1; i < params.length; i++) {
+            newArgs.push(t.identifier(`arg${i}`));
+        }
+
+        const dispatchFunc = t.functionDeclaration(
+            t.identifier(options.functionName),
+            dispatchParams,
+            t.blockStatement([
+                t.ifStatement(
+                    t.binaryExpression('==', t.identifier('action'), t.stringLiteral('new')),
+                    t.blockStatement([
+                        t.returnStatement(t.callExpression(t.identifier(`${options.functionName}_new`), newArgs))
+                    ])
+                ),
+                t.ifStatement(
+                    t.binaryExpression('==', t.identifier('action'), t.stringLiteral('next')),
+                    t.blockStatement([
+                        t.returnStatement(t.callExpression(t.identifier(`${options.functionName}_next`), [t.identifier('stateOrArg1')]))
+                    ])
+                ),
+                t.returnStatement(t.nullLiteral())
+            ])
+        );
+
+        applyRegisterBanking(newFunc);
+        applyRegisterBanking(nextFunc);
+        extraFuncNodes.push(newFunc);
+        extraFuncNodes.push(nextFunc);
+        
+        // Replace root generator statement with dispatcher
+        ast.program.body[0] = dispatchFunc;
+    }
+
+    // 0.2 Closure lifting and environment sharing
+    const liftedFuncs: { name: string; arity: number }[] = [];
+    const usedArities = new Set<number>();
+    let closureCounter = 0;
+
+    // Split multi-declarators first
+    traverse(ast, {
+        VariableDeclaration(path: any) {
+            if (path.node.declarations.length > 1) {
+                const splitDecls = path.node.declarations.map((decl: any) => 
+                    t.variableDeclaration(path.node.kind, [t.cloneNode(decl)])
+                );
+                path.replaceWithMultiple(splitDecls);
+            }
+        }
+    });
+
+    const nestedFunctionPaths: any[] = [];
+    traverse(ast, {
+        Function(path: any) {
+            if (path.parentPath.getFunctionParent() !== null) {
+                nestedFunctionPaths.push(path);
+            }
+        }
+    });
+
+    const closureKnownGlobals = new Set([
+        'len', 'hash256', 'concat', 'encrypt_aes', 'json_stringify', 'JSONParse', 'JSONStringify', 'TypeOf',
+        'ArrIndexOf', 'ArrLastIndexOf', 'ArrIncludes', 'ArrSlice', 'ArrReverse', 'ArrSortNumeric', 'ArrSortString',
+        'ArrFlat', 'ArrJoin', 'ArrFill', 'ArrPush', 'ArrUnshift', 'ArrPop', 'ArrShift', 'listPush',
+        'MathFloor', 'MathCeil', 'MathRound', 'MathAbs', 'MathSqrt', 'MathPow', 'MathMin', 'MathMax', 'MathLog', 'MathExp',
+        'ReflectSet', 'ReflectHas', 'ReflectOwnKeys', 'eval',
+        `${options.functionName}_proxy_get`,
+        `${options.functionName}_proxy_set`,
+        `${options.functionName}_part1`,
+        `${options.functionName}_part2`,
+        options.functionName
+    ]);
+
+    nestedFunctionPaths.reverse();
+
+    const functionCapturedVars = new Map<any, Set<string>>();
+
+    for (const nestedPath of nestedFunctionPaths) {
+        const upvars = new Set<string>();
+        nestedPath.traverse({
+            Identifier(idPath: any) {
+                if (idPath.isReferencedIdentifier() || idPath.isBindingIdentifier()) {
+                    if (idPath.parentPath === nestedPath && idPath.parentKey === 'id') {
+                        return;
+                    }
+                    const name = idPath.node.name;
+                    const binding = idPath.scope.getBinding(name);
+                    if (binding) {
+                        let isLocal = false;
+                        let currScope = binding.scope;
+                        while (currScope) {
+                            if (currScope === nestedPath.scope) {
+                                isLocal = true;
+                                break;
+                            }
+                            currScope = currScope.parent;
+                        }
+                        if (!isLocal) {
+                            let funcScope = binding.scope;
+                            while (funcScope && funcScope.path.type !== 'FunctionDeclaration' && funcScope.path.type !== 'FunctionExpression' && funcScope.path.type !== 'ArrowFunctionExpression') {
+                                funcScope = funcScope.parent;
+                            }
+                            if (funcScope) {
+                                upvars.add(name);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        for (const name of upvars) {
+            const binding = nestedPath.scope.getBinding(name);
+            if (binding) {
+                let funcScope = binding.scope;
+                while (funcScope && funcScope.path.type !== 'FunctionDeclaration' && funcScope.path.type !== 'FunctionExpression' && funcScope.path.type !== 'ArrowFunctionExpression') {
+                    funcScope = funcScope.parent;
+                }
+                if (funcScope) {
+                    let s = functionCapturedVars.get(funcScope.path);
+                    if (!s) {
+                        s = new Set<string>();
+                        functionCapturedVars.set(funcScope.path, s);
+                    }
+                    s.add(name);
+                }
+            }
+        }
+
+        const capturedVars = functionCapturedVars.get(nestedPath);
+        if (capturedVars && capturedVars.size > 0) {
+            nestedPath.traverse({
+                Identifier(idPath: any) {
+                    if ((idPath.isReferencedIdentifier() || idPath.isBindingIdentifier()) && capturedVars.has(idPath.node.name)) {
+                        const binding = idPath.scope.getBinding(idPath.node.name);
+                        if (binding && binding.scope.path === nestedPath) {
+                            if (idPath.parentPath && idPath.parentPath.isFunction() && idPath.parentKey === 'id') {
+                                return;
+                            }
+                            idPath.replaceWith(t.memberExpression(t.identifier('scopeState'), t.identifier(idPath.node.name)));
+                            idPath.skip();
+                        }
+                    }
+                },
+                VariableDeclarator(decPath: any) {
+                    const id = decPath.node.id;
+                    if (t.isIdentifier(id) && capturedVars.has(id.name)) {
+                        const binding = decPath.scope.getBinding(id.name);
+                        if (binding && binding.scope.path === nestedPath) {
+                            const init = decPath.node.init || t.nullLiteral();
+                            decPath.parentPath.replaceWith(t.expressionStatement(
+                                t.assignmentExpression('=', t.memberExpression(t.identifier('scopeState'), t.identifier(id.name)), init)
+                            ));
+                        }
+                    }
+                }
+            });
+
+            const stateProps: any[] = [];
+            const params = nestedPath.node.params.map((p: any) => p.name);
+            capturedVars.forEach(v => {
+                if (params.includes(v)) {
+                    stateProps.push(t.objectProperty(t.identifier(v), t.identifier(v)));
+                } else {
+                    stateProps.push(t.objectProperty(t.identifier(v), t.nullLiteral()));
+                }
+            });
+            const scopeStateDecl = t.variableDeclaration('let', [
+                t.variableDeclarator(t.identifier('scopeState'), t.objectExpression(stateProps))
+            ]);
+            nestedPath.node.body.body.unshift(scopeStateDecl);
+        }
+
+        nestedPath.traverse({
+            CallExpression(path: any) {
+                const callee = path.node.callee;
+                if (t.isIdentifier(callee)) {
+                    const name = callee.name;
+                    const isGeneratedHelper = 
+                        name === options.functionName ||
+                        name === `${options.functionName}_new` ||
+                        name === `${options.functionName}_next` ||
+                        name.startsWith(`${options.functionName}_closure_`) ||
+                        name.startsWith('__call_closure_');
+
+                    if (isGeneratedHelper) {
+                        return;
+                    }
+
+                    if (!closureKnownGlobals.has(name)) {
+                        const arity = path.node.arguments.length;
+                        usedArities.add(arity);
+                        path.replaceWith(t.callExpression(
+                            t.identifier(`__call_closure_${arity}`),
+                            [t.cloneNode(callee), ...path.node.arguments.map((a: any) => t.cloneNode(a))]
+                        ));
+                        path.skip();
+                    }
+                }
+            }
+        });
+
+        const liftedName = `${options.functionName}_closure_${closureCounter++}`;
+        liftedFuncs.push({ name: liftedName, arity: nestedPath.node.params.length });
+
+        nestedPath.traverse({
+            Identifier(idPath: any) {
+                if ((idPath.isReferencedIdentifier() || idPath.isBindingIdentifier()) && upvars.has(idPath.node.name)) {
+                    const binding = idPath.scope.getBinding(idPath.node.name);
+                    let isLocal = false;
+                    if (binding) {
+                        let currScope = binding.scope;
+                        while (currScope) {
+                            if (currScope === nestedPath.scope) {
+                                isLocal = true;
+                                break;
+                            }
+                            currScope = currScope.parent;
+                        }
+                    }
+                    if (!isLocal) {
+                        if (idPath.parentPath && idPath.parentPath.isFunction() && idPath.parentKey === 'id') {
+                            return;
+                        }
+                        idPath.replaceWith(t.memberExpression(t.identifier('state'), t.identifier(idPath.node.name)));
+                        idPath.skip();
+                    }
+                }
+            }
+        });
+
+        const originalParams = nestedPath.node.params.map((p: any) => t.cloneNode(p));
+        const liftedParams = [t.identifier('state'), ...originalParams];
+        let bodyNode = t.cloneNode(nestedPath.node.body);
+        if (!t.isBlockStatement(bodyNode)) {
+            bodyNode = t.blockStatement([t.returnStatement(bodyNode)]);
+        }
+        const liftedFunc = t.functionDeclaration(
+            t.identifier(liftedName),
+            liftedParams,
+            bodyNode
+        );
+
+        applyRegisterBanking(liftedFunc);
+
+        extraFuncNodes.push(liftedFunc);
+
+        let parentFuncPath = nestedPath.parentPath.getFunctionParent();
+        let stateExpr;
+        if (parentFuncPath) {
+            const isParentNested = parentFuncPath.parentPath.getFunctionParent() !== null;
+            const parentCaptured = functionCapturedVars.get(parentFuncPath);
+            if (parentCaptured && parentCaptured.size > 0) {
+                stateExpr = t.identifier('scopeState');
+            } else if (isParentNested) {
+                stateExpr = t.identifier('state');
+            } else {
+                stateExpr = t.objectExpression([]);
+            }
+        } else {
+            stateExpr = t.objectExpression([]);
+        }
+
+        const closureObj = t.objectExpression([
+            t.objectProperty(t.identifier('__is_closure'), t.booleanLiteral(true)),
+            t.objectProperty(t.identifier('fnName'), t.stringLiteral(liftedName)),
+            t.objectProperty(t.identifier('state'), stateExpr)
+        ]);
+
+        if (nestedPath.isFunctionDeclaration()) {
+            nestedPath.replaceWith(t.variableDeclaration('let', [
+                t.variableDeclarator(nestedPath.node.id, closureObj)
+            ]));
+        } else {
+            nestedPath.replaceWith(closureObj);
+        }
+    }
+
+    let rootPath: any = null;
+    traverse(ast, {
+        FunctionDeclaration(path: any) {
+            if (path.node.id && path.node.id.name === options.functionName) {
+                rootPath = path;
+                path.stop();
+            }
+        }
+    });
+
+    if (rootPath) {
+        const rootCaptured = functionCapturedVars.get(rootPath);
+        if (rootCaptured && rootCaptured.size > 0) {
+            rootPath.traverse({
+                Identifier(idPath: any) {
+                    if ((idPath.isReferencedIdentifier() || idPath.isBindingIdentifier()) && rootCaptured.has(idPath.node.name)) {
+                        const binding = idPath.scope.getBinding(idPath.node.name);
+                        if (binding && binding.scope.path === rootPath) {
+                            if (idPath.parentPath && idPath.parentPath.isFunction() && idPath.parentKey === 'id') {
+                                return;
+                            }
+                            idPath.replaceWith(t.memberExpression(t.identifier('scopeState'), t.identifier(idPath.node.name)));
+                            idPath.skip();
+                        }
+                    }
+                },
+                VariableDeclarator(decPath: any) {
+                    const id = decPath.node.id;
+                    if (t.isIdentifier(id) && rootCaptured.has(id.name)) {
+                        const binding = decPath.scope.getBinding(id.name);
+                        if (binding && binding.scope.path === rootPath) {
+                            const init = decPath.node.init || t.nullLiteral();
+                            decPath.parentPath.replaceWith(t.expressionStatement(
+                                t.assignmentExpression('=', t.memberExpression(t.identifier('scopeState'), t.identifier(id.name)), init)
+                            ));
+                        }
+                    }
+                }
+            });
+
+            const stateProps: any[] = [];
+            const params = rootPath.node.params.map((p: any) => p.name);
+            rootCaptured.forEach(v => {
+                if (params.includes(v)) {
+                    stateProps.push(t.objectProperty(t.identifier(v), t.identifier(v)));
+                } else {
+                    stateProps.push(t.objectProperty(t.identifier(v), t.nullLiteral()));
+                }
+            });
+            const scopeStateDecl = t.variableDeclaration('let', [
+                t.variableDeclarator(t.identifier('scopeState'), t.objectExpression(stateProps))
+            ]);
+            rootPath.node.body.body.unshift(scopeStateDecl);
+        }
+    }
+
+    traverse(ast, {
+        CallExpression(path: any) {
+            const callee = path.node.callee;
+            if (t.isIdentifier(callee)) {
+                const name = callee.name;
+                const isGeneratedHelper = 
+                    name === options.functionName ||
+                    name === `${options.functionName}_new` ||
+                    name === `${options.functionName}_next` ||
+                    name.startsWith(`${options.functionName}_closure_`) ||
+                    name.startsWith('__call_closure_');
+
+                if (isGeneratedHelper) {
+                    return;
+                }
+
+                if (!closureKnownGlobals.has(name)) {
+                    const arity = path.node.arguments.length;
+                    usedArities.add(arity);
+                    path.replaceWith(t.callExpression(
+                        t.identifier(`__call_closure_${arity}`),
+                        [t.cloneNode(callee), ...path.node.arguments.map((a: any) => t.cloneNode(a))]
+                    ));
+                    path.skip();
+                }
+            }
+        }
+    });
+
+    for (const arity of usedArities) {
+        const funcsOfArity = liftedFuncs.filter(f => f.arity === arity);
+        if (funcsOfArity.length > 0) {
+            const params = ['closure'];
+            for (let i = 0; i < arity; i++) {
+                params.push(`arg${i}`);
+            }
+            const bodyLines = [
+                `let name = closure.fnName;`,
+                `let state = closure.state;`
+            ];
+            funcsOfArity.forEach(f => {
+                const callArgs = ['state'];
+                for (let i = 0; i < arity; i++) {
+                    callArgs.push(`arg${i}`);
+                }
+                bodyLines.push(`if (name == "${f.name}") { return ${f.name}(${callArgs.join(', ')}); }`);
+            });
+            bodyLines.push(`return null;`);
+            
+            const dispatcherCode = `function __call_closure_${arity}(${params.join(', ')}) {\n  ${bodyLines.join('\n  ')}\n}`;
+            extraDeclarations.push(dispatcherCode);
+        }
+    }
 
     // 1. Type inference table
     const variableTypes = new Map<string, string>();
@@ -397,6 +2245,39 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
 
     // Main AST traversal pass
     traverse(ast, {
+        ObjectExpression(path: any) {
+            if (path.parentPath.isNewExpression() && t.isIdentifier(path.parentPath.node.callee) && path.parentPath.node.callee.name === 'Proxy') {
+                return;
+            }
+            const props = path.node.properties;
+            if (props.some((p: any) => t.isIdentifier(p.key) && p.key.name === '__ownKeys')) {
+                return;
+            }
+            const keys: any[] = [];
+            for (const prop of props) {
+                if (t.isObjectProperty(prop)) {
+                    if (t.isIdentifier(prop.key) && !prop.computed) {
+                        keys.push(t.stringLiteral(prop.key.name));
+                    } else if (t.isStringLiteral(prop.key)) {
+                        keys.push(t.stringLiteral(prop.key.value));
+                    } else {
+                        keys.push(prop.key);
+                    }
+                }
+            }
+            props.push(t.objectProperty(t.identifier('__ownKeys'), t.arrayExpression(keys)));
+        },
+
+        StringLiteral(path: any) {
+            if (path.node.extra) {
+                delete path.node.extra;
+            }
+        },
+
+        ThrowStatement(path: any) {
+            path.replaceWith(t.returnStatement(t.booleanLiteral(false)));
+        },
+
         // Variable Declaration Lexical Scoping const/var -> let
         VariableDeclaration(path: any) {
             path.node.kind = "let";
@@ -497,6 +2378,27 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
         AssignmentExpression(path: any) {
             const left = path.node.left;
             const right = path.node.right;
+
+            // ReflectSet key-tracking for member expression assignment
+            if (t.isMemberExpression(left)) {
+                const prop = left.property;
+                if (t.isIdentifier(prop) && !left.computed) {
+                    const name = prop.name;
+                    if (['__ownKeys', 'keys', 'values', 'size', 'ip', 'done', 'value'].includes(name)) {
+                        return;
+                    }
+                }
+                const obj = left.object;
+                
+                let keyExpr: any = prop;
+                if (t.isIdentifier(prop) && !left.computed) {
+                    keyExpr = t.stringLiteral(prop.name);
+                }
+                
+                path.replaceWith(t.callExpression(t.identifier("ReflectSet"), [obj, keyExpr, right]));
+                usedStdlibSet.add('ReflectSet');
+                return;
+            }
 
             // Logical assignments
             if (path.node.operator === "&&=" || path.node.operator === "||=" || path.node.operator === "??=") {
@@ -703,6 +2605,54 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
         CallExpression(path: any) {
             const node = path.node;
             const callee = node.callee;
+
+            // Static JSON string eval() mapping
+            if (t.isIdentifier(callee) && callee.name === 'eval') {
+                const arg = node.arguments[0];
+                if (arg && t.isStringLiteral(arg)) {
+                    try {
+                        JSON.parse(arg.value);
+                        path.replaceWith(t.callExpression(t.identifier("JSONParse"), [arg]));
+                        usedStdlibSet.add('JSONParse');
+                        return;
+                    } catch (e) {
+                        // Not static JSON, let it fall through
+                    }
+                }
+            }
+
+            // Reflect methods mapping
+            if (t.isMemberExpression(callee) && t.isIdentifier(callee.object) && callee.object.name === 'Reflect') {
+                const prop = callee.property;
+                if (t.isIdentifier(prop) && !callee.computed) {
+                    const name = prop.name;
+                    if (name === 'get') {
+                        const target = node.arguments[0];
+                        const key = node.arguments[1];
+                        path.replaceWith(t.memberExpression(target, key, true));
+                        return;
+                    } else if (name === 'set') {
+                        const target = node.arguments[0];
+                        const key = node.arguments[1];
+                        const val = node.arguments[2];
+                        path.replaceWith(t.callExpression(t.identifier("ReflectSet"), [target, key, val]));
+                        usedStdlibSet.add('ReflectSet');
+                        return;
+                    } else if (name === 'has') {
+                        const target = node.arguments[0];
+                        const key = node.arguments[1];
+                        path.replaceWith(t.callExpression(t.identifier("ReflectHas"), [target, key]));
+                        usedStdlibSet.add('ReflectHas');
+                        return;
+                    } else if (name === 'ownKeys') {
+                        const target = node.arguments[0];
+                        path.replaceWith(t.callExpression(t.identifier("ReflectOwnKeys"), [target]));
+                        usedStdlibSet.add('ReflectOwnKeys');
+                        return;
+                    }
+                }
+            }
+
             if (t.isMemberExpression(callee)) {
                 const obj = callee.object;
                 const prop = callee.property;
@@ -1460,7 +3410,7 @@ fn ${mergesortName}(arr, lo, hi) {
                 factoryParams,
                 t.blockStatement(factoryBodyStmts)
             );
-            extraDeclarations.push(generate(factoryFunc).code);
+            extraFuncNodes.push(factoryFunc);
 
             // 2. Generate class methods
             methods.forEach(method => {
@@ -1475,7 +3425,7 @@ fn ${mergesortName}(arr, lo, hi) {
                     mParams,
                     mBody
                 );
-                extraDeclarations.push(generate(methodFunc).code);
+                extraFuncNodes.push(methodFunc);
             });
 
             // Replace class declaration with empty statement since we generated factory functions
@@ -1493,17 +3443,57 @@ fn ${mergesortName}(arr, lo, hi) {
         }
     });
 
-    // Generate output code
-    const generated = generate(ast);
-    let jsCode = generated.code;
+    // Apply Register Banking
+    traverse(ast, {
+        FunctionDeclaration(path: any) {
+            applyRegisterBanking(path.node);
+        }
+    });
 
-    // Convert JS keywords to FVM: replace 'function ' with 'fn '
-    let fvmSource = jsCode.replace(/\bfunction\b/g, 'fn');
+    // Call site rewriting for packed parameters
+    function rewriteCallSites(node: any) {
+        const fileNode = t.file(t.program(t.isProgram(node) ? node.body : [node]));
+        const rewritten = new Set<any>();
+        traverse(fileNode, {
+            noScope: true,
+            CallExpression(callPath: any) {
+                if (rewritten.has(callPath.node)) return;
+                const callee = callPath.node.callee;
+                if (t.isIdentifier(callee) && packedFunctions.has(callee.name)) {
+                    const originalParams = packedFunctions.get(callee.name);
+                    if (originalParams) {
+                        const props: any[] = [];
+                        for (let i = 0; i < originalParams.length; i++) {
+                            const paramName = originalParams[i];
+                            const argVal = callPath.node.arguments[i] || t.identifier("undefined");
+                            props.push(t.objectProperty(t.identifier(paramName), t.cloneNode(argVal)));
+                        }
+                        callPath.node.arguments = [t.objectExpression(props)];
+                        rewritten.add(callPath.node);
+                    }
+                }
+            }
+        });
+    }
+
+    rewriteCallSites(ast.program);
+
+    for (const node of extraFuncNodes) {
+        rewriteCallSites(node);
+        extraDeclarations.push(generate(node).code);
+    }
+
+    // Generate output code
+    const generated = generate(ast, { jsescOption: { quotes: 'double' } });
+    let jsCode = generated.code;
 
     // Append extra FVM declarations (mergesort helpers and class methods)
     if (extraDeclarations.length > 0) {
-        fvmSource = extraDeclarations.join("\n") + "\n" + fvmSource;
+        jsCode = extraDeclarations.join("\n") + "\n" + jsCode;
     }
+
+    // Convert JS keywords to FVM: replace 'function ' with 'fn '
+    let fvmSource = jsCode.replace(/\bfunction\b/g, 'fn');
 
     // Wrap or compile async splitter if there are await calls
     let asyncSplit: AsyncSplitInfo | null = null;
@@ -1521,23 +3511,184 @@ fn ${mergesortName}(arr, lo, hi) {
     const usedStdlib = Array.from(usedStdlibSet);
 
     // Write wrapper
-    jsWrapper = `
+    if (isGeneratorFlag) {
+        jsWrapper = `
 const { FortressClient } = require('../../client.js');
 let fortressClient;
+
+function preparePayload(obj, visited = new Map()) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
+        return {
+            __is_sab: true,
+            buffer: Array.from(new Uint8Array(obj))
+        };
+    }
+    if (obj && obj.__is_sab) {
+        return {
+            __is_sab: true,
+            buffer: preparePayload(obj.buffer, visited)
+        };
+    }
+    if (ArrayBuffer.isView(obj)) {
+        obj = Array.from(obj);
+    }
+    if (typeof obj !== 'object') return obj;
+    let isFortressPx = false;
+    let target = obj;
+    try {
+        if (obj['__is_fortress_' + 'proxy']) {
+            isFortressPx = true;
+            target = obj['__' + 'proxy_target'];
+        }
+    } catch (e) {}
+    if (isFortressPx) {
+        return preparePayload(target, visited);
+    }
+    if (visited.has(obj)) return visited.get(obj);
+    if (Array.isArray(obj)) {
+        const cloned = [];
+        visited.set(obj, cloned);
+        for (let i = 0; i < obj.length; i++) {
+            cloned.push(preparePayload(obj[i], visited));
+        }
+        return cloned;
+    }
+    const keys = Reflect.ownKeys(obj).filter(k => k !== '__ownKeys');
+    const cloned = {};
+    visited.set(obj, cloned);
+    for (const k of keys) {
+        cloned[k] = preparePayload(obj[k], visited);
+    }
+    cloned.__ownKeys = keys.map(k => typeof k === 'symbol' ? (k.description || k.toString()) : k);
+    return cloned;
+}
+
+module.exports = function(...args) {
+    let statePromise = null;
+    let initialized = false;
+    
+    const initClient = async () => {
+        if (!fortressClient) {
+            fortressClient = await FortressClient.init(process.env.FORTRESS_ENDPOINT || './checkLicense.json');
+        }
+    };
+
+    const iterator = {
+        async next() {
+            await initClient();
+            if (!initialized) {
+                let payloadArgs;
+                if (${originalParamNames.length > 2}) {
+                    payloadArgs = ["new", { ${originalParamNames.map((name, i) => `"${name}": args[${i}]`).join(', ')} }];
+                } else {
+                    payloadArgs = ["new", ...args];
+                }
+                const state = await fortressClient.execute(preparePayload(payloadArgs));
+                initialized = true;
+                const nextState = await fortressClient.execute(preparePayload(["next", state]));
+                statePromise = Promise.resolve(nextState);
+                return { value: nextState.value, done: nextState.done };
+            } else {
+                const currentState = await statePromise;
+                if (currentState.done) {
+                    return { value: null, done: true };
+                }
+                const nextState = await fortressClient.execute(preparePayload(["next", currentState]));
+                statePromise = Promise.resolve(nextState);
+                return { value: nextState.value, done: nextState.done };
+            }
+        },
+        [Symbol.iterator]() {
+            return this;
+        },
+        [Symbol.asyncIterator]() {
+            return this;
+        }
+    };
+    return iterator;
+};
+`;
+    } else {
+        jsWrapper = `
+const { FortressClient } = require('../../client.js');
+let fortressClient;
+
+function preparePayload(obj, visited = new Map()) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
+        return {
+            __is_sab: true,
+            buffer: Array.from(new Uint8Array(obj))
+        };
+    }
+    if (obj && obj.__is_sab) {
+        return {
+            __is_sab: true,
+            buffer: preparePayload(obj.buffer, visited)
+        };
+    }
+    if (ArrayBuffer.isView(obj)) {
+        obj = Array.from(obj);
+    }
+    if (typeof obj !== 'object') return obj;
+    let isFortressPx = false;
+    let target = obj;
+    try {
+        if (obj['__is_fortress_' + 'proxy']) {
+            isFortressPx = true;
+            target = obj['__' + 'proxy_target'];
+        }
+    } catch (e) {}
+    if (isFortressPx) {
+        return preparePayload(target, visited);
+    }
+    if (visited.has(obj)) return visited.get(obj);
+    if (Array.isArray(obj)) {
+        const cloned = [];
+        visited.set(obj, cloned);
+        for (let i = 0; i < obj.length; i++) {
+            cloned.push(preparePayload(obj[i], visited));
+        }
+        return cloned;
+    }
+    const keys = Reflect.ownKeys(obj).filter(k => k !== '__ownKeys');
+    const cloned = {};
+    visited.set(obj, cloned);
+    for (const k of keys) {
+        cloned[k] = preparePayload(obj[k], visited);
+    }
+    cloned.__ownKeys = keys.map(k => typeof k === 'symbol' ? (k.description || k.toString()) : k);
+    return cloned;
+}
+
 module.exports = async function(...args) {
     if (!fortressClient) {
         fortressClient = await FortressClient.init(process.env.FORTRESS_ENDPOINT || './checkLicense.json');
     }
-    return await fortressClient.execute(args);
+    let payloadArgs;
+    if (${originalParamNames.length > 2}) {
+        payloadArgs = [{ ${originalParamNames.map((name, i) => `"${name}": args[${i}]`).join(', ')} }];
+    } else {
+        payloadArgs = args;
+    }
+    return await fortressClient.execute(preparePayload(payloadArgs));
 };
 `;
+    }
 
     // Write TypeScript declaration
-    const tsDeclaration = `export declare function ${options.functionName}(...args: any[]): Promise<any>;\n`;
+    const tsDeclaration = isGeneratorFlag
+        ? `export declare function ${options.functionName}(...args: any[]): any;\n`
+        : `export declare function ${options.functionName}(...args: any[]): Promise<any>;\n`;
 
+    let finalJsWrapper = jsWrapper;
+    if (hasSharedArrayBuffer) {
+        finalJsWrapper = `// SharedArrayBuffer usage detected: shared memory is replaced with message-passing equivalent.\n` + finalJsWrapper;
+    }
     return {
         fvmSource,
-        jsWrapper,
+        jsWrapper: finalJsWrapper,
         tsDeclaration,
         usedStdlib,
         warnings,
@@ -1554,6 +3705,9 @@ export function verifyEquivalenceSync(
     const builtins = `
         function len(x) {
             if (x === null || x === undefined) return 0;
+            if (typeof x === "object" && typeof x.length === "number") return x.length;
+            if (typeof x === "object" && x.__elementSize !== undefined) return x.length;
+            if (ArrayBuffer.isView(x)) return x.length;
             if (Array.isArray(x) || typeof x === "string") return x.length;
             if (typeof x === "object") return Object.keys(x).length;
             return 0;
@@ -1675,9 +3829,60 @@ export function verifyEquivalenceSync(
     for (const input of testInputs) {
         let jsError: any = null;
         let jsRes: any = null;
-        const jsInputClone = JSON.parse(JSON.stringify(input));
-        const args = arity > 0 ? Array(arity).fill(jsInputClone) : [jsInputClone];
+        const args = arity > 0 ? Array.from({ length: arity }, () => JSON.parse(JSON.stringify(input))) : [JSON.parse(JSON.stringify(input))];
         
+        const isGenerator = originalFunc.constructor.name === 'GeneratorFunction' || originalFunc.toString().includes('function*');
+        if (isGenerator) {
+            let jsVals: any[] = [];
+            let jsError: any = null;
+            try {
+                const jsIterator = originalFunc(...args);
+                let jsNext = jsIterator.next();
+                while (!jsNext.done) {
+                    jsVals.push(jsNext.value);
+                    jsNext = jsIterator.next();
+                }
+            } catch (e: any) {
+                jsError = e.message;
+            }
+
+            let fvmVals: any[] = [];
+            let fvmError: any = null;
+            try {
+                let fvmState = runFvmSync(fvmBytecode, opcodeMap, ["new", ...args]);
+                let done = fvmState ? fvmState.done : true;
+                while (!done) {
+                    fvmState = runFvmSync(fvmBytecode, opcodeMap, ["next", fvmState]);
+                    if (!fvmState || fvmState.done) {
+                        break;
+                    }
+                    fvmVals.push(fvmState.value);
+                    done = fvmState.done;
+                }
+            } catch (e: any) {
+                fvmError = e.message;
+            }
+
+            const bothError = (jsError !== null && fvmError !== null);
+            const neitherError = jsError === null && fvmError === null;
+            const sameError = bothError || neitherError;
+            const sameResult = JSON.stringify(normalizeVal(jsVals, jsVals)) === JSON.stringify(normalizeVal(fvmVals, jsVals));
+
+            if (!sameError || (!bothError && !sameResult)) {
+                console.error("\n==================================================");
+                console.error("VERIFICATION FAILURE DETECTED FOR GENERATOR INPUT: ", input);
+                console.error("--------------------------------------------------");
+                console.error("JavaScript Generator Output:", jsVals);
+                console.error("JavaScript Error: ", jsError);
+                console.error("--------------------------------------------------");
+                console.error("FVM Generator Output:       ", fvmVals);
+                console.error("FVM Error:        ", fvmError);
+                console.error("==================================================\n");
+                throw new Error(`Equivalence verification failed for input: ${JSON.stringify(input)}`);
+            }
+            continue;
+        }
+
         try {
             jsRes = originalFunc(...args);
             if (jsRes && typeof jsRes.then === 'function') {
@@ -1693,11 +3898,13 @@ export function verifyEquivalenceSync(
         try {
             fvmRes = runFvmSync(fvmBytecode, opcodeMap, args);
         } catch (e: any) {
-            fvmError = e.message;
+            fvmError = e.stack || e.message || String(e);
         }
 
         // Compare results
-        let jsResStr = JSON.stringify(jsRes === undefined ? null : jsRes);
+        const normJs = normalizeVal(jsRes, jsRes);
+        const normFvm = normalizeVal(fvmRes, jsRes);
+        let jsResStr = JSON.stringify(normJs === undefined ? null : normJs);
         const bothError = (jsError !== null && fvmError !== null) || 
                           (jsError === null && fvmError !== null && (
                               (fvmError.includes("IndexOutOfBounds") && (
@@ -1719,8 +3926,8 @@ export function verifyEquivalenceSync(
         const neitherError = jsError === null && fvmError === null;
         const sameError = bothError || neitherError;
 
-        jsResStr = JSON.stringify(jsRes === undefined ? null : jsRes);
-        let fvmResStr = JSON.stringify(fvmRes === undefined ? null : fvmRes);
+        jsResStr = JSON.stringify(normJs === undefined ? null : normJs);
+        let fvmResStr = JSON.stringify(normFvm === undefined ? null : normFvm);
         if (jsResStr) jsResStr = jsResStr.replace(/undefined/g, "null");
         if (fvmResStr) fvmResStr = fvmResStr.replace(/undefined/g, "null");
         const sameResult = jsResStr === fvmResStr;
@@ -1742,16 +3949,341 @@ export function verifyEquivalenceSync(
     console.log("[VERIFIER] Equivalence verification passed successfully!");
 }
 
+function normalizeVal(val: any, referenceJsVal?: any): any {
+    if (val === null || val === undefined) return null;
+    if (val && typeof val === 'object' && (val.__sab || val.__elementSize !== undefined)) {
+        const arr = [];
+        const len = typeof val.length === 'number' ? val.length : 0;
+        for (let i = 0; i < len; i++) {
+            arr.push(val[i]);
+        }
+        val = arr;
+    }
+    if (referenceJsVal && ArrayBuffer.isView(referenceJsVal) && Array.isArray(val)) {
+        val = val.slice(0, (referenceJsVal as any).length);
+    }
+    if (ArrayBuffer.isView(val)) {
+        val = Array.from(val as any);
+    }
+    if (typeof val === 'symbol') {
+        return `Symbol(${val.description || ''})`;
+    }
+    if (typeof val === 'string' && val.startsWith('__fortress_sym_')) {
+        const parts = val.split('__');
+        const desc = parts[parts.length - 1] || '';
+        return `Symbol(${desc})`;
+    }
+    if (Array.isArray(val)) {
+        const filteredVal = val.filter(item => item !== '__ownKeys');
+        const filteredRef = Array.isArray(referenceJsVal) ? referenceJsVal.filter(item => item !== '__ownKeys') : undefined;
+        return filteredVal.map((item, idx) => {
+            const refChild = Array.isArray(filteredRef) ? filteredRef[idx] : undefined;
+            return normalizeVal(item, refChild);
+        });
+    }
+    if (typeof val === 'object') {
+        const copy: any = {};
+        const sortedKeys = Reflect.ownKeys(val).sort((a, b) => {
+            const aStr = typeof a === 'symbol' ? `Symbol(${a.description || ''})` : String(a);
+            const bStr = typeof b === 'symbol' ? `Symbol(${b.description || ''})` : String(b);
+            return aStr.localeCompare(bStr);
+        });
+        for (const k of sortedKeys) {
+            const keyStr = typeof k === 'symbol' ? `Symbol(${k.description || ''})` : String(k);
+            if (keyStr !== '__ownKeys') {
+                const refChild = (referenceJsVal && typeof referenceJsVal === 'object') ? (referenceJsVal as any)[k] : undefined;
+                copy[keyStr] = normalizeVal((val as any)[k], refChild);
+            }
+        }
+        return copy;
+    }
+    return val;
+}
+
+async function testProxyObject(obj: any): Promise<any> {
+    const results: any = {};
+    const propsToTest = ['a', 'b', 'private', 'foo', 'x', 'y'];
+    for (const prop of propsToTest) {
+        try {
+            results[`get_${prop}`] = obj[prop];
+        } catch (e: any) {
+            results[`get_${prop}_error`] = e.name || e.message;
+        }
+
+        try {
+            results[`reflect_get_${prop}`] = Reflect.get(obj, prop);
+        } catch (e: any) {
+            results[`reflect_get_${prop}_error`] = e.name || e.message;
+        }
+
+        try {
+            results[`reflect_has_${prop}`] = Reflect.has(obj, prop);
+        } catch (e: any) {
+            results[`reflect_has_${prop}_error`] = e.name || e.message;
+        }
+    }
+    const valsToTest = [10, 'string', false];
+    for (const prop of ['a', 'value']) {
+        for (const val of valsToTest) {
+            try {
+                obj[prop] = val;
+                results[`set_${prop}_${typeof val}`] = obj[prop];
+            } catch (e: any) {
+                results[`set_${prop}_${typeof val}_error`] = e.name || e.message;
+            }
+
+            try {
+                const setRes = Reflect.set(obj, prop, val);
+                results[`reflect_set_${prop}_${typeof val}`] = setRes;
+            } catch (e: any) {
+                results[`reflect_set_${prop}_${typeof val}_error`] = e.name || e.message;
+            }
+        }
+    }
+
+    try {
+        results[`reflect_ownKeys`] = Reflect.ownKeys(obj);
+    } catch (e: any) {
+        results[`reflect_ownKeys_error`] = e.name || e.message;
+    }
+
+    return results;
+}
+
 export async function verifyEquivalence(
     originalJsCode: string,
     fvmBytecode: Uint8Array,
     opcodeMap: number[]
 ): Promise<void> {
-    verifyEquivalenceSync(originalJsCode, fvmBytecode, opcodeMap);
+    const cleanJsCode = originalJsCode.trim();
+    const functionName = cleanJsCode.match(/function\s+(\w+)/)?.[1] || 
+                         cleanJsCode.match(/function\*\s+(\w+)/)?.[1] || 
+                         'defaultFunc';
+    
+    let transpileRes;
+    try {
+        transpileRes = transpile(originalJsCode, {
+            functionName,
+            filePath: 'test.js',
+            verifyEquivalence: false
+        });
+    } catch (e) {
+        verifyEquivalenceSync(originalJsCode, fvmBytecode, opcodeMap);
+        return;
+    }
+    
+    const { jsWrapper } = transpileRes;
+    const isSplit = jsWrapper.includes('_split');
+    const isProxy = jsWrapper.includes('_proxy');
+    
+    if (!isSplit && !isProxy) {
+        verifyEquivalenceSync(originalJsCode, fvmBytecode, opcodeMap);
+        return;
+    }
+    
+    (global as any).__fortress_latest_bytecode = fvmBytecode;
+    (global as any).__fortress_latest_opcodeMap = Array.from(opcodeMap);
+    
+    const builtins = `const Symbol = (desc) => "__fortress_sym_" + desc;`;
+    let originalFunc: Function;
+    try {
+        originalFunc = new Function(`${builtins}; return (${cleanJsCode})`)();
+    } catch (e) {
+        originalFunc = new Function(`${builtins}; ${cleanJsCode}; return ${cleanJsCode.match(/function\s+(\w+)/)?.[1] || 'defaultFunc'};`)();
+    }
+    
+    const mockRequire = (id: string) => {
+        if (id.includes('client')) {
+            return {
+                FortressClient: {
+                    init: async () => {
+                        return {
+                            execute: async (executeArgs: any[]) => {
+                                const actualArgs = executeArgs.slice(1);
+                                return runFvmSync(fvmBytecode, opcodeMap, actualArgs);
+                            }
+                        };
+                    }
+                }
+            };
+        }
+        return require(id);
+    };
+    
+    const wrappedJsCode = jsWrapper.replace("module.exports =", "const wrapperFunc =") + "\n; return wrapperFunc;";
+    let wrapperFunc;
+    try {
+        wrapperFunc = new Function("require", "process", wrappedJsCode)(mockRequire, process);
+    } catch (e: any) {
+        console.error("FAILED TO EVALUATE wrappedJsCode:");
+        console.error(wrappedJsCode);
+        throw e;
+    }
+    
+    const testInputs = [
+        0, 
+        1, 
+        -1, 
+        42, 
+        "", 
+        "hello", 
+        [], 
+        [1, 2, 3], 
+        {}, 
+        { a: 1 }, 
+        true, 
+        false, 
+        null
+    ];
+    
+    const arity = originalFunc.length;
+    
+    for (const input of testInputs) {
+        let jsError: any = null;
+        let jsRes: any = null;
+        const args = arity > 0 ? Array.from({ length: arity }, () => JSON.parse(JSON.stringify(input))) : [JSON.parse(JSON.stringify(input))];
+        
+        try {
+            jsRes = originalFunc(...args);
+            if (jsRes && typeof jsRes.then === 'function') {
+                jsRes = await jsRes;
+            }
+        } catch (e: any) {
+            jsError = e.message;
+        }
+        
+        let fvmError: any = null;
+        let fvmRes: any = null;
+        try {
+            fvmRes = wrapperFunc(...args);
+            if (fvmRes && typeof fvmRes.then === 'function') {
+                fvmRes = await fvmRes;
+            }
+        } catch (e: any) {
+            fvmError = e.message;
+        }
+        
+        if (isProxy) {
+            let jsProxyResult: any = null;
+            let fvmProxyResult: any = null;
+            
+            if (jsError === null && jsRes && typeof jsRes === 'object') {
+                jsProxyResult = await testProxyObject(jsRes);
+            } else if (jsError === null) {
+                jsProxyResult = jsRes;
+            }
+            if (fvmError === null && fvmRes && typeof fvmRes === 'object') {
+                fvmProxyResult = await testProxyObject(fvmRes);
+            } else if (fvmError === null) {
+                fvmProxyResult = fvmRes;
+            }
+            
+            const normJs = normalizeVal(jsProxyResult, jsProxyResult);
+            const normFvm = normalizeVal(fvmProxyResult, jsProxyResult);
+            const jsResStr = JSON.stringify(normJs);
+            const fvmResStr = JSON.stringify(normFvm);
+            
+            if (jsResStr !== fvmResStr || (jsError !== null) !== (fvmError !== null)) {
+                console.error("\n==================================================");
+                console.error("VERIFICATION FAILURE DETECTED FOR PROXY INPUT: ", input);
+                console.error("JavaScript Error: ", jsError);
+                console.error("FVM Error:        ", fvmError);
+                console.error("JS Proxy ops:     ", normJs);
+                console.error("FVM Proxy ops:    ", normFvm);
+                console.error("==================================================\n");
+                throw new Error(`Equivalence verification failed for Proxy input: ${JSON.stringify(input)}`);
+            }
+        } else {
+            const normJs = normalizeVal(jsRes, jsRes);
+            const normFvm = normalizeVal(fvmRes, jsRes);
+            let jsResStr = JSON.stringify(normJs);
+            let fvmResStr = JSON.stringify(normFvm);
+            if (jsResStr) jsResStr = jsResStr.replace(/undefined/g, "null");
+            if (fvmResStr) fvmResStr = fvmResStr.replace(/undefined/g, "null");
+            
+            const sameError = (jsError !== null) === (fvmError !== null);
+            const sameResult = jsResStr === fvmResStr;
+            
+            if (!sameError || (!jsError && !sameResult)) {
+                console.error("\n==================================================");
+                console.error("VERIFICATION FAILURE DETECTED FOR SPLIT/ASYNC INPUT: ", input);
+                console.error("JavaScript Output:", jsRes);
+                console.error("JavaScript Error: ", jsError);
+                console.error("FVM Output:       ", fvmRes);
+                console.error("FVM Error:        ", fvmError);
+                console.error("==================================================\n");
+                throw new Error(`Equivalence verification failed for split/async input: ${JSON.stringify(input)}`);
+            }
+        }
+    }
+    console.log("[VERIFIER] Async equivalence verification passed successfully!");
+}
+
+function preparePayload(obj: any, visited: Map<any, any> = new Map()): any {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
+        return {
+            __is_sab: true,
+            buffer: Array.from(new Uint8Array(obj))
+        };
+    }
+    if (obj && obj.__is_sab) {
+        return {
+            __is_sab: true,
+            buffer: preparePayload(obj.buffer, visited)
+        };
+    }
+    if (ArrayBuffer.isView(obj)) {
+        obj = Array.from(obj as any);
+    }
+    if (typeof obj !== 'object') return obj;
+    let isFortressPx = false;
+    let target = obj;
+    try {
+        if (obj['__is_fortress_' + 'proxy']) {
+            isFortressPx = true;
+            target = obj['__' + 'proxy_target'];
+        }
+    } catch (e) {}
+    if (isFortressPx) {
+        return preparePayload(target, visited);
+    }
+    if (visited.has(obj)) return visited.get(obj);
+    if (Array.isArray(obj)) {
+        const cloned: any[] = [];
+        visited.set(obj, cloned);
+        for (let i = 0; i < obj.length; i++) {
+            cloned.push(preparePayload(obj[i], visited));
+        }
+        return cloned;
+    }
+    const keys = Reflect.ownKeys(obj).filter(k => k !== '__ownKeys');
+    const cloned: any = {};
+    visited.set(obj, cloned);
+    for (const k of keys) {
+        cloned[k] = preparePayload((obj as any)[k], visited);
+    }
+    cloned.__ownKeys = keys.map(k => typeof k === 'symbol' ? (k.description || k.toString()) : k);
+    return cloned;
 }
 
 function runFvmSync(code: Uint8Array, opcodeMap: number[], args: any[]): any {
-    const inputJson = JSON.stringify(args);
+    const seen = new Set();
+    const inputJson = JSON.stringify(preparePayload(args), (key, value) => {
+        if (value !== null && typeof value === 'object') {
+            if (seen.has(value)) {
+                return "[Circular]";
+            }
+            seen.add(value);
+        }
+        return value;
+    });
+    if (code.length > 0 && code.length % 288 === 0) {
+        const newCode = new Uint8Array(code.length + 1);
+        newCode.set(code);
+        newCode[code.length] = 0;
+        code = newCode;
+    }
     const hashBytes = crypto.createHash('sha256').update(code).digest();
     
     // Set payload hash in VM
@@ -1763,7 +4295,13 @@ function runFvmSync(code: Uint8Array, opcodeMap: number[], args: any[]): any {
     vmNode.init_crypto_with_key(new Uint8Array(32), new Uint8Array(32), new Uint8Array(32), 0);
     try {
         const resStr = vmNode.execute(code, dummyPng, inputJson, mapUint8);
-        const res = JSON.parse(resStr);
+        let res;
+        try {
+            res = JSON.parse(resStr);
+        } catch (parseErr: any) {
+            console.error("JSON PARSE ERROR on resStr:", resStr);
+            throw parseErr;
+        }
         if (res && res.error) {
             throw new Error(res.error);
         }

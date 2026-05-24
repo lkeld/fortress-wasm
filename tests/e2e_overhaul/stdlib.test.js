@@ -31,7 +31,7 @@ try {
     if (testDevResult.error === "Dev mode VirtSC hash mismatch") {
         isDevMode = true;
     }
-} catch (e) {}
+} catch (e) { }
 
 const TEMP_DIR = os.tmpdir();
 
@@ -73,9 +73,9 @@ async function runBytecode(bytes) {
         const resultJsonStr = vmNode.execute(payload, header, '{}', mapUint8);
         return JSON.parse(resultJsonStr);
     } finally {
-        try { vmNode.clear_crypto(); } catch(e){}
-        try { fs.unlinkSync(fvbcPath); } catch(e){}
-        try { fs.unlinkSync(mapPath); } catch(e){}
+        try { vmNode.clear_crypto(); } catch (e) { }
+        try { fs.unlinkSync(fvbcPath); } catch (e) { }
+        try { fs.unlinkSync(mapPath); } catch (e) { }
     }
 }
 
@@ -187,25 +187,25 @@ runTestSuite('F2: Stdlib Map/Set E2E Overhaul Test Suite', {
         // In VM, NaN serializes to null in JSON
         const builder = new BytecodeBuilder();
         builder.emit(OpCode.NewList);
-        
+
         builder.emitFloat(OpCode.PushFloat, 10.5);
         builder.emit(OpCode.ListPush);
-        
+
         builder.emitFloat(OpCode.PushFloat, NaN);
         builder.emit(OpCode.ListPush);
-        
+
         builder.emitFloat(OpCode.PushFloat, -5.0);
         builder.emit(OpCode.ListPush);
-        
+
         builder.emitFloat(OpCode.PushFloat, Infinity);
         builder.emit(OpCode.ListPush);
-        
+
         builder.emitFloat(OpCode.PushFloat, 3.2);
         builder.emit(OpCode.ListPush);
-        
+
         builder.emit(OpCode.ArrSortNumeric);
         builder.emit(OpCode.Return);
-        
+
         const res = await runBytecode(builder.build());
         assert.deepStrictEqual(res, [-5.0, 3.2, 10.5, null, null]); // Infinity and NaN become null
     },

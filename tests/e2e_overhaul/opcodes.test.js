@@ -235,7 +235,7 @@ runTestSuite('F1: Opcodes E2E Overhaul Test Suite', {
         builder.emit(OpCode.Return);
         const res = await runBytecode(builder.build());
         assert.strictEqual(res.status, false);
-        assert.strictEqual(res.error, "IndexOutOfBounds");
+        assert.ok(res.error.startsWith("IndexOutOfBounds"));
     },
 
     'Uninitialized Variable - loading uninitialized slot returns null': async () => {

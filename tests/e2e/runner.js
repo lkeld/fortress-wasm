@@ -208,7 +208,8 @@ for (const testCase of cases) {
                     }
                 } else {
                     assert.ok(runResult && runResult.status === false, `Expected error status: false, got: ${JSON.stringify(runResult)}`);
-                    assert.strictEqual(runResult.error, testCase.expected, `Expected error "${testCase.expected}", got "${runResult.error}"`);
+                    const actualError = runResult.error.split(': trace:')[0];
+                    assert.strictEqual(actualError, testCase.expected, `Expected error "${testCase.expected}", got "${runResult.error}"`);
                 }
             } else {
                 if (testCase.expected === 'CUSTOM_TELEMETRY') {

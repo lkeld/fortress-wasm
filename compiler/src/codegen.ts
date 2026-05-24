@@ -14,7 +14,7 @@ export class CodeGenerator {
     private currentJunkThreshold: number = 0.3;
     private dummyVariables: string[] = [];
 
-    public generate(program: Program): { code: Uint8Array, opcodeMap: Uint8Array } {
+    public generate(program: Program, entryFuncName?: string): { code: Uint8Array, opcodeMap: Uint8Array } {
         this.code = [];
         this.locals = new Map();
         this.localTypes = new Map();
@@ -39,12 +39,18 @@ export class CodeGenerator {
         const hasTopLevelCode = program.body.some(stmt => stmt.type !== 'FunctionDeclaration');
         let numParams = 0;
         if (!hasTopLevelCode && program.body.length > 0) {
-            const firstFunc = program.body.find(stmt => stmt.type === 'FunctionDeclaration');
-            if (firstFunc && firstFunc.type === 'FunctionDeclaration') {
-                numParams = firstFunc.params.length;
+            let entryFunc = null;
+            if (entryFuncName) {
+                entryFunc = program.body.find(stmt => stmt.type === 'FunctionDeclaration' && stmt.name.name === entryFuncName);
+            }
+            if (!entryFunc) {
+                entryFunc = program.body.find(stmt => stmt.type === 'FunctionDeclaration');
+            }
+            if (entryFunc && entryFunc.type === 'FunctionDeclaration') {
+                numParams = entryFunc.params.length;
                 // Pre-allocate slots 0..numParams-1
                 for (let i = 0; i < numParams; i++) {
-                    const paramName = firstFunc.params[i].name;
+                    const paramName = entryFunc.params[i].name;
                     this.locals.set(paramName, i);
                     this.localTypes.set(paramName, 'any');
                 }
@@ -83,8 +89,12 @@ export class CodeGenerator {
         }
         
         if (entryJumpOffset !== -1 && this.functionBodies.length > 0) {
-            const firstFuncName = (this.functionBodies[0] as any).name.name;
-            const target = this.functions.get(firstFuncName);
+            let entryFunc = null;
+            if (entryFuncName) {
+                entryFunc = this.functionBodies.find(stmt => (stmt as any).name.name === entryFuncName);
+            }
+            const entryFuncNameActual = entryFunc ? (entryFunc as any).name.name : (this.functionBodies[0] as any).name.name;
+            const target = this.functions.get(entryFuncNameActual);
             if (target !== undefined && target !== 0) {
                 this.patchJump(entryJumpOffset + 1, target);
             }

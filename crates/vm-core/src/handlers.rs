@@ -96,22 +96,94 @@ pub fn op_storelocal(vm: &mut Vm) -> Result<bool, VmError> {
     Ok(false)
 }
 
+fn value_to_string(v: &Value) -> String {
+    match v {
+        Value::Null => "null".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(i) => i.to_string(),
+        Value::Float(f) => f.to_string(),
+        Value::Str(s) => (**s).clone(),
+        Value::List(list) => {
+            match list.try_borrow() {
+                Ok(borrowed_vec) => {
+                    let items: Vec<String> = borrowed_vec.iter().map(|item| value_to_string(item)).collect();
+                    items.join(",")
+                }
+                Err(_) => "<borrowed>".to_string(),
+            }
+        }
+        Value::Object(_) => "[object Object]".to_string(),
+    }
+}
+
+fn to_primitive(val: &Value) -> Value {
+    match val {
+        Value::List(list) => {
+            match list.try_borrow() {
+                Ok(borrowed_vec) => {
+                    let items: Vec<String> = borrowed_vec.iter().map(|item| value_to_string(item)).collect();
+                    Value::Str(std::sync::Arc::new(items.join(",")))
+                }
+                Err(_) => Value::Str(std::sync::Arc::new("<borrowed>".to_string())),
+            }
+        }
+        Value::Object(_) => Value::Str(std::sync::Arc::new("[object Object]".to_string())),
+        other => other.clone(),
+    }
+}
+
+fn to_number(v: &Value) -> Value {
+    match v {
+        Value::Null => Value::Int(0),
+        Value::Bool(b) => Value::Int(if *b { 1 } else { 0 }),
+        Value::Int(i) => Value::Int(*i),
+        Value::Float(f) => Value::Float(*f),
+        _ => Value::Int(0),
+    }
+}
+
 pub fn op_add(vm: &mut Vm) -> Result<bool, VmError> {
     let b = vm.stack.pop()?;
     let a = vm.stack.pop()?;
-    match (a, b) {
+    
+    let prim_a = to_primitive(&a);
+    let prim_b = to_primitive(&b);
+    
+    if let (Value::Str(s_a), Value::Str(s_b)) = (&prim_a, &prim_b) {
+        let mut res = String::new();
+        res.push_str(s_a);
+        res.push_str(s_b);
+        vm.stack.push(Value::Str(std::sync::Arc::new(res)))?;
+        return Ok(false);
+    }
+    
+    if let Value::Str(s_a) = &prim_a {
+        let mut res = String::new();
+        res.push_str(s_a);
+        res.push_str(&value_to_string(&prim_b));
+        vm.stack.push(Value::Str(std::sync::Arc::new(res)))?;
+        return Ok(false);
+    }
+    
+    if let Value::Str(s_b) = &prim_b {
+        let mut res = String::new();
+        res.push_str(&value_to_string(&prim_a));
+        res.push_str(s_b);
+        vm.stack.push(Value::Str(std::sync::Arc::new(res)))?;
+        return Ok(false);
+    }
+    
+    let num_a = to_number(&prim_a);
+    let num_b = to_number(&prim_b);
+    
+    match (num_a, num_b) {
         (Value::Int(a_val), Value::Int(b_val)) => vm.stack.push(Value::Int(a_val + b_val))?,
         (Value::Float(a_val), Value::Float(b_val)) => vm.stack.push(Value::Float(a_val + b_val))?,
         (Value::Int(a_val), Value::Float(b_val)) => vm.stack.push(Value::Float(a_val as f64 + b_val))?,
         (Value::Float(a_val), Value::Int(b_val)) => vm.stack.push(Value::Float(a_val + b_val as f64))?,
-        (Value::Str(a_val), Value::Str(b_val)) => {
-            let mut res = String::new();
-            res.push_str(&a_val);
-            res.push_str(&b_val);
-            vm.stack.push(Value::Str(std::sync::Arc::new(res)))?;
-        }
         _ => return Err(VmError::TypeError),
     }
+    
     Ok(false)
 }
 
@@ -271,39 +343,80 @@ pub fn op_not(vm: &mut Vm) -> Result<bool, VmError> {
 pub fn op_bitand(vm: &mut Vm) -> Result<bool, VmError> {
     let b = vm.stack.pop()?;
     let a = vm.stack.pop()?;
-    match (a, b) {
-        (Value::Int(a_val), Value::Int(b_val)) => vm.stack.push(Value::Int(a_val & b_val))?,
-        _ => return Err(VmError::TypeError),
-    }
+    let val_a = match a {
+        Value::Int(i) => i,
+        Value::Float(f) => f as i64,
+        _ => {
+            vm.error_detail = Some(format!("op_bitand TypeError! a: {:?}", a));
+            return Err(VmError::TypeError);
+        }
+    };
+    let val_b = match b {
+        Value::Int(i) => i,
+        Value::Float(f) => f as i64,
+        _ => {
+            vm.error_detail = Some(format!("op_bitand TypeError! b: {:?}", b));
+            return Err(VmError::TypeError);
+        }
+    };
+    vm.stack.push(Value::Int(val_a & val_b))?;
     Ok(false)
 }
 
 pub fn op_bitor(vm: &mut Vm) -> Result<bool, VmError> {
     let b = vm.stack.pop()?;
     let a = vm.stack.pop()?;
-    match (a, b) {
-        (Value::Int(a_val), Value::Int(b_val)) => vm.stack.push(Value::Int(a_val | b_val))?,
-        _ => return Err(VmError::TypeError),
-    }
+    let val_a = match a {
+        Value::Int(i) => i,
+        Value::Float(f) => f as i64,
+        _ => {
+            vm.error_detail = Some(format!("op_bitor TypeError! a: {:?}", a));
+            return Err(VmError::TypeError);
+        }
+    };
+    let val_b = match b {
+        Value::Int(i) => i,
+        Value::Float(f) => f as i64,
+        _ => {
+            vm.error_detail = Some(format!("op_bitor TypeError! b: {:?}", b));
+            return Err(VmError::TypeError);
+        }
+    };
+    vm.stack.push(Value::Int(val_a | val_b))?;
     Ok(false)
 }
 
 pub fn op_bitxor(vm: &mut Vm) -> Result<bool, VmError> {
     let b = vm.stack.pop()?;
     let a = vm.stack.pop()?;
-    match (a, b) {
-        (Value::Int(a_val), Value::Int(b_val)) => vm.stack.push(Value::Int(a_val ^ b_val))?,
-        _ => return Err(VmError::TypeError),
-    }
+    let val_a = match a {
+        Value::Int(i) => i,
+        Value::Float(f) => f as i64,
+        _ => {
+            vm.error_detail = Some(format!("op_bitxor TypeError! a: {:?}", a));
+            return Err(VmError::TypeError);
+        }
+    };
+    let val_b = match b {
+        Value::Int(i) => i,
+        Value::Float(f) => f as i64,
+        _ => {
+            vm.error_detail = Some(format!("op_bitxor TypeError! b: {:?}", b));
+            return Err(VmError::TypeError);
+        }
+    };
+    vm.stack.push(Value::Int(val_a ^ val_b))?;
     Ok(false)
 }
 
 pub fn op_bitnot(vm: &mut Vm) -> Result<bool, VmError> {
     let a = vm.stack.pop()?;
-    match a {
-        Value::Int(a_val) => vm.stack.push(Value::Int(!a_val))?,
+    let val_a = match a {
+        Value::Int(i) => i,
+        Value::Float(f) => f as i64,
         _ => return Err(VmError::TypeError),
-    }
+    };
+    vm.stack.push(Value::Int(!val_a))?;
     Ok(false)
 }
 
@@ -396,19 +509,24 @@ pub fn op_getmember(vm: &mut Vm) -> Result<bool, VmError> {
     let target = vm.stack.pop()?;
     match target {
         Value::Object(map_rc) => {
-            if let Value::Str(s) = key {
-                let map = map_rc.try_borrow().map_err(|_| VmError::BorrowError)?;
-                let val = map.get(s.as_str()).cloned().unwrap_or(Value::Null);
-                vm.stack.push(val)?;
-            } else {
-                return Err(VmError::TypeError);
-            }
+            let key_str = match key {
+                Value::Str(s) => s.to_string(),
+                Value::Int(i) => i.to_string(),
+                Value::Float(f) => to_js_string(f),
+                _ => return Err(VmError::TypeError),
+            };
+            let map = map_rc.try_borrow().map_err(|_| VmError::BorrowError)?;
+            let val = map.get(key_str.as_str()).cloned().unwrap_or(Value::Null);
+            vm.stack.push(val)?;
         }
         Value::List(vec_rc) => {
             let i = match key {
                 Value::Int(i) => i,
                 Value::Float(f) if f.fract() == 0.0 => f as i64,
-                _ => return Err(VmError::TypeError),
+                _ => {
+                    vm.stack.push(Value::Null)?;
+                    return Ok(false);
+                }
             };
             let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
             let vec = vec_rc.try_borrow().map_err(|_| VmError::BorrowError)?;
@@ -445,18 +563,23 @@ pub fn op_setmember(vm: &mut Vm) -> Result<bool, VmError> {
     let target = vm.stack.pop()?;
     match target {
         Value::Object(ref map_rc) => {
-            if let Value::Str(s) = key {
-                map_rc.try_borrow_mut().map_err(|_| VmError::BorrowError)?.insert(s.to_string(), val);
-                vm.stack.push(target.clone())?;
-            } else {
-                return Err(VmError::TypeError);
-            }
+            let key_str = match key {
+                Value::Str(s) => s.to_string(),
+                Value::Int(i) => i.to_string(),
+                Value::Float(f) => to_js_string(f),
+                _ => return Err(VmError::TypeError),
+            };
+            map_rc.try_borrow_mut().map_err(|_| VmError::BorrowError)?.insert(key_str, val);
+            vm.stack.push(target.clone())?;
         }
         Value::List(ref vec_rc) => {
             let i = match key {
                 Value::Int(i) => i,
                 Value::Float(f) if f.fract() == 0.0 => f as i64,
-                _ => return Err(VmError::TypeError),
+                _ => {
+                    vm.stack.push(target.clone())?;
+                    return Ok(false);
+                }
             };
             let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
             let mut vec = vec_rc.try_borrow_mut().map_err(|_| VmError::BorrowError)?;
@@ -483,9 +606,15 @@ pub fn op_length(vm: &mut Vm) -> Result<bool, VmError> {
             vm.stack.push(Value::Int(len as i64))?;
         }
         Value::Str(s) => {
-            vm.stack.push(Value::Int(s.len() as i64))?;
+            vm.stack.push(Value::Int(s.chars().count() as i64))?;
         }
-        _ => return Err(VmError::TypeError),
+        Value::Object(map_rc) => {
+            let len = map_rc.try_borrow().map_err(|_| VmError::BorrowError)?.len();
+            vm.stack.push(Value::Int(len as i64))?;
+        }
+        _ => {
+            vm.stack.push(Value::Int(0))?;
+        }
     }
     Ok(false)
 }

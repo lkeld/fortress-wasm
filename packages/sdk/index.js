@@ -92,6 +92,15 @@ class FortressClient {
         const bytecode = Array.isArray(payload) ? new Uint8Array(payload) : Uint8Array.from(Buffer.from(payload, 'base64'));
         const handshakeBytes = Array.isArray(handshake) ? new Uint8Array(handshake) : Uint8Array.from(Buffer.from(handshake, 'base64'));
 
+        if (typeof global !== 'undefined') {
+            global.__fortress_latest_bytecode = bytecode;
+            global.__fortress_latest_opcodeMap = opcodeMap;
+        }
+        if (typeof window !== 'undefined') {
+            window.__fortress_latest_bytecode = bytecode;
+            window.__fortress_latest_opcodeMap = opcodeMap;
+        }
+
         client.worker = await FortressClient.createWorker();
 
         client.worker.onmessage = ({ data }) => {

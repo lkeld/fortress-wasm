@@ -317,7 +317,28 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
                 crate::stack::VmError::RuntimeError => "RuntimeError".to_string(),
                 _ => format!("{:?}", e),
             };
-            format!(r#"{{"status": false, "error": "{}"}}"#, err_str)
+            #[cfg(feature = "dev")]
+            {
+                let trace_str = vm.trace.join(" -> ");
+                let detail = vm.error_detail.clone().unwrap_or_default();
+                let mut map = serde_json::Map::new();
+                map.insert("status".to_string(), serde_json::Value::Bool(false));
+                map.insert("error".to_string(), serde_json::Value::String(format!("{}: trace: {} detail: {}", err_str, trace_str, detail)));
+                serde_json::Value::Object(map).to_string()
+            }
+            #[cfg(not(feature = "dev"))]
+            {
+                let detail = vm.error_detail.clone().unwrap_or_default();
+                let mut map = serde_json::Map::new();
+                map.insert("status".to_string(), serde_json::Value::Bool(false));
+                let err_msg = if detail.is_empty() {
+                    err_str.clone()
+                } else {
+                    format!("{}: detail: {}", err_str, detail)
+                };
+                map.insert("error".to_string(), serde_json::Value::String(err_msg));
+                serde_json::Value::Object(map).to_string()
+            }
         }
     };
     res

@@ -4,6 +4,8 @@ const assert = require('assert');
 const { runTestSuite } = require('./runner');
 const { Parser } = require('../../compiler/dist/parser.js');
 const { CodeGenerator } = require('../../compiler/dist/codegen.js');
+const { transpile, verifyEquivalenceSync, verifyEquivalence } = require('../../compiler/dist/js-transpiler.js');
+const { stdlibSource } = require('../../compiler/dist/stdlib.js');
 
 // Helper to compile JavaScript code with our compiler
 function compileCode(source) {
@@ -11,6 +13,29 @@ function compileCode(source) {
     const program = parser.parseProgram();
     const codegen = new CodeGenerator();
     return codegen.generate(program);
+}
+
+async function testEquivalence(jsCode, functionName) {
+    const { fvmSource, usedStdlib } = transpile(jsCode, {
+        functionName,
+        filePath: 'test.js',
+        verifyEquivalence: false
+    });
+
+    const stdlibParser = new Parser(stdlibSource);
+    const stdlibAst = stdlibParser.parseProgram();
+    const neededHelpers = stdlibAst.body.filter(s => 
+        s.type === 'FunctionDeclaration' && usedStdlib.includes(s.name.name)
+    );
+
+    const fvmParser = new Parser(fvmSource);
+    const fvmAst = fvmParser.parseProgram();
+    fvmAst.body.unshift(...neededHelpers);
+
+    const codegen = new CodeGenerator();
+    const { code, opcodeMap } = codegen.generate(fvmAst, functionName);
+
+    await verifyEquivalence(jsCode, code, Array.from(opcodeMap));
 }
 
 runTestSuite('F3: Transpiler E2E Overhaul Test Suite', {
@@ -78,5 +103,387 @@ runTestSuite('F3: Transpiler E2E Overhaul Test Suite', {
         const source = 'let a = 10; let b = 20; let c = a + b;';
         const { code } = compileCode(source);
         assert.ok(code.length > 0);
+    },
+
+    'Symbols - Happy Path equivalence check': async () => {
+        await testEquivalence(`
+            function testSymbolHappy() {
+                let s1 = Symbol("desc");
+                let s2 = Symbol("desc");
+                if (s1 === s2) { return false; }
+                return true;
+            }
+        `, 'testSymbolHappy');
+    },
+
+    'Symbols - Edge Case check': async () => {
+        assert.throws(() => {
+            transpile('function testSymbolEdge() { return Symbol.iterator; }', {
+                functionName: 'testSymbolEdge',
+                filePath: 'test.js',
+                verifyEquivalence: false
+            });
+        }, /Symbol\.iterator is not supported/);
+    },
+
+    'Closures - Happy Path equivalence check': async () => {
+        await testEquivalence(`
+            function testClosureHappy() {
+                let x = 10;
+                let f = () => { return x + 5; };
+                return f();
+            }
+        `, 'testClosureHappy');
+    },
+
+    'Closures - Edge Case equivalence check': async () => {
+        await testEquivalence(`
+            function testClosureMutable() {
+                let x = 10;
+                let inc = () => { x = x + 1; };
+                let get = () => { return x; };
+                inc();
+                inc();
+                return get();
+            }
+        `, 'testClosureMutable');
+    },
+
+    'Generators - Happy Path equivalence check': async () => {
+        await testEquivalence(`
+            function* testGenHappy() {
+                yield 10;
+                yield 20;
+                yield 30;
+            }
+        `, 'testGenHappy');
+    },
+
+    'Generators - Edge Case equivalence check': async () => {
+        await testEquivalence(`
+            function* testGenEdge(start) {
+                let step = 5;
+                yield start;
+                yield start + step;
+                yield start + step * 2;
+            }
+        `, 'testGenEdge');
+    },
+
+    'eval() - Static JSON string literal rewrite': async () => {
+        await testEquivalence(`
+            function testEvalStatic() {
+                let x = eval('[10, 20]');
+                return x[0];
+            }
+        `, 'testEvalStatic');
+    },
+
+    'eval() - Dynamic eval splitting boundary': async () => {
+        await testEquivalence(`
+            function testEvalDynamic(code) {
+                let x = 5;
+                let y = eval(code);
+                if (y === undefined) { y = 0; }
+                let z = 10;
+                return x + y + z;
+            }
+        `, 'testEvalDynamic');
+    },
+
+    'Proxy - Validation traps equivalence': async () => {
+        await testEquivalence(`
+            function testProxyValidation() {
+                let target = { a: 1, b: 2 };
+                let handler = {
+                    get(t, prop) {
+                        if (prop === "private") {
+                            throw new TypeError("Proxy validation failed: get trap returned false");
+                        }
+                        return t[prop];
+                    },
+                    set(t, prop, val) {
+                        if (typeof val !== "number") {
+                            throw new TypeError("Proxy validation failed: set trap returned false");
+                        }
+                        t[prop] = val;
+                        return true;
+                    }
+                };
+                return new Proxy(target, handler);
+            }
+        `, 'testProxyValidation');
+    },
+
+    'Proxy - Only get trap': async () => {
+        await testEquivalence(`
+            function testProxyGetOnly() {
+                let target = { a: 42 };
+                let handler = {
+                    get(t, prop) {
+                        if (prop === "hidden") {
+                            throw new TypeError("Proxy validation failed: get trap returned false");
+                        }
+                        return t[prop];
+                    }
+                };
+                return new Proxy(target, handler);
+            }
+        `, 'testProxyGetOnly');
+    },
+
+    'Reflect - Mapping to equivalents': async () => {
+        await testEquivalence(`
+            function testReflectMap() {
+                let obj = { x: 100 };
+                Reflect.set(obj, "y", 200);
+                let hasY = Reflect.has(obj, "y");
+                let valX = Reflect.get(obj, "x");
+                return [hasY, valX, obj.y];
+            }
+        `, 'testReflectMap');
+    },
+
+    'Reflect - ownKeys and serialization': async () => {
+        await testEquivalence(`
+            function testReflectKeys() {
+                let obj = { a: 1 };
+                let s = Symbol("foo");
+                obj[s] = 2;
+                return Reflect.ownKeys(obj);
+            }
+        `, 'testReflectKeys');
+    },
+
+    'Reflect - Set with null target throws TypeError': async () => {
+        await testEquivalence(`
+            function testReflectSetNull() {
+                return Reflect.set(null, "x", 1);
+            }
+        `, 'testReflectSetNull');
+    },
+
+    'Proxy - Circular object serialization does not overflow stack': async () => {
+        await testEquivalence(`
+            function testCircularProxy() {
+                let obj = { a: 1 };
+                obj.self = obj;
+                let handler = {
+                    get(t, prop) {
+                        return t[prop];
+                    }
+                };
+                let proxy = new Proxy(obj, handler);
+                return proxy.a;
+            }
+        `, 'testCircularProxy');
+    },
+
+    'Nested function lifting with FunctionDeclaration id': async () => {
+        await testEquivalence(`
+            function testNestedLifting() {
+                function outer(x) {
+                    function inner(y) {
+                        return y + 1;
+                    }
+                    return inner(x) + 2;
+                }
+                return outer(5);
+            }
+        `, 'testNestedLifting');
+    },
+
+    'SharedArrayBuffer - Happy Path equivalence check': async () => {
+        await testEquivalence(`
+            function testSharedArrayBufferHappy() {
+                let sab = new SharedArrayBuffer(4);
+                let arr = new Int32Array(sab);
+                arr[0] = 42;
+                return arr[0];
+            }
+        `, 'testSharedArrayBufferHappy');
+    },
+
+    'SharedArrayBuffer - Edge Case (Atomics compilation error)': async () => {
+        assert.throws(() => {
+            transpile(`
+                function testAtomics() {
+                    let sab = new SharedArrayBuffer(4);
+                    let arr = new Int32Array(sab);
+                    Atomics.store(arr, 0, 42);
+                    return Atomics.load(arr, 0);
+                }
+            `, {
+                functionName: 'testAtomics',
+                filePath: 'test.js',
+                verifyEquivalence: false
+            });
+        }, /Atomics is not supported/);
+    },
+
+    'Large Function - Happy Path (split point found)': async () => {
+        let largeFuncCode = `function testLargeFuncHappy() {\n`;
+        largeFuncCode += `  let x = 1;\n`;
+        for (let i = 0; i < 500; i++) {
+            largeFuncCode += `  x = x + 1;\n`;
+        }
+        largeFuncCode += `  let y = 100;\n`;
+        for (let i = 0; i < 500; i++) {
+            largeFuncCode += `  y = y + 1;\n`;
+        }
+        largeFuncCode += `  return y;\n}`;
+        await testEquivalence(largeFuncCode, 'testLargeFuncHappy');
+    },
+
+    'Large Function - Edge Case (No split point warning)': async () => {
+        let largeFuncNoSplitCode = `function testLargeFuncEdge() {\n`;
+        largeFuncNoSplitCode += `  let x = 1;\n`;
+        for (let i = 0; i < 1000; i++) {
+            largeFuncNoSplitCode += `  x = x + 1;\n`;
+        }
+        largeFuncNoSplitCode += `  return x;\n}`;
+        const res = transpile(largeFuncNoSplitCode, {
+            functionName: 'testLargeFuncEdge',
+            filePath: 'test.js',
+            verifyEquivalence: false
+        });
+        assert.ok(res.warnings.some(w => w.message.includes("too large") || w.message.includes(">1000 lines")));
+        await testEquivalence(largeFuncNoSplitCode, 'testLargeFuncEdge');
+    },
+
+    'Register Banking - Happy Path (no split needed)': async () => {
+        let regBankingHappyCode = `function testRegBankingHappy() {\n`;
+        for (let i = 0; i < 270; i++) {
+            regBankingHappyCode += `  let v${i} = ${i};\n`;
+            regBankingHappyCode += `  if (v${i} < 0) { return v${i}; }\n`;
+        }
+        regBankingHappyCode += `  return 42;\n}`;
+        await testEquivalence(regBankingHappyCode, 'testRegBankingHappy');
+    },
+
+    'Register Banking - Edge Case (split on exhaust)': async () => {
+        let regBankingExhaustCode = `function testRegBankingExhaust() {\n`;
+        for (let i = 0; i < 260; i++) {
+            regBankingExhaustCode += `  let v${i} = ${i};\n`;
+        }
+        regBankingExhaustCode += `  return `;
+        for (let i = 0; i < 260; i++) {
+            regBankingExhaustCode += `v${i}` + (i === 259 ? ';' : ' + ');
+        }
+        regBankingExhaustCode += `\n}`;
+        await testEquivalence(regBankingExhaustCode, 'testRegBankingExhaust');
+    },
+
+    'SharedArrayBuffer - Happy Path 2 (nested object & conversion)': async () => {
+        await testEquivalence(`
+            function testSharedArrayBufferNestedObj() {
+                let sab = new SharedArrayBuffer(16);
+                let arr = new Int32Array(sab);
+                arr[0] = 5;
+                arr[1] = 10;
+                arr[2] = 15;
+                arr[3] = 20;
+                return { data: arr, name: "my-nested-sab" };
+            }
+        `, 'testSharedArrayBufferNestedObj');
+    },
+
+    'SharedArrayBuffer - Edge Case 2 (Atomics usage with property access)': async () => {
+        assert.throws(() => {
+            transpile(`
+                function testAtomicsProperty() {
+                    let a = Atomics['store'];
+                    return a;
+                }
+            `, {
+                functionName: 'testAtomicsProperty',
+                filePath: 'test.js',
+                verifyEquivalence: false
+            });
+        }, /Atomics is not supported/);
+    },
+
+    'Large Function - Happy Path 2 (complex variables)': async () => {
+        let largeFuncCode = `function testLargeFuncHappy2(start) {\n`;
+        largeFuncCode += `  let a = start;\n`;
+        for (let i = 0; i < 400; i++) {
+            largeFuncCode += `  a = a + 1;\n`;
+        }
+        largeFuncCode += `  let b = a * 2;\n`;
+        for (let i = 0; i < 200; i++) {
+            largeFuncCode += `  b = b - 1;\n`;
+        }
+        largeFuncCode += `  let c = 50;\n`;
+        for (let i = 0; i < 500; i++) {
+            largeFuncCode += `  c = c + 2;\n`;
+        }
+        largeFuncCode += `  return c;\n}`;
+        await testEquivalence(largeFuncCode, 'testLargeFuncHappy2');
+    },
+
+    'Large Function - Edge Case 2 (no split point because of dependencies)': async () => {
+        let largeFuncNoSplitCode = `function testLargeFuncEdge2() {\n`;
+        largeFuncNoSplitCode += `  let sum = 0;\n`;
+        for (let i = 0; i < 1000; i++) {
+            largeFuncNoSplitCode += `  sum = sum + ${i};\n`;
+        }
+        largeFuncNoSplitCode += `  return sum;\n}`;
+        const res = transpile(largeFuncNoSplitCode, {
+            functionName: 'testLargeFuncEdge2',
+            filePath: 'test.js',
+            verifyEquivalence: false
+        });
+        assert.ok(res.warnings.some(w => w.message.includes(">1000 lines") && w.message.includes("no clean split point")));
+        await testEquivalence(largeFuncNoSplitCode, 'testLargeFuncEdge2');
+    },
+
+    'Register Banking - Happy Path 2': async () => {
+        let regBankingHappy2Code = `function testRegBankingHappy2() {\n`;
+        regBankingHappy2Code += `  let sum = 0;\n`;
+        for (let i = 0; i < 300; i++) {
+            regBankingHappy2Code += `  { let v${i} = ${i}; if (v${i} > 0) { sum = sum + 1; } }\n`;
+        }
+        regBankingHappy2Code += `  return sum;\n}`;
+        await testEquivalence(regBankingHappy2Code, 'testRegBankingHappy2');
+    },
+
+    'Register Banking - Edge Case 2 (recursive split)': async () => {
+        let regBankingExhaust2Code = `function testRegBankingExhaust2() {\n`;
+        for (let i = 0; i < 500; i++) {
+            regBankingExhaust2Code += `  let v${i} = ${i};\n`;
+        }
+        regBankingExhaust2Code += `  return `;
+        for (let i = 0; i < 500; i++) {
+            regBankingExhaust2Code += `v${i}` + (i === 499 ? ';' : ' + ');
+        }
+        regBankingExhaust2Code += `\n}`;
+        await testEquivalence(regBankingExhaust2Code, 'testRegBankingExhaust2');
+    },
+
+    'Proxy - Dynamic Exception Propagation (TypeError & RangeError)': async () => {
+        await testEquivalence(`
+            function testProxyDynamicException() {
+                let target = { a: 1 };
+                let handler = {
+                    get(t, prop) {
+                        if (prop === "private") {
+                            throw new TypeError("Access to private property is forbidden");
+                        }
+                        if (prop === "foo") {
+                            throw new RangeError("Property foo is out of range");
+                        }
+                        return t[prop];
+                    },
+                    set(t, prop, val) {
+                        if (prop === "a" && typeof val !== "number") {
+                            throw new TypeError("Value must be a number");
+                        }
+                        t[prop] = val;
+                        return true;
+                    }
+                };
+                return new Proxy(target, handler);
+            }
+        `, 'testProxyDynamicException');
     }
 });

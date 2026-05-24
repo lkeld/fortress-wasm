@@ -49,7 +49,7 @@ var CodeGenerator = /** @class */ (function () {
         this.currentJunkThreshold = 0.3;
         this.dummyVariables = [];
     }
-    CodeGenerator.prototype.generate = function (program) {
+    CodeGenerator.prototype.generate = function (program, entryFuncName) {
         this.code = [];
         this.locals = new Map();
         this.localTypes = new Map();
@@ -73,12 +73,18 @@ var CodeGenerator = /** @class */ (function () {
         var hasTopLevelCode = program.body.some(function (stmt) { return stmt.type !== 'FunctionDeclaration'; });
         var numParams = 0;
         if (!hasTopLevelCode && program.body.length > 0) {
-            var firstFunc = program.body.find(function (stmt) { return stmt.type === 'FunctionDeclaration'; });
-            if (firstFunc && firstFunc.type === 'FunctionDeclaration') {
-                numParams = firstFunc.params.length;
+            var entryFunc = null;
+            if (entryFuncName) {
+                entryFunc = program.body.find(function (stmt) { return stmt.type === 'FunctionDeclaration' && stmt.name.name === entryFuncName; });
+            }
+            if (!entryFunc) {
+                entryFunc = program.body.find(function (stmt) { return stmt.type === 'FunctionDeclaration'; });
+            }
+            if (entryFunc && entryFunc.type === 'FunctionDeclaration') {
+                numParams = entryFunc.params.length;
                 // Pre-allocate slots 0..numParams-1
                 for (var i = 0; i < numParams; i++) {
-                    var paramName = firstFunc.params[i].name;
+                    var paramName = entryFunc.params[i].name;
                     this.locals.set(paramName, i);
                     this.localTypes.set(paramName, 'any');
                 }
@@ -116,8 +122,12 @@ var CodeGenerator = /** @class */ (function () {
             this.visitStatement(funcStmt);
         }
         if (entryJumpOffset !== -1 && this.functionBodies.length > 0) {
-            var firstFuncName = this.functionBodies[0].name.name;
-            var target = this.functions.get(firstFuncName);
+            var entryFunc = null;
+            if (entryFuncName) {
+                entryFunc = this.functionBodies.find(function (stmt) { return stmt.name.name === entryFuncName; });
+            }
+            var entryFuncNameActual = entryFunc ? entryFunc.name.name : this.functionBodies[0].name.name;
+            var target = this.functions.get(entryFuncNameActual);
             if (target !== undefined && target !== 0) {
                 this.patchJump(entryJumpOffset + 1, target);
             }
