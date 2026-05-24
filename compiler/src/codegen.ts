@@ -662,8 +662,10 @@ export class CodeGenerator {
                         }
                     }
                     switch (expr.operator) {
-                        case '*': 
-                            if (process.env.DEV_MODE === 'true' || isFloatMath) {
+                        case '*': {
+                            const isIntMath = this.isIntExpression(expr.left) && this.isIntExpression(expr.right);
+                            const useMba = process.env.DEV_MODE !== 'true' && isIntMath;
+                            if (!useMba) {
                                 this.emit(OpCode.Mul);
                             } else {
                                 /*
@@ -728,8 +730,10 @@ export class CodeGenerator {
                                 this.emit(OpCode.Add);
                             }
                             break;
+                        }
                         case '/': {
-                            const useMba = process.env.DEV_MODE !== 'true' && !isFloatMath;
+                            const isIntMath = this.isIntExpression(expr.left) && this.isIntExpression(expr.right);
+                            const useMba = process.env.DEV_MODE !== 'true' && isIntMath;
                             if (useMba) {
                                 /*
                                  * Mathematical Proof of Equivalence for Division Polynomial MBA Obfuscation:
@@ -830,11 +834,13 @@ export class CodeGenerator {
                             break;
                         }
                         case '==': this.emit(OpCode.Eq); break;
+                        case '===': this.emit(OpCode.StrictEq); break;
                         case '<': this.emit(OpCode.Lt); break;
                         case '>': this.emit(OpCode.Gt); break;
                         case '<=': this.emit(OpCode.Lte); break;
                         case '>=': this.emit(OpCode.Gte); break;
                         case '!=': this.emit(OpCode.Neq); break;
+                        case '!==': this.emit(OpCode.StrictNeq); break;
                         case '&&': this.emit(OpCode.And); break;
                         case '||': this.emit(OpCode.Or); break;
                         default: throw new Error(`Unsupported operator ${expr.operator}`);

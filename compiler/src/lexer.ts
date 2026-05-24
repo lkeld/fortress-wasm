@@ -38,6 +38,8 @@ export enum TokenType {
     Colon,
     LBracket,
     RBracket,
+    StrictEq,
+    StrictNeq,
     EOF,
 }
 
@@ -183,6 +185,10 @@ export class Lexer {
             case '=':
                 if (this.peek() === '=') {
                     this.advance();
+                    if (this.peek() === '=') {
+                        this.advance();
+                        return { type: TokenType.StrictEq, value: '===', line: this.line };
+                    }
                     return { type: TokenType.EqEq, value: '==', line: this.line };
                 }
                 return { type: TokenType.Eq, value: c, line: this.line };
@@ -201,6 +207,10 @@ export class Lexer {
             case '!':
                 if (this.peek() === '=') {
                     this.advance();
+                    if (this.peek() === '=') {
+                        this.advance();
+                        return { type: TokenType.StrictNeq, value: '!==', line: this.line };
+                    }
                     return { type: TokenType.NotEq, value: '!=', line: this.line };
                 }
                 return { type: TokenType.Not, value: c, line: this.line };

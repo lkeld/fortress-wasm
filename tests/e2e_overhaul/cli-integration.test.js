@@ -208,7 +208,7 @@ runTestSuite('F4: create-fortress-app CLI E2E Overhaul Test Suite', {
         const promptResponses = [
             { prompt: 'Confirm this framework?', response: 'y' },
             { prompt: 'Enter number (1-2):', response: '1' },
-            { prompt: 'Enter number (1-3):', response: '2' },
+            { prompt: 'Enter selection:', response: '1' },
             { prompt: 'Enter signing password (min 12 chars):', response: 'securepassword123' },
             { prompt: 'Confirm signing password:', response: 'securepassword123' },
             { prompt: 'Confirm API endpoint', response: '' },

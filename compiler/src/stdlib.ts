@@ -272,4 +272,151 @@ fn len_helper(x) {
     }
     return len(x);
 }
+
+fn fvm_get(obj, key) {
+    if (TypeOf(obj) == "object") {
+        if (obj != null) {
+            if (obj.keys != null) {
+                if (obj.values != null) {
+                    return map_get(obj, key);
+                }
+            }
+        }
+    }
+    return obj[key];
+}
+
+fn fvm_set(obj, key, val) {
+    if (TypeOf(obj) == "object") {
+        if (obj != null) {
+            if (obj.keys != null) {
+                if (obj.values != null) {
+                    return map_set(obj, key, val);
+                }
+            }
+        }
+    }
+    obj[key] = val;
+    return obj;
+}
+
+fn fvm_has(obj, key) {
+    if (TypeOf(obj) == "object") {
+        if (obj != null) {
+            if (obj.keys != null) {
+                if (obj.values != null) {
+                    return map_has(obj, key);
+                }
+            }
+            if (obj.values != null) {
+                if (obj.keys == null) {
+                    return set_has(obj, key);
+                }
+            }
+        }
+    }
+    return ReflectHas(obj, key);
+}
+
+fn fvm_delete(obj, key) {
+    if (TypeOf(obj) == "object") {
+        if (obj != null) {
+            if (obj.keys != null) {
+                if (obj.values != null) {
+                    return map_delete(obj, key);
+                }
+            }
+            if (obj.values != null) {
+                if (obj.keys == null) {
+                    return set_delete(obj, key);
+                }
+            }
+        }
+    }
+    obj[key] = null;
+    return obj;
+}
+
+fn fvm_clear(obj) {
+    if (TypeOf(obj) == "object") {
+        if (obj != null) {
+            if (obj.keys != null) {
+                if (obj.values != null) {
+                    return map_clear(obj);
+                }
+            }
+            if (obj.values != null) {
+                if (obj.keys == null) {
+                    return set_clear(obj);
+                }
+            }
+        }
+    }
+    return obj;
+}
+
+fn fvm_add(obj, val) {
+    if (TypeOf(obj) == "object") {
+        if (obj != null) {
+            if (obj.values != null) {
+                if (obj.keys == null) {
+                    return set_add(obj, val);
+                }
+            }
+        }
+    }
+    return obj;
+}
+
+fn fvm_keys(obj) {
+    if (TypeOf(obj) == "object") {
+        if (obj != null) {
+            if (obj.keys != null) {
+                if (obj.values != null) {
+                    return map_keys(obj);
+                }
+            }
+        }
+    }
+    return ReflectOwnKeys(obj);
+}
+
+fn fvm_values(obj) {
+    if (TypeOf(obj) == "object") {
+        if (obj != null) {
+            if (obj.keys != null) {
+                if (obj.values != null) {
+                    return map_values_list(obj);
+                }
+            }
+            if (obj.values != null) {
+                if (obj.keys == null) {
+                    return set_values_list(obj);
+                }
+            }
+        }
+    }
+    return [];
+}
+
+fn fvm_slice(obj, start, end) {
+    if (TypeOf(obj) == "string") {
+        return StrSlice(obj, start, end);
+    }
+    return ArrSlice(obj, start, end);
+}
+
+fn fvm_at(obj, index) {
+    if (TypeOf(obj) == "string") {
+        return StrAt(obj, index);
+    }
+    let length = len_helper(obj);
+    let actual = index;
+    if (index < 0) {
+        actual = length + index;
+    }
+    if (actual < 0) { return null; }
+    if (actual >= length) { return null; }
+    return obj[actual];
+}
 `;

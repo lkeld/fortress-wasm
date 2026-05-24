@@ -129,6 +129,21 @@ impl Vm {
         }
     }
 
+    pub(crate) fn get_code_limit(&self) -> usize {
+        if self.code.len() % 288 == 0 {
+            #[cfg(feature = "dev")]
+            {
+                self.code.len()
+            }
+            #[cfg(not(feature = "dev"))]
+            {
+                (self.code.len() / 288) * 256
+            }
+        } else {
+            self.code.len()
+        }
+    }
+
     pub(crate) fn get_pc(&self) -> usize {
         self.pc_base.wrapping_add(self.pc_offset)
     }
@@ -154,7 +169,11 @@ impl Vm {
         Ok(())
     }
 
-    pub(crate) fn set_pc(&mut self, new_pc: usize) {
+    pub(crate) fn set_pc(&mut self, new_pc: usize) -> Result<(), VmError> {
+        let limit = self.get_code_limit();
+        if new_pc > limit {
+            return Err(VmError::UnexpectedEndOfCode);
+        }
         let rand_val = self.next_random();
         let base_amount = if new_pc > 0 {
             (rand_val as usize) % new_pc
@@ -164,6 +183,7 @@ impl Vm {
         self.pc_base = base_amount;
         self.pc_offset = new_pc - self.pc_base;
         self.current_page_id = -1; // Invalidate JIT cache on jump
+        Ok(())
     }
 
     pub(crate) fn advance_pc(&mut self, amount: usize) {
@@ -247,18 +267,7 @@ impl Vm {
 
     pub(crate) fn read_byte(&mut self) -> Result<u8, VmError> {
         let pc = self.get_pc();
-        let limit = if self.code.len() % 288 == 0 {
-            #[cfg(feature = "dev")]
-            {
-                self.code.len()
-            }
-            #[cfg(not(feature = "dev"))]
-            {
-                (self.code.len() / 288) * 256
-            }
-        } else {
-            self.code.len()
-        };
+        let limit = self.get_code_limit();
         if pc >= limit {
             return Err(VmError::UnexpectedEndOfCode);
         }
@@ -316,7 +325,7 @@ impl Vm {
             }
         }
         let mut cycles = 0;
-        let max_cycles = 1_000_000;
+        let max_cycles = 10_000_000;
         let dispatch_table = crate::dispatch_table::get_dispatch_table();
 
         loop {
@@ -325,18 +334,7 @@ impl Vm {
                 return Err(VmError::ExecutionLimitExceeded);
             }
 
-            let limit = if self.code.len() % 288 == 0 {
-                #[cfg(feature = "dev")]
-                {
-                    self.code.len()
-                }
-                #[cfg(not(feature = "dev"))]
-                {
-                    (self.code.len() / 288) * 256
-                }
-            } else {
-                self.code.len()
-            };
+            let limit = self.get_code_limit();
             if self.get_pc() >= limit {
                 break;
             }

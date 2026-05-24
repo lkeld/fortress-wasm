@@ -4,7 +4,9 @@ exports.RedisNonceStore = exports.InMemoryNonceStore = void 0;
 class InMemoryNonceStore {
     consumed = new Map();
     cleanupInterval;
-    constructor(cleanupMs = 30000) {
+    maxSize;
+    constructor(cleanupMs = 30000, maxSize = 100000) {
+        this.maxSize = maxSize;
         this.cleanupInterval = setInterval(() => this.cleanup(), cleanupMs);
         if (this.cleanupInterval && typeof this.cleanupInterval.unref === 'function') {
             this.cleanupInterval.unref();
@@ -20,6 +22,13 @@ class InMemoryNonceStore {
         // Check if nonce has already been consumed
         if (this.consumed.has(nonceHex)) {
             return false;
+        }
+        // Check size limit to prevent OOM DoS
+        if (this.consumed.size >= this.maxSize) {
+            this.cleanup();
+            if (this.consumed.size >= this.maxSize) {
+                return false;
+            }
         }
         // Mark nonce as consumed
         this.consumed.set(nonceHex, ts);

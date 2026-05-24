@@ -22,9 +22,11 @@ impl Drop for ClientKeyClearGuard {
 }
 
 #[wasm_bindgen]
-pub fn generate_client_keypair() -> Box<[u8]> {
+pub fn generate_client_keypair() -> Result<Box<[u8]>, JsValue> {
     let mut private_bytes = [0u8; 32];
-    getrandom::getrandom(&mut private_bytes).expect("Failed to generate client ephemeral key");
+    if let Err(e) = getrandom::getrandom(&mut private_bytes) {
+        return Err(JsValue::from_str(&format!("Failed to generate client ephemeral key: {:?}", e)));
+    }
     
     let secret = x25519_dalek::StaticSecret::from(private_bytes);
     let public = x25519_dalek::PublicKey::from(&secret);
@@ -36,7 +38,7 @@ pub fn generate_client_keypair() -> Box<[u8]> {
     use zeroize::Zeroize;
     private_bytes.zeroize();
     
-    public.as_bytes().to_vec().into_boxed_slice()
+    Ok(public.as_bytes().to_vec().into_boxed_slice())
 }
 
 #[wasm_bindgen]
@@ -77,6 +79,9 @@ const SERVER_TRUSTED_PUBLIC_KEYS: [[u8; 32]; 3] = [
 #[wasm_bindgen]
 pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcode_map: &[u8]) -> String {
     let _guard = ClientKeyClearGuard;
+    if input_json.len() > 1_048_576 {
+        return r#"{"status": false, "error": "InputLimitExceeded"}"#.to_string();
+    }
     if bytecode.is_empty() {
         return r#"{"status": false, "error": "UnexpectedEndOfCode"}"#.to_string();
     }
@@ -309,11 +314,18 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
     
     let res = match vm.run() {
         Ok(result) => {
-            value_to_json(&result).to_string()
+            let serialized = value_to_json(&result).to_string();
+            if serialized.len() > 1_048_576 {
+                r#"{"status": false, "error": "OutputLimitExceeded"}"#.to_string()
+            } else {
+                serialized
+            }
         },
         Err(e) => {
+            #[cfg(feature = "dev")]
             let err_str = match e {
                 crate::stack::VmError::OutOfGas => "ExecutionLimitExceeded".to_string(),
+                crate::stack::VmError::ExecutionLimitExceeded => "ExecutionLimitExceeded".to_string(),
                 crate::stack::VmError::RuntimeError => "RuntimeError".to_string(),
                 _ => format!("{:?}", e),
             };
@@ -328,15 +340,19 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
             }
             #[cfg(not(feature = "dev"))]
             {
-                let detail = vm.error_detail.clone().unwrap_or_default();
                 let mut map = serde_json::Map::new();
                 map.insert("status".to_string(), serde_json::Value::Bool(false));
-                let err_msg = if detail.is_empty() {
-                    err_str.clone()
-                } else {
-                    format!("{}: detail: {}", err_str, detail)
+                let err_msg = match e {
+                    crate::stack::VmError::OutOfGas => "ExecutionLimitExceeded",
+                    crate::stack::VmError::ExecutionLimitExceeded => "ExecutionLimitExceeded",
+                    crate::stack::VmError::StackOverflow => "StackOverflow",
+                    crate::stack::VmError::CallStackOverflow => "StackOverflow",
+                    crate::stack::VmError::IndexOutOfBounds => "IndexOutOfBounds",
+                    crate::stack::VmError::TypeError => "TypeError",
+                    crate::stack::VmError::BorrowError => "BorrowError",
+                    _ => "RuntimeError",
                 };
-                map.insert("error".to_string(), serde_json::Value::String(err_msg));
+                map.insert("error".to_string(), serde_json::Value::String(err_msg.to_string()));
                 serde_json::Value::Object(map).to_string()
             }
         }
@@ -346,40 +362,64 @@ pub fn execute(bytecode: &[u8], handshake_header: &[u8], input_json: &str, opcod
 
 // Helpers to convert between our Value enum and serde_json::Value
 pub fn json_to_value(v: &serde_json::Value) -> Value {
-    match v {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
-            } else {
-                Value::Null
+    fn json_to_value_inner(v: &serde_json::Value, depth: usize) -> Value {
+        if depth > 100 {
+            return Value::Null;
+        }
+        match v {
+            serde_json::Value::Null => Value::Null,
+            serde_json::Value::Bool(b) => Value::Bool(*b),
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    Value::Int(i)
+                } else if let Some(f) = n.as_f64() {
+                    Value::Float(f)
+                } else {
+                    Value::Null
+                }
+            },
+            serde_json::Value::String(s) => {
+                if s.len() > 65536 {
+                    Value::Null
+                } else {
+                    Value::Str(std::sync::Arc::new(s.clone()))
+                }
+            },
+            serde_json::Value::Array(arr) => {
+                if arr.len() > 65536 {
+                    Value::Null
+                } else {
+                    let list = arr.iter().map(|item| json_to_value_inner(item, depth + 1)).collect();
+                    Value::List(std::rc::Rc::new(std::cell::RefCell::new(list)))
+                }
+            },
+            serde_json::Value::Object(obj) => {
+                if obj.len() > 65536 {
+                    Value::Null
+                } else {
+                    let mut map = std::collections::HashMap::new();
+                    for (k, v) in obj {
+                        if k.len() > 65536 { continue; }
+                        map.insert(k.clone(), json_to_value_inner(v, depth + 1));
+                    }
+                    Value::Object(std::rc::Rc::new(std::cell::RefCell::new(map)))
+                }
             }
-        },
-        serde_json::Value::String(s) => Value::Str(std::sync::Arc::new(s.clone())),
-        serde_json::Value::Array(arr) => {
-            let list = arr.iter().map(json_to_value).collect();
-            Value::List(std::rc::Rc::new(std::cell::RefCell::new(list)))
-        },
-        serde_json::Value::Object(obj) => {
-            let mut map = std::collections::HashMap::new();
-            for (k, v) in obj {
-                map.insert(k.clone(), json_to_value(v));
-            }
-            Value::Object(std::rc::Rc::new(std::cell::RefCell::new(map)))
         }
     }
+    json_to_value_inner(v, 0)
 }
 
 pub fn value_to_json(v: &Value) -> serde_json::Value {
     use std::collections::HashSet;
     let mut visited = HashSet::new();
-    value_to_json_inner(v, &mut visited)
+    value_to_json_inner(v, &mut visited, 0)
 }
 
-fn value_to_json_inner(v: &Value, visited: &mut std::collections::HashSet<usize>) -> serde_json::Value {
+fn value_to_json_inner(v: &Value, visited: &mut std::collections::HashSet<usize>, depth: usize) -> serde_json::Value {
+    if depth > 100 {
+        return serde_json::Value::Null;
+    }
     match v {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(*b),
@@ -401,7 +441,7 @@ fn value_to_json_inner(v: &Value, visited: &mut std::collections::HashSet<usize>
             
             let res = match list.try_borrow() {
                 Ok(borrowed_vec) => {
-                    let arr = borrowed_vec.iter().map(|item| value_to_json_inner(item, visited)).collect();
+                    let arr = borrowed_vec.iter().map(|item| value_to_json_inner(item, visited, depth + 1)).collect();
                     serde_json::Value::Array(arr)
                 }
                 Err(_) => {
@@ -423,7 +463,7 @@ fn value_to_json_inner(v: &Value, visited: &mut std::collections::HashSet<usize>
                 Ok(borrowed_map) => {
                     let mut map = serde_json::Map::new();
                     for (k, v) in borrowed_map.iter() {
-                        map.insert(k.clone(), value_to_json_inner(v, visited));
+                        map.insert(k.clone(), value_to_json_inner(v, visited, depth + 1));
                     }
                     serde_json::Value::Object(map)
                 }

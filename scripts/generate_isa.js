@@ -3,7 +3,7 @@ const path = require('path');
 
 const OPCODES = [
   "PushInt", "Pop", "Dup", "PushFloat", "PushString", "PushBool", "PushNull",
-  "LoadLocal", "StoreLocal", "Add", "Sub", "Mul", "Div", "Eq", "Neq", "Lt", "Gt", "Lte", "Gte",
+  "LoadLocal", "StoreLocal", "Add", "Sub", "Mul", "Div", "Eq", "Neq", "StrictEq", "StrictNeq", "Lt", "Gt", "Lte", "Gte",
   "And", "Or", "Not", "BitAnd", "BitOr", "BitXor", "BitNot", "Shl", "Shr", "Jump", "JumpIf", "JumpIfNot",
   "NewObject", "NewList", "ListPush", "GetMember", "SetMember", "Length", "Hash256", "EncryptAES", "JSONStringify", "Call", "Return", "CallNative", "Halt", "Concat",
   "CompareAndAdd", "SwapAndMul", "JumpAndMul", "Swap", "Rotate", "Drop2",

@@ -31,6 +31,7 @@ class NodeWorkerWrapper {
         } else {
             this.worker = new Worker(scriptContent, { eval: true });
         }
+        this.wrappers = new Map();
         
         this.worker.on('message', (msg) => {
             if (this.onmessage) this.onmessage({ data: msg });
@@ -50,12 +51,38 @@ class NodeWorkerWrapper {
     }
     
     addEventListener(event, callback, options) {
+        const once = options && options.once;
         if (event === 'message') {
-            this.worker.on('message', (msg) => {
+            const wrapped = (msg) => {
+                if (once) {
+                    this.wrappers.delete(callback);
+                }
                 callback({ data: msg });
-            });
+            };
+            this.wrappers.set(callback, wrapped);
+            if (once) {
+                this.worker.once('message', wrapped);
+            } else {
+                this.worker.on('message', wrapped);
+            }
         } else if (event === 'error') {
-            this.worker.on('error', callback);
+            if (once) {
+                this.worker.once('error', callback);
+            } else {
+                this.worker.on('error', callback);
+            }
+        }
+    }
+
+    removeEventListener(event, callback) {
+        if (event === 'message') {
+            const wrapped = this.wrappers.get(callback);
+            if (wrapped) {
+                this.worker.off('message', wrapped);
+                this.wrappers.delete(callback);
+            }
+        } else if (event === 'error') {
+            this.worker.off('error', callback);
         }
     }
 }
@@ -65,6 +92,8 @@ class FortressClient {
         this.worker = null;
         this.pending = new Map();
         this.messageId = 0;
+        this.initParams = null;
+        this.workerPromise = null;
     }
 
     static async init(endpoint) {
@@ -101,26 +130,6 @@ class FortressClient {
             window.__fortress_latest_opcodeMap = opcodeMap;
         }
 
-        client.worker = await FortressClient.createWorker();
-
-        client.worker.onmessage = ({ data }) => {
-            const { id, type, result, error } = data;
-            const pending = client.pending.get(id);
-            if (!pending) return;
-            clearTimeout(pending.timeout);
-            client.pending.delete(id);
-            if (type === 'ERROR') pending.reject(new Error(error));
-            else pending.resolve(result);
-        };
-
-        client.worker.onerror = (err) => {
-            for (const p of client.pending.values()) {
-                clearTimeout(p.timeout);
-                p.reject(new Error(`Worker error: ${err.message}`));
-            }
-            client.pending.clear();
-        };
-
         const initPayload = { bytecode, handshakeHeader: handshakeBytes, opcodeMap };
         if (clientPrivateKey) {
             initPayload.clientPrivateKey = Array.isArray(clientPrivateKey)
@@ -128,8 +137,62 @@ class FortressClient {
                 : Uint8Array.from(Buffer.from(clientPrivateKey, 'base64'));
         }
 
-        await client.send('INIT', initPayload);
+        client.initParams = initPayload;
+        await client.ensureWorker();
         return client;
+    }
+
+    async ensureWorker() {
+        if (this.worker) {
+            return;
+        }
+        if (this.workerPromise) {
+            return this.workerPromise;
+        }
+        this.workerPromise = (async () => {
+            const worker = await FortressClient.createWorker();
+
+            worker.onmessage = ({ data }) => {
+                const { id, type, result, error } = data;
+                const pending = this.pending.get(id);
+                if (!pending) return;
+                clearTimeout(pending.timeout);
+                this.pending.delete(id);
+                if (type === 'ERROR') pending.reject(new Error(error));
+                else pending.resolve(result);
+            };
+
+            worker.onerror = (err) => {
+                this.handleWorkerCrash(err);
+            };
+
+            this.worker = worker;
+            this.workerPromise = null;
+
+            await this._sendRaw('INIT', this.initParams);
+        })();
+
+        try {
+            await this.workerPromise;
+        } catch (err) {
+            this.workerPromise = null;
+            throw err;
+        }
+    }
+
+    handleWorkerCrash(err) {
+        this.workerPromise = null;
+        for (const p of this.pending.values()) {
+            clearTimeout(p.timeout);
+            p.reject(new Error(`Worker error: ${err.message}`));
+        }
+        this.pending.clear();
+        if (this.worker) {
+            this.worker.onmessage = null;
+            this.worker.onerror = null;
+            try { this.worker.terminate(); } catch (e) {}
+            this.worker = null;
+        }
     }
 
     static async createWorker(forceStrategy = null) {
@@ -149,7 +212,8 @@ class FortressClient {
                     let finalPath = workerFilePath;
                     let tempCreated = false;
                     if (!fs.existsSync(workerFilePath)) {
-                        finalPath = path.join(__dirname, 'temp-worker.js');
+                        const rand = Math.random().toString(36).substring(2, 10);
+                        finalPath = path.join(__dirname, `temp-worker-${rand}.js`);
                         fs.writeFileSync(finalPath, FORTRESS_WORKER_BUNDLE);
                         tempCreated = true;
                     }
@@ -222,12 +286,17 @@ class FortressClient {
             }
 
             const blob = new Blob([FORTRESS_WORKER_BUNDLE || window.FORTRESS_WORKER_BUNDLE || self.FORTRESS_WORKER_BUNDLE || ''], { type: 'application/javascript' });
-            const worker = new Worker(URL.createObjectURL(blob));
+            const blobUrl = URL.createObjectURL(blob);
+            const worker = new Worker(blobUrl);
             await new Promise((resolve, reject) => {
-                const t = setTimeout(() => reject(new Error('timeout')), 2000);
+                const t = setTimeout(() => {
+                    URL.revokeObjectURL(blobUrl);
+                    reject(new Error('timeout'));
+                }, 2000);
                 const onMsg = ({ data }) => {
                     if (data.type === 'READY') {
                         clearTimeout(t);
+                        URL.revokeObjectURL(blobUrl);
                         worker.removeEventListener('message', onMsg);
                         worker.removeEventListener('error', onErr);
                         resolve();
@@ -235,6 +304,7 @@ class FortressClient {
                 };
                 const onErr = (err) => {
                     clearTimeout(t);
+                    URL.revokeObjectURL(blobUrl);
                     worker.removeEventListener('message', onMsg);
                     worker.removeEventListener('error', onErr);
                     reject(err);
@@ -256,6 +326,44 @@ class FortressClient {
             const id = String(this.messageId++);
             const timeout = setTimeout(() => {
                 this.pending.delete(id);
+                this.handleWorkerCrash(new Error('Fortress execution timed out after 10 seconds'));
+                reject(new Error('Fortress execution timed out after 10 seconds'));
+            }, 10000);
+            this.pending.set(id, { resolve, reject, timeout });
+
+            this.ensureWorker().then(() => {
+                if (!this.worker) {
+                    if (this.pending.has(id)) {
+                        this.pending.delete(id);
+                        clearTimeout(timeout);
+                        reject(new Error('Fortress client worker has been terminated or not initialized'));
+                    }
+                    return;
+                }
+                if (!this.pending.has(id)) {
+                    // Already rejected by dispose or crash
+                    return;
+                }
+                this.worker.postMessage({ id, type, payload });
+            }).catch((err) => {
+                if (this.pending.has(id)) {
+                    this.pending.delete(id);
+                    clearTimeout(timeout);
+                    reject(err);
+                }
+            });
+        });
+    }
+
+    _sendRaw(type, payload) {
+        return new Promise((resolve, reject) => {
+            if (!this.worker) {
+                return reject(new Error('Fortress client worker has been terminated or not initialized'));
+            }
+            const id = String(this.messageId++);
+            const timeout = setTimeout(() => {
+                this.pending.delete(id);
+                this.handleWorkerCrash(new Error('Fortress execution timed out after 10 seconds'));
                 reject(new Error('Fortress execution timed out after 10 seconds'));
             }, 10000);
             this.pending.set(id, { resolve, reject, timeout });
@@ -264,13 +372,16 @@ class FortressClient {
     }
 
     dispose() {
+        this.workerPromise = null;
         for (const p of this.pending.values()) {
             clearTimeout(p.timeout);
             p.reject(new Error('Fortress client disposed'));
         }
         this.pending.clear();
         if (this.worker) {
-            this.worker.terminate();
+            this.worker.onmessage = null;
+            this.worker.onerror = null;
+            try { this.worker.terminate(); } catch (e) {}
             this.worker = null;
         }
     }

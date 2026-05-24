@@ -13,16 +13,10 @@ const vmNode = require('../../pkg-node/vm_core.js');
 function preparePayload(obj, visited = new Map()) {
     if (obj === null || obj === undefined) return obj;
     if (typeof obj !== 'object') return obj;
-    let isFortressPx = false;
-    let target = obj;
-    try {
-        if (obj['__is_fortress_' + 'proxy']) {
-            isFortressPx = true;
-            target = obj['__' + 'proxy_target'];
-        }
-    } catch (e) {}
-    if (isFortressPx) {
-        return preparePayload(target, visited);
+    const proxySymbol = Symbol.for("__fortress_proxy_targets__");
+    const proxyTargets = global[proxySymbol] || globalThis[proxySymbol];
+    if (proxyTargets && proxyTargets.has(obj)) {
+        return preparePayload(proxyTargets.get(obj), visited);
     }
     if (visited.has(obj)) return visited.get(obj);
     if (Array.isArray(obj)) {

@@ -93,6 +93,7 @@ async function loadServerSigningKey() {
             raw: true
         });
         seed = Buffer.from(rawSeed);
+        rawSeed.fill(0);
     }
     // Wrap the derived 32-byte seed in the PKCS#8 DER header 302e020100300506032b657004220420
     const derHeader = Buffer.from('302e020100300506032b657004220420', 'hex');
@@ -102,6 +103,8 @@ async function loadServerSigningKey() {
         format: 'der',
         type: 'pkcs8'
     });
+    seed.fill(0);
+    privateKeyDer.fill(0);
     if (isColdStart) {
         const publicKeyObject = crypto.createPublicKey(signingKey);
         const pubKeyDer = publicKeyObject.export({ type: 'spki', format: 'der' });
@@ -156,9 +159,20 @@ async function generateHandshake(clientPublicKey, nonceStore) {
         serverEphemeralPublicKeyRaw,
         signature
     ]);
+    const sessionKeyUint8 = new Uint8Array(sessionKey);
+    const handshakeHeaderBase64 = handshakeHeader.toString('base64');
+    if (Buffer.isBuffer(sharedSecret)) {
+        sharedSecret.fill(0);
+    }
+    else {
+        new Uint8Array(sharedSecret).fill(0);
+    }
+    new Uint8Array(sessionKey).fill(0);
+    signBuffer.fill(0);
+    handshakeHeader.fill(0);
     return {
-        handshakeHeader: handshakeHeader.toString('base64'),
-        sessionKey: new Uint8Array(sessionKey)
+        handshakeHeader: handshakeHeaderBase64,
+        sessionKey: sessionKeyUint8
     };
 }
 /**
@@ -297,6 +311,8 @@ async function scrambleSessionPayload(fvbcPath, originalMapPath, clientPublicKey
                             i++;
                         }
                     }
+                    keystream.fill(0);
+                    keystreamAllZeros.fill(0);
                 }
             }
         }
@@ -349,6 +365,7 @@ async function scrambleSessionPayload(fvbcPath, originalMapPath, clientPublicKey
             encryptedBytecode[i] = newBytecode[i] ^ sessionKey[i % 32];
         }
     }
+    sessionKey.fill(0);
     return {
         payload: encryptedBytecode,
         newMap: newInverseMap,

@@ -4,7 +4,8 @@ export interface NonceStore {
 export declare class InMemoryNonceStore implements NonceStore {
     private consumed;
     private cleanupInterval;
-    constructor(cleanupMs?: number);
+    private maxSize;
+    constructor(cleanupMs?: number, maxSize?: number);
     consume(nonceHex: string, timestamp: string): boolean;
     private cleanup;
     destroy(): void;

@@ -314,7 +314,9 @@ export class Parser {
             case TokenType.OrOr: return 1;
             case TokenType.AndAnd: return 2;
             case TokenType.EqEq:
-            case TokenType.NotEq: return 3;
+            case TokenType.NotEq:
+            case TokenType.StrictEq:
+            case TokenType.StrictNeq: return 3;
             case TokenType.Lt:
             case TokenType.LtEq:
             case TokenType.Gt:

@@ -124,12 +124,12 @@ fn test_math_abs_panic() {
     bytecode.push(OpCode::MathAbs as u8);
     bytecode.push(OpCode::Halt as u8);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut vm = setup_vm(bytecode);
-        let _ = vm.run();
-    }));
-    
-    assert!(result.is_err(), "Expected MathAbs on i64::MIN to panic due to overflow");
+    let mut vm = setup_vm(bytecode);
+    let res = vm.run().unwrap();
+    match res {
+        Value::Float(f) => assert_eq!(f, 9223372036854775808.0),
+        _ => panic!("Expected Float for abs(i64::MIN)"),
+    }
 }
 
 #[test]
@@ -140,12 +140,12 @@ fn test_math_overflow_add() {
     bytecode.push(OpCode::Add as u8);
     bytecode.push(OpCode::Halt as u8);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut vm = setup_vm(bytecode);
-        let _ = vm.run();
-    }));
-    
-    assert!(result.is_err(), "Expected Add overflow (i64::MAX + 1) to panic in debug mode");
+    let mut vm = setup_vm(bytecode);
+    let res = vm.run().unwrap();
+    match res {
+        Value::Float(f) => assert_eq!(f, i64::MAX as f64 + 1.0),
+        _ => panic!("Expected Float on overflow addition"),
+    }
 }
 
 #[test]
@@ -156,12 +156,12 @@ fn test_math_overflow_sub() {
     bytecode.push(OpCode::Sub as u8);
     bytecode.push(OpCode::Halt as u8);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut vm = setup_vm(bytecode);
-        let _ = vm.run();
-    }));
-    
-    assert!(result.is_err(), "Expected Sub overflow (i64::MIN - 1) to panic in debug mode");
+    let mut vm = setup_vm(bytecode);
+    let res = vm.run().unwrap();
+    match res {
+        Value::Float(f) => assert_eq!(f, i64::MIN as f64 - 1.0),
+        _ => panic!("Expected Float on overflow subtraction"),
+    }
 }
 
 #[test]
@@ -172,12 +172,12 @@ fn test_math_overflow_mul() {
     bytecode.push(OpCode::Mul as u8);
     bytecode.push(OpCode::Halt as u8);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut vm = setup_vm(bytecode);
-        let _ = vm.run();
-    }));
-    
-    assert!(result.is_err(), "Expected Mul overflow (i64::MAX * 2) to panic in debug mode");
+    let mut vm = setup_vm(bytecode);
+    let res = vm.run().unwrap();
+    match res {
+        Value::Float(f) => assert_eq!(f, i64::MAX as f64 * 2.0),
+        _ => panic!("Expected Float on overflow multiplication"),
+    }
 }
 
 #[test]

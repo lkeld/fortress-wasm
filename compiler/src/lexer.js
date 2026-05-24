@@ -42,7 +42,9 @@ var TokenType;
     TokenType[TokenType["Colon"] = 36] = "Colon";
     TokenType[TokenType["LBracket"] = 37] = "LBracket";
     TokenType[TokenType["RBracket"] = 38] = "RBracket";
-    TokenType[TokenType["EOF"] = 39] = "EOF";
+    TokenType[TokenType["StrictEq"] = 39] = "StrictEq";
+    TokenType[TokenType["StrictNeq"] = 40] = "StrictNeq";
+    TokenType[TokenType["EOF"] = 41] = "EOF";
 })(TokenType || (exports.TokenType = TokenType = {}));
 var Lexer = /** @class */ (function () {
     function Lexer(source) {
@@ -179,6 +181,10 @@ var Lexer = /** @class */ (function () {
             case '=':
                 if (this.peek() === '=') {
                     this.advance();
+                    if (this.peek() === '=') {
+                        this.advance();
+                        return { type: TokenType.StrictEq, value: '===', line: this.line };
+                    }
                     return { type: TokenType.EqEq, value: '==', line: this.line };
                 }
                 return { type: TokenType.Eq, value: c, line: this.line };
@@ -197,6 +203,10 @@ var Lexer = /** @class */ (function () {
             case '!':
                 if (this.peek() === '=') {
                     this.advance();
+                    if (this.peek() === '=') {
+                        this.advance();
+                        return { type: TokenType.StrictNeq, value: '!==', line: this.line };
+                    }
                     return { type: TokenType.NotEq, value: '!=', line: this.line };
                 }
                 return { type: TokenType.Not, value: c, line: this.line };

@@ -153,7 +153,9 @@ var Parser = /** @class */ (function () {
             case lexer_1.TokenType.OrOr: return 1;
             case lexer_1.TokenType.AndAnd: return 2;
             case lexer_1.TokenType.EqEq:
-            case lexer_1.TokenType.NotEq: return 3;
+            case lexer_1.TokenType.NotEq:
+            case lexer_1.TokenType.StrictEq:
+            case lexer_1.TokenType.StrictNeq: return 3;
             case lexer_1.TokenType.Lt:
             case lexer_1.TokenType.LtEq:
             case lexer_1.TokenType.Gt:

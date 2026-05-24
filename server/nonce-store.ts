@@ -5,8 +5,10 @@ export interface NonceStore {
 export class InMemoryNonceStore implements NonceStore {
     private consumed = new Map<string, number>();
     private cleanupInterval: NodeJS.Timeout;
+    private maxSize: number;
 
-    constructor(cleanupMs: number = 30000) {
+    constructor(cleanupMs: number = 30000, maxSize: number = 100000) {
+        this.maxSize = maxSize;
         this.cleanupInterval = setInterval(() => this.cleanup(), cleanupMs);
         if (this.cleanupInterval && typeof this.cleanupInterval.unref === 'function') {
             this.cleanupInterval.unref();
@@ -25,6 +27,14 @@ export class InMemoryNonceStore implements NonceStore {
         // Check if nonce has already been consumed
         if (this.consumed.has(nonceHex)) {
             return false;
+        }
+
+        // Check size limit to prevent OOM DoS
+        if (this.consumed.size >= this.maxSize) {
+            this.cleanup();
+            if (this.consumed.size >= this.maxSize) {
+                return false;
+            }
         }
 
         // Mark nonce as consumed

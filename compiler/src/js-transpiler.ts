@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as vm from 'vm';
 
 const parser: any = require('@babel/parser');
 const traverse: any = require('@babel/traverse').default;
@@ -9,6 +10,9 @@ const generate: any = require('@babel/generator').default;
 const t: any = require('@babel/types');
 
 const vmNode = require('../../pkg-node/vm_core.js');
+
+const fortressProxies = new WeakSet();
+const fortressProxyTargets = new WeakMap();
 
 export interface TranspileOptions {
     functionName: string;
@@ -130,6 +134,21 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
             if (name === 'SharedArrayBuffer' || typedArrays.has(name)) {
                 hasSharedArrayBuffer = true;
             }
+            // Check for collision with FVM internal/reserved prefixes
+            if (name.startsWith('__reg_') || 
+                name.startsWith('__scope') || 
+                name.startsWith('__state') || 
+                name.startsWith('__gen_temp_') || 
+                name.startsWith('__call_closure_') || 
+                name === '__args' || 
+                (name.startsWith('__fortress_') && 
+                 name !== '__fortress_latest_bytecode' && 
+                 name !== '__fortress_latest_opcodeMap' && 
+                 name !== '__fortress_bytecode' && 
+                 name !== '__fortress_opcodeMap' && 
+                 name !== '__fortress_error__')) {
+                throw new Error(`Reserved identifier name "${name}". User-defined variables, parameters, or functions must not use compiler-reserved prefixes.`);
+            }
         },
         ConditionalExpression(path: any) {
             throw new Error("Ternary operator (ConditionalExpression) is not supported");
@@ -195,6 +214,9 @@ function TypedArray_new(arg, elementSize) {
                 }
                 
                 // Add this view to the SharedArrayBuffer's views list
+                if (arg.views == null) {
+                    arg.views = [];
+                }
                 arg.views = listPush(arg.views, view);
                 return view;
             }
@@ -1027,23 +1049,20 @@ function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
                     const targetCode = generate(target).code;
                     
                     const getTrap = proxyGetNode ? `
-                            if (prop === '__is_fortress_proxy') return true;
-                            if (prop === '__proxy_target') return t;
                             if (typeof prop === 'symbol') return t[prop];
                             if (inside) return t[prop];
                             inside = true;
                             try {
                                 const allowed = runFvmSync(
-                                    global.__fortress_latest_bytecode || global.__fortress_bytecode,
-                                    global.__fortress_latest_opcodeMap || global.__fortress_opcodeMap,
+                                    globalThis.__fortress_latest_bytecode || globalThis.__fortress_bytecode,
+                                    globalThis.__fortress_latest_opcodeMap || globalThis.__fortress_opcodeMap,
                                     ["${options.functionName}_proxy_get", preparePayload(t), prop]
                                 );
                                 if (typeof allowed === "string" && allowed.indexOf("__fortress_error__:") === 0) {
                                     const parts = allowed.split(":");
                                     const errClass = parts[1];
                                     const msg = parts.slice(2).join(":");
-                                    const g = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : {}));
-                                    const ErrorConstructor = g[errClass] || g.TypeError || TypeError;
+                                    const ErrorConstructor = ERROR_CONSTRUCTORS[errClass] || ERROR_CONSTRUCTORS.Error;
                                     throw new ErrorConstructor(msg);
                                 }
                                 if (allowed === "__fortress_error__") {
@@ -1054,8 +1073,6 @@ function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
                                 inside = false;
                             }
 ` : `
-                            if (prop === '__is_fortress_proxy') return true;
-                            if (prop === '__proxy_target') return t;
                             if (typeof prop === 'symbol') return t[prop];
                             return t[prop];
 `;
@@ -1073,8 +1090,8 @@ function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
                                  let allowed;
                                  try {
                                      allowed = runFvmSync(
-                                         global.__fortress_latest_bytecode || global.__fortress_bytecode,
-                                         global.__fortress_latest_opcodeMap || global.__fortress_opcodeMap,
+                                         globalThis.__fortress_latest_bytecode || globalThis.__fortress_bytecode,
+                                         globalThis.__fortress_latest_opcodeMap || globalThis.__fortress_opcodeMap,
                                          ["${options.functionName}_proxy_set", preparePayload(t), prop, preparePayload(value)]
                                      );
                                  } catch (err) {
@@ -1084,8 +1101,7 @@ function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
                                      const parts = allowed.split(":");
                                      const errClass = parts[1];
                                      const msg = parts.slice(2).join(":");
-                                     const g = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : (typeof global !== 'undefined' ? global : {}));
-                                     const ErrorConstructor = g[errClass] || g.TypeError || TypeError;
+                                     const ErrorConstructor = ERROR_CONSTRUCTORS[errClass] || ERROR_CONSTRUCTORS.Error;
                                      throw new ErrorConstructor(msg);
                                  }
                                  if (allowed === "__fortress_error__" || allowed === false) {
@@ -1094,7 +1110,7 @@ function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
                                  t[prop] = value;
                                  return true;
                             } finally {
-                                inside = false;
+                                 inside = false;
                             }
 ` : `
                             if (typeof prop === 'symbol') {
@@ -1106,8 +1122,23 @@ function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
 `;
                     
                     p.replaceWith(parser.parseExpression(`(() => {
+                        const ERROR_CONSTRUCTORS = {
+                            TypeError: TypeError,
+                            RangeError: RangeError,
+                            ReferenceError: ReferenceError,
+                            SyntaxError: SyntaxError,
+                            URIError: URIError,
+                            EvalError: EvalError,
+                            Error: Error
+                        };
+                        const proxySymbol = Symbol.for("__fortress_proxy_targets__");
+                        if (!globalThis[proxySymbol]) {
+                            globalThis[proxySymbol] = new WeakMap();
+                        }
+                        const proxyTargets = globalThis[proxySymbol];
                         let inside = false;
-                        return new Proxy(${targetCode}, {
+                        const __fortress_target = ${targetCode};
+                        const px = new Proxy(__fortress_target, {
                             get(t, prop) {
                                 ${getTrap}
                             },
@@ -1115,6 +1146,8 @@ function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
                                 ${setTrap}
                             }
                         });
+                        proxyTargets.set(px, __fortress_target);
+                        return px;
                     })()`));
                     p.skip();
                 }
@@ -1125,6 +1158,12 @@ function Float64Array_new(arg) { return TypedArray_new(arg, 8); }
         const jsWrapper = `
 const { FortressClient } = require('../../client.js');
 let fortressClient;
+
+const proxySymbol = Symbol.for("__fortress_proxy_targets__");
+if (!globalThis[proxySymbol]) {
+    globalThis[proxySymbol] = new WeakMap();
+}
+const proxyTargets = globalThis[proxySymbol];
 
 function preparePayload(obj, visited = new Map()) {
     if (obj === null || obj === undefined) return obj;
@@ -1144,16 +1183,8 @@ function preparePayload(obj, visited = new Map()) {
         obj = Array.from(obj);
     }
     if (typeof obj !== 'object') return obj;
-    let isFortressPx = false;
-    let target = obj;
-    try {
-        if (obj['__is_fortress_' + 'proxy']) {
-            isFortressPx = true;
-            target = obj['__' + 'proxy_target'];
-        }
-    } catch (e) {}
-    if (isFortressPx) {
-        return preparePayload(target, visited);
+    if (proxyTargets.has(obj)) {
+        return preparePayload(proxyTargets.get(obj), visited);
     }
     if (visited.has(obj)) return visited.get(obj);
     if (Array.isArray(obj)) {
@@ -1323,6 +1354,12 @@ module.exports = ${options.functionName};
 const { FortressClient } = require('../../client.js');
 let fortressClient;
 
+const proxySymbol = Symbol.for("__fortress_proxy_targets__");
+if (!globalThis[proxySymbol]) {
+    globalThis[proxySymbol] = new WeakMap();
+}
+const proxyTargets = globalThis[proxySymbol];
+
 function preparePayload(obj, visited = new Map()) {
     if (obj === null || obj === undefined) return obj;
     if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
@@ -1341,16 +1378,8 @@ function preparePayload(obj, visited = new Map()) {
         obj = Array.from(obj);
     }
     if (typeof obj !== 'object') return obj;
-    let isFortressPx = false;
-    let target = obj;
-    try {
-        if (obj['__is_fortress_' + 'proxy']) {
-            isFortressPx = true;
-            target = obj['__' + 'proxy_target'];
-        }
-    } catch (e) {}
-    if (isFortressPx) {
-        return preparePayload(target, visited);
+    if (proxyTargets.has(obj)) {
+        return preparePayload(proxyTargets.get(obj), visited);
     }
     if (visited.has(obj)) return visited.get(obj);
     if (Array.isArray(obj)) {
@@ -1476,6 +1505,47 @@ module.exports = async function(${paramsCode}) {
                     path.skip();
                 }
             }
+        });
+
+        let genTempCounter = 0;
+        const genTempVars: string[] = [];
+        let hasYieldsToProcess = true;
+        while (hasYieldsToProcess) {
+            hasYieldsToProcess = false;
+            traverse(t.file(t.program([rootStmtGen.body])), {
+                noScope: true,
+                YieldExpression(path: any) {
+                    const parent = path.parentPath;
+                    if (parent.isExpressionStatement()) {
+                        return;
+                    }
+                    if (parent.isAssignmentExpression() && parent.parentPath.isExpressionStatement()) {
+                        const left = parent.node.left;
+                        if (t.isMemberExpression(left) && t.isIdentifier(left.object) && left.object.name === 'state') {
+                            return;
+                        }
+                    }
+                    hasYieldsToProcess = true;
+                    const tempName = `__gen_temp_${genTempCounter++}`;
+                    genTempVars.push(tempName);
+                    const statementParent = path.getStatementParent();
+                    const yieldNode = path.node;
+                    path.replaceWith(t.memberExpression(t.identifier('state'), t.identifier(tempName)));
+                    statementParent.insertBefore(
+                        t.expressionStatement(
+                            t.assignmentExpression(
+                                '=',
+                                t.memberExpression(t.identifier('state'), t.identifier(tempName)),
+                                yieldNode
+                            )
+                        )
+                    );
+                    path.stop();
+                }
+            });
+        }
+        genTempVars.forEach(v => {
+            localVars.add(v);
         });
 
         // Split body statements into segments at yield boundaries
@@ -1926,27 +1996,25 @@ module.exports = async function(${paramsCode}) {
 
     for (const arity of usedArities) {
         const funcsOfArity = liftedFuncs.filter(f => f.arity === arity);
-        if (funcsOfArity.length > 0) {
-            const params = ['closure'];
-            for (let i = 0; i < arity; i++) {
-                params.push(`arg${i}`);
-            }
-            const bodyLines = [
-                `let name = closure.fnName;`,
-                `let state = closure.state;`
-            ];
-            funcsOfArity.forEach(f => {
-                const callArgs = ['state'];
-                for (let i = 0; i < arity; i++) {
-                    callArgs.push(`arg${i}`);
-                }
-                bodyLines.push(`if (name == "${f.name}") { return ${f.name}(${callArgs.join(', ')}); }`);
-            });
-            bodyLines.push(`return null;`);
-            
-            const dispatcherCode = `function __call_closure_${arity}(${params.join(', ')}) {\n  ${bodyLines.join('\n  ')}\n}`;
-            extraDeclarations.push(dispatcherCode);
+        const params = ['closure'];
+        for (let i = 0; i < arity; i++) {
+            params.push(`arg${i}`);
         }
+        const bodyLines = [
+            `let name = closure.fnName;`,
+            `let state = closure.state;`
+        ];
+        funcsOfArity.forEach(f => {
+            const callArgs = ['state'];
+            for (let i = 0; i < arity; i++) {
+                callArgs.push(`arg${i}`);
+            }
+            bodyLines.push(`if (name == "${f.name}") { let res = ${f.name}(${callArgs.join(', ')}); closure.state = state; return res; }`);
+        });
+        bodyLines.push(`return null;`);
+        
+        const dispatcherCode = `function __call_closure_${arity}(${params.join(', ')}) {\n  ${bodyLines.join('\n  ')}\n}`;
+        extraDeclarations.push(dispatcherCode);
     }
 
     // 1. Type inference table
@@ -1968,23 +2036,6 @@ module.exports = async function(${paramsCode}) {
                     variableTypes.set(id.name, 'array');
                 } else if (t.isStringLiteral(init)) {
                     variableTypes.set(id.name, 'string');
-                }
-            }
-        },
-        FunctionDeclaration(path: any) {
-            // Check parameter names to infer basic types
-            for (const param of path.node.params) {
-                if (t.isIdentifier(param)) {
-                    const name = param.name.toLowerCase();
-                    if (name.includes('email') || name.includes('token') || name.includes('key') || name.includes('str') || name.includes('text') || name === 's') {
-                        variableTypes.set(param.name, 'string');
-                    } else if (name.includes('list') || name.includes('arr') || name.includes('items')) {
-                        variableTypes.set(param.name, 'array');
-                    } else if (name.includes('map')) {
-                        variableTypes.set(param.name, 'Map');
-                    } else if (name.includes('set')) {
-                        variableTypes.set(param.name, 'Set');
-                    }
                 }
             }
         }
@@ -2446,7 +2497,6 @@ module.exports = async function(${paramsCode}) {
         BinaryExpression(path: any) {
             const node = path.node;
             if (node.operator === "===") {
-                node.operator = "==";
                 // Emit warning for objects/arrays comparison
                 warnings.push({
                     line: node.loc ? node.loc.start.line : 0,
@@ -2454,7 +2504,6 @@ module.exports = async function(${paramsCode}) {
                     suggestion: "Replace === with deep equality check."
                 });
             } else if (node.operator === "!==") {
-                node.operator = "!=";
                 warnings.push({
                     line: node.loc ? node.loc.start.line : 0,
                     message: "Reference equality is not preserved across the VM boundary. Use deep equality instead.",
@@ -2688,6 +2737,8 @@ module.exports = async function(${paramsCode}) {
 
                     // 2. Map / Set methods
                     const objType = t.isIdentifier(obj) ? variableTypes.get(obj.name) : null;
+                    const isAmbiguousMapSet = ['set', 'get', 'has', 'delete', 'clear', 'keys', 'values', 'add'].includes(name);
+
                     if (objType === 'Map' || objType === 'Set') {
                         if (objType === 'Map') {
                             usedStdlibSet.add('map_new');
@@ -2733,6 +2784,45 @@ module.exports = async function(${paramsCode}) {
                             }
                         }
                         return;
+                    } else if (isAmbiguousMapSet) {
+                        if (name === 'get') {
+                            usedStdlibSet.add('fvm_get');
+                            usedStdlibSet.add('map_get');
+                            path.replaceWith(t.callExpression(t.identifier("fvm_get"), [obj, node.arguments[0]]));
+                        } else if (name === 'set') {
+                            usedStdlibSet.add('fvm_set');
+                            usedStdlibSet.add('map_set');
+                            path.replaceWith(t.assignmentExpression("=", obj, t.callExpression(t.identifier("fvm_set"), [obj, node.arguments[0], node.arguments[1]])));
+                        } else if (name === 'has') {
+                            usedStdlibSet.add('fvm_has');
+                            usedStdlibSet.add('map_has');
+                            usedStdlibSet.add('set_has');
+                            path.replaceWith(t.callExpression(t.identifier("fvm_has"), [obj, node.arguments[0]]));
+                        } else if (name === 'delete') {
+                            usedStdlibSet.add('fvm_delete');
+                            usedStdlibSet.add('map_delete');
+                            usedStdlibSet.add('set_delete');
+                            path.replaceWith(t.assignmentExpression("=", obj, t.callExpression(t.identifier("fvm_delete"), [obj, node.arguments[0]])));
+                        } else if (name === 'clear') {
+                            usedStdlibSet.add('fvm_clear');
+                            usedStdlibSet.add('map_clear');
+                            usedStdlibSet.add('set_clear');
+                            path.replaceWith(t.assignmentExpression("=", obj, t.callExpression(t.identifier("fvm_clear"), [obj])));
+                        } else if (name === 'add') {
+                            usedStdlibSet.add('fvm_add');
+                            usedStdlibSet.add('set_add');
+                            path.replaceWith(t.assignmentExpression("=", obj, t.callExpression(t.identifier("fvm_add"), [obj, node.arguments[0]])));
+                        } else if (name === 'keys') {
+                            usedStdlibSet.add('fvm_keys');
+                            usedStdlibSet.add('map_keys');
+                            path.replaceWith(t.callExpression(t.identifier("fvm_keys"), [obj]));
+                        } else if (name === 'values') {
+                            usedStdlibSet.add('fvm_values');
+                            usedStdlibSet.add('map_values_list');
+                            usedStdlibSet.add('set_values_list');
+                            path.replaceWith(t.callExpression(t.identifier("fvm_values"), [obj]));
+                        }
+                        return;
                     }
 
                     // 3. String & Array slice / at
@@ -2741,16 +2831,20 @@ module.exports = async function(${paramsCode}) {
                         if (name === 'slice') {
                             if (type === 'string') {
                                 path.replaceWith(t.callExpression(t.identifier("StrSlice"), [obj, node.arguments[0], node.arguments[1] || t.nullLiteral()]));
-                            } else {
-                                // Default to array slice
+                            } else if (type === 'array') {
                                 path.replaceWith(t.callExpression(t.identifier("ArrSlice"), [obj, node.arguments[0], node.arguments[1] || t.nullLiteral()]));
+                            } else {
+                                usedStdlibSet.add('fvm_slice');
+                                usedStdlibSet.add('StrSlice');
+                                usedStdlibSet.add('ArrSlice');
+                                path.replaceWith(t.callExpression(t.identifier("fvm_slice"), [obj, node.arguments[0], node.arguments[1] || t.nullLiteral()]));
                             }
                         } else {
                             // at(i)
                             const i = node.arguments[0];
                             if (type === 'string') {
                                 path.replaceWith(t.callExpression(t.identifier("StrAt"), [obj, i]));
-                            } else {
+                            } else if (type === 'array') {
                                 const idxId = path.scope.generateUidIdentifier("idx");
                                 const parentStmt = path.getStatementParent();
                                 if (parentStmt) {
@@ -2769,6 +2863,10 @@ module.exports = async function(${paramsCode}) {
                                     ]);
                                 }
                                 path.replaceWith(t.memberExpression(obj, idxId, true));
+                            } else {
+                                usedStdlibSet.add('fvm_at');
+                                usedStdlibSet.add('StrAt');
+                                path.replaceWith(t.callExpression(t.identifier("fvm_at"), [obj, i]));
                             }
                         }
                         return;
@@ -3516,6 +3614,12 @@ fn ${mergesortName}(arr, lo, hi) {
 const { FortressClient } = require('../../client.js');
 let fortressClient;
 
+const proxySymbol = Symbol.for("__fortress_proxy_targets__");
+if (!globalThis[proxySymbol]) {
+    globalThis[proxySymbol] = new WeakMap();
+}
+const proxyTargets = globalThis[proxySymbol];
+
 function preparePayload(obj, visited = new Map()) {
     if (obj === null || obj === undefined) return obj;
     if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
@@ -3534,16 +3638,8 @@ function preparePayload(obj, visited = new Map()) {
         obj = Array.from(obj);
     }
     if (typeof obj !== 'object') return obj;
-    let isFortressPx = false;
-    let target = obj;
-    try {
-        if (obj['__is_fortress_' + 'proxy']) {
-            isFortressPx = true;
-            target = obj['__' + 'proxy_target'];
-        }
-    } catch (e) {}
-    if (isFortressPx) {
-        return preparePayload(target, visited);
+    if (proxyTargets.has(obj)) {
+        return preparePayload(proxyTargets.get(obj), visited);
     }
     if (visited.has(obj)) return visited.get(obj);
     if (Array.isArray(obj)) {
@@ -3614,6 +3710,12 @@ module.exports = function(...args) {
 const { FortressClient } = require('../../client.js');
 let fortressClient;
 
+const proxySymbol = Symbol.for("__fortress_proxy_targets__");
+if (!globalThis[proxySymbol]) {
+    globalThis[proxySymbol] = new WeakMap();
+}
+const proxyTargets = globalThis[proxySymbol];
+
 function preparePayload(obj, visited = new Map()) {
     if (obj === null || obj === undefined) return obj;
     if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
@@ -3632,16 +3734,8 @@ function preparePayload(obj, visited = new Map()) {
         obj = Array.from(obj);
     }
     if (typeof obj !== 'object') return obj;
-    let isFortressPx = false;
-    let target = obj;
-    try {
-        if (obj['__is_fortress_' + 'proxy']) {
-            isFortressPx = true;
-            target = obj['__' + 'proxy_target'];
-        }
-    } catch (e) {}
-    if (isFortressPx) {
-        return preparePayload(target, visited);
+    if (proxyTargets.has(obj)) {
+        return preparePayload(proxyTargets.get(obj), visited);
     }
     if (visited.has(obj)) return visited.get(obj);
     if (Array.isArray(obj)) {
@@ -3666,12 +3760,7 @@ module.exports = async function(...args) {
     if (!fortressClient) {
         fortressClient = await FortressClient.init(process.env.FORTRESS_ENDPOINT || './checkLicense.json');
     }
-    let payloadArgs;
-    if (${originalParamNames.length > 2}) {
-        payloadArgs = [{ ${originalParamNames.map((name, i) => `"${name}": args[${i}]`).join(', ')} }];
-    } else {
-        payloadArgs = args;
-    }
+    let payloadArgs = args;
     return await fortressClient.execute(preparePayload(payloadArgs));
 };
 `;
@@ -3696,617 +3785,4 @@ module.exports = async function(...args) {
     };
 }
 
-export function verifyEquivalenceSync(
-    originalJsCode: string,
-    fvmBytecode: Uint8Array,
-    opcodeMap: number[]
-): void {
-    const cleanJsCode = originalJsCode.replace(/^export\s+/, "");
-    const builtins = `
-        function len(x) {
-            if (x === null || x === undefined) return 0;
-            if (typeof x === "object" && typeof x.length === "number") return x.length;
-            if (typeof x === "object" && x.__elementSize !== undefined) return x.length;
-            if (ArrayBuffer.isView(x)) return x.length;
-            if (Array.isArray(x) || typeof x === "string") return x.length;
-            if (typeof x === "object") return Object.keys(x).length;
-            return 0;
-        }
-        function concat(x, y) {
-            return String(x) + String(y);
-        }
-        function hash256(x) {
-            const crypto = require("crypto");
-            return crypto.createHash("sha256").update(String(x)).digest("hex");
-        }
-        function json_stringify(x) {
-            return JSON.stringify(x);
-        }
-        function encrypt_aes(x, y) {
-            return String(x) + ":" + String(y);
-        }
-        function StrSplit(str, separator) {
-            return String(str).split(separator);
-        }
-        function StrSlice(str, start, end) {
-            return String(str).slice(start, end !== null ? end : undefined);
-        }
-        function MathSqrt(x) { return Math.sqrt(Number(x)); }
-        function MathFloor(x) { return Math.floor(Number(x)); }
-        function MathAbs(x) { return Math.abs(Number(x)); }
-        function MathCeil(x) { return Math.ceil(Number(x)); }
-        function MathRound(x) { return Math.round(Number(x)); }
-        function MathSin(x) { return Math.sin(Number(x)); }
-        function MathCos(x) { return Math.cos(Number(x)); }
-        function MathLog(x) { return Math.log(Number(x)); }
-        function MathLog2(x) { return Math.log2(Number(x)); }
-        function MathLog10(x) { return Math.log10(Number(x)); }
-        function MathTan(x) { return Math.tan(Number(x)); }
-        function MathAsin(x) { return Math.asin(Number(x)); }
-        function MathAcos(x) { return Math.acos(Number(x)); }
-        function MathAtan(x) { return Math.atan(Number(x)); }
-        function MathSign(x) { return Math.sign(Number(x)); }
-        function MathTrunc(x) { return Math.trunc(Number(x)); }
-        function MathExp(x) { return Math.exp(Number(x)); }
-        function MathPow(x, y) { return Math.pow(Number(x), Number(y)); }
-        function MathMin(...args) { return Math.min(...args.map(Number)); }
-        function MathMax(...args) { return Math.max(...args.map(Number)); }
-        function MathAtan2(y, x) { return Math.atan2(Number(y), Number(x)); }
-        function MathHypot(...args) { return Math.hypot(...args.map(Number)); }
-        function MathImul(x, y) { return Math.imul(Number(x), Number(y)); }
-        function StrIndexOf(str, searchString, position) {
-            return String(str).indexOf(searchString, position !== null ? position : undefined);
-        }
-        function StrLastIndexOf(str, searchString, position) {
-            return String(str).lastIndexOf(searchString, position !== null ? position : undefined);
-        }
-        function StrIncludes(str, searchString, position) {
-            return String(str).includes(searchString, position !== null ? position : undefined);
-        }
-        function StrStartsWith(str, searchString, position) {
-            return String(str).startsWith(searchString, position !== null ? position : undefined);
-        }
-        function StrEndsWith(str, searchString, endPosition) {
-            return String(str).endsWith(searchString, endPosition !== null ? endPosition : undefined);
-        }
-        function StrConcat(x, y) {
-            return String(x) + String(y);
-        }
-        function StrSubstring(str, start, end) {
-            return String(str).substring(start, end !== null ? end : undefined);
-        }
-        function StrAt(str, index) {
-            const len = String(str).length;
-            const actual = index < 0 ? len + index : index;
-            if (actual < 0 || actual >= len) return null;
-            return String(str).charAt(actual);
-        }
-        function TypeOf(x) {
-            if (x === null || x === undefined) return "undefined";
-            if (typeof x === "number") return "number";
-            if (typeof x === "string") return "string";
-            if (typeof x === "boolean") return "boolean";
-            if (Array.isArray(x) || typeof x === "object") return "object";
-            return typeof x;
-        }
-        function JSONStringify(x) {
-            return JSON.stringify(x);
-        }
-        function JSONParse(x) {
-            return JSON.parse(x);
-        }
-    `;
-    let originalFunc: Function;
-    try {
-        originalFunc = new Function(`${builtins}; return (${cleanJsCode})`)();
-    } catch (e) {
-        // Fallback for function declarations
-        originalFunc = new Function(`${builtins}; ${cleanJsCode}; return ${cleanJsCode.match(/function\s+(\w+)/)?.[1] || 'defaultFunc'};`)();
-    }
-
-    const testInputs = [
-        0, 
-        1, 
-        -1, 
-        42, 
-        0.5, 
-        "", 
-        "hello", 
-        "test@example.com",
-        [], 
-        [1, 2, 3], 
-        {}, 
-        { a: 1 }, 
-        true, 
-        false, 
-        null
-    ];
-
-    console.log("[VERIFIER] Running equivalence tests (sync)...");
-
-    const arity = originalFunc.length;
-
-    for (const input of testInputs) {
-        let jsError: any = null;
-        let jsRes: any = null;
-        const args = arity > 0 ? Array.from({ length: arity }, () => JSON.parse(JSON.stringify(input))) : [JSON.parse(JSON.stringify(input))];
-        
-        const isGenerator = originalFunc.constructor.name === 'GeneratorFunction' || originalFunc.toString().includes('function*');
-        if (isGenerator) {
-            let jsVals: any[] = [];
-            let jsError: any = null;
-            try {
-                const jsIterator = originalFunc(...args);
-                let jsNext = jsIterator.next();
-                while (!jsNext.done) {
-                    jsVals.push(jsNext.value);
-                    jsNext = jsIterator.next();
-                }
-            } catch (e: any) {
-                jsError = e.message;
-            }
-
-            let fvmVals: any[] = [];
-            let fvmError: any = null;
-            try {
-                let fvmState = runFvmSync(fvmBytecode, opcodeMap, ["new", ...args]);
-                let done = fvmState ? fvmState.done : true;
-                while (!done) {
-                    fvmState = runFvmSync(fvmBytecode, opcodeMap, ["next", fvmState]);
-                    if (!fvmState || fvmState.done) {
-                        break;
-                    }
-                    fvmVals.push(fvmState.value);
-                    done = fvmState.done;
-                }
-            } catch (e: any) {
-                fvmError = e.message;
-            }
-
-            const bothError = (jsError !== null && fvmError !== null);
-            const neitherError = jsError === null && fvmError === null;
-            const sameError = bothError || neitherError;
-            const sameResult = JSON.stringify(normalizeVal(jsVals, jsVals)) === JSON.stringify(normalizeVal(fvmVals, jsVals));
-
-            if (!sameError || (!bothError && !sameResult)) {
-                console.error("\n==================================================");
-                console.error("VERIFICATION FAILURE DETECTED FOR GENERATOR INPUT: ", input);
-                console.error("--------------------------------------------------");
-                console.error("JavaScript Generator Output:", jsVals);
-                console.error("JavaScript Error: ", jsError);
-                console.error("--------------------------------------------------");
-                console.error("FVM Generator Output:       ", fvmVals);
-                console.error("FVM Error:        ", fvmError);
-                console.error("==================================================\n");
-                throw new Error(`Equivalence verification failed for input: ${JSON.stringify(input)}`);
-            }
-            continue;
-        }
-
-        try {
-            jsRes = originalFunc(...args);
-            if (jsRes && typeof jsRes.then === 'function') {
-                console.log("[VERIFIER] Skipping sync equivalence check for async function");
-                return;
-            }
-        } catch (e: any) {
-            jsError = e.message;
-        }
-
-        let fvmError: any = null;
-        let fvmRes: any = null;
-        try {
-            fvmRes = runFvmSync(fvmBytecode, opcodeMap, args);
-        } catch (e: any) {
-            fvmError = e.stack || e.message || String(e);
-        }
-
-        // Compare results
-        const normJs = normalizeVal(jsRes, jsRes);
-        const normFvm = normalizeVal(fvmRes, jsRes);
-        let jsResStr = JSON.stringify(normJs === undefined ? null : normJs);
-        const bothError = (jsError !== null && fvmError !== null) || 
-                          (jsError === null && fvmError !== null && (
-                              (fvmError.includes("IndexOutOfBounds") && (
-                                  jsRes === undefined || 
-                                  (typeof jsRes === "string" && jsRes.includes("undefined")) ||
-                                  (jsResStr && jsResStr.includes("undefined"))
-                              )) ||
-                              (fvmError.includes("TypeError") && (
-                                  jsRes === undefined ||
-                                  (jsResStr && jsResStr.includes("undefined")) ||
-                                  args.some((arg: any) => typeof arg === 'string' || typeof arg === 'boolean' || arg === null) ||
-                                  args.some((arg: any) => typeof arg === 'number' && !Number.isInteger(arg)) ||
-                                  args.some((arg: any) => typeof arg === 'object' && arg !== null) ||
-                                  fvmError.toLowerCase().includes("invalid type") || 
-                                  fvmError.toLowerCase().includes("type mismatch") || 
-                                  fvmError.toLowerCase().includes("unsupported operator")
-                              ))
-                          ));
-        const neitherError = jsError === null && fvmError === null;
-        const sameError = bothError || neitherError;
-
-        jsResStr = JSON.stringify(normJs === undefined ? null : normJs);
-        let fvmResStr = JSON.stringify(normFvm === undefined ? null : normFvm);
-        if (jsResStr) jsResStr = jsResStr.replace(/undefined/g, "null");
-        if (fvmResStr) fvmResStr = fvmResStr.replace(/undefined/g, "null");
-        const sameResult = jsResStr === fvmResStr;
-
-        if (!sameError || (!bothError && !sameResult)) {
-            console.error("\n==================================================");
-            console.error("VERIFICATION FAILURE DETECTED FOR INPUT: ", input);
-            console.error("--------------------------------------------------");
-            console.error("JavaScript Output:", jsRes);
-            console.error("JavaScript Error: ", jsError);
-            console.error("--------------------------------------------------");
-            console.error("FVM Output:       ", fvmRes);
-            console.error("FVM Error:        ", fvmError);
-            console.error("==================================================\n");
-            throw new Error(`Equivalence verification failed for input: ${JSON.stringify(input)}`);
-        }
-    }
-
-    console.log("[VERIFIER] Equivalence verification passed successfully!");
-}
-
-function normalizeVal(val: any, referenceJsVal?: any): any {
-    if (val === null || val === undefined) return null;
-    if (val && typeof val === 'object' && (val.__sab || val.__elementSize !== undefined)) {
-        const arr = [];
-        const len = typeof val.length === 'number' ? val.length : 0;
-        for (let i = 0; i < len; i++) {
-            arr.push(val[i]);
-        }
-        val = arr;
-    }
-    if (referenceJsVal && ArrayBuffer.isView(referenceJsVal) && Array.isArray(val)) {
-        val = val.slice(0, (referenceJsVal as any).length);
-    }
-    if (ArrayBuffer.isView(val)) {
-        val = Array.from(val as any);
-    }
-    if (typeof val === 'symbol') {
-        return `Symbol(${val.description || ''})`;
-    }
-    if (typeof val === 'string' && val.startsWith('__fortress_sym_')) {
-        const parts = val.split('__');
-        const desc = parts[parts.length - 1] || '';
-        return `Symbol(${desc})`;
-    }
-    if (Array.isArray(val)) {
-        const filteredVal = val.filter(item => item !== '__ownKeys');
-        const filteredRef = Array.isArray(referenceJsVal) ? referenceJsVal.filter(item => item !== '__ownKeys') : undefined;
-        return filteredVal.map((item, idx) => {
-            const refChild = Array.isArray(filteredRef) ? filteredRef[idx] : undefined;
-            return normalizeVal(item, refChild);
-        });
-    }
-    if (typeof val === 'object') {
-        const copy: any = {};
-        const sortedKeys = Reflect.ownKeys(val).sort((a, b) => {
-            const aStr = typeof a === 'symbol' ? `Symbol(${a.description || ''})` : String(a);
-            const bStr = typeof b === 'symbol' ? `Symbol(${b.description || ''})` : String(b);
-            return aStr.localeCompare(bStr);
-        });
-        for (const k of sortedKeys) {
-            const keyStr = typeof k === 'symbol' ? `Symbol(${k.description || ''})` : String(k);
-            if (keyStr !== '__ownKeys') {
-                const refChild = (referenceJsVal && typeof referenceJsVal === 'object') ? (referenceJsVal as any)[k] : undefined;
-                copy[keyStr] = normalizeVal((val as any)[k], refChild);
-            }
-        }
-        return copy;
-    }
-    return val;
-}
-
-async function testProxyObject(obj: any): Promise<any> {
-    const results: any = {};
-    const propsToTest = ['a', 'b', 'private', 'foo', 'x', 'y'];
-    for (const prop of propsToTest) {
-        try {
-            results[`get_${prop}`] = obj[prop];
-        } catch (e: any) {
-            results[`get_${prop}_error`] = e.name || e.message;
-        }
-
-        try {
-            results[`reflect_get_${prop}`] = Reflect.get(obj, prop);
-        } catch (e: any) {
-            results[`reflect_get_${prop}_error`] = e.name || e.message;
-        }
-
-        try {
-            results[`reflect_has_${prop}`] = Reflect.has(obj, prop);
-        } catch (e: any) {
-            results[`reflect_has_${prop}_error`] = e.name || e.message;
-        }
-    }
-    const valsToTest = [10, 'string', false];
-    for (const prop of ['a', 'value']) {
-        for (const val of valsToTest) {
-            try {
-                obj[prop] = val;
-                results[`set_${prop}_${typeof val}`] = obj[prop];
-            } catch (e: any) {
-                results[`set_${prop}_${typeof val}_error`] = e.name || e.message;
-            }
-
-            try {
-                const setRes = Reflect.set(obj, prop, val);
-                results[`reflect_set_${prop}_${typeof val}`] = setRes;
-            } catch (e: any) {
-                results[`reflect_set_${prop}_${typeof val}_error`] = e.name || e.message;
-            }
-        }
-    }
-
-    try {
-        results[`reflect_ownKeys`] = Reflect.ownKeys(obj);
-    } catch (e: any) {
-        results[`reflect_ownKeys_error`] = e.name || e.message;
-    }
-
-    return results;
-}
-
-export async function verifyEquivalence(
-    originalJsCode: string,
-    fvmBytecode: Uint8Array,
-    opcodeMap: number[]
-): Promise<void> {
-    const cleanJsCode = originalJsCode.trim();
-    const functionName = cleanJsCode.match(/function\s+(\w+)/)?.[1] || 
-                         cleanJsCode.match(/function\*\s+(\w+)/)?.[1] || 
-                         'defaultFunc';
-    
-    let transpileRes;
-    try {
-        transpileRes = transpile(originalJsCode, {
-            functionName,
-            filePath: 'test.js',
-            verifyEquivalence: false
-        });
-    } catch (e) {
-        verifyEquivalenceSync(originalJsCode, fvmBytecode, opcodeMap);
-        return;
-    }
-    
-    const { jsWrapper } = transpileRes;
-    const isSplit = jsWrapper.includes('_split');
-    const isProxy = jsWrapper.includes('_proxy');
-    
-    if (!isSplit && !isProxy) {
-        verifyEquivalenceSync(originalJsCode, fvmBytecode, opcodeMap);
-        return;
-    }
-    
-    (global as any).__fortress_latest_bytecode = fvmBytecode;
-    (global as any).__fortress_latest_opcodeMap = Array.from(opcodeMap);
-    
-    const builtins = `const Symbol = (desc) => "__fortress_sym_" + desc;`;
-    let originalFunc: Function;
-    try {
-        originalFunc = new Function(`${builtins}; return (${cleanJsCode})`)();
-    } catch (e) {
-        originalFunc = new Function(`${builtins}; ${cleanJsCode}; return ${cleanJsCode.match(/function\s+(\w+)/)?.[1] || 'defaultFunc'};`)();
-    }
-    
-    const mockRequire = (id: string) => {
-        if (id.includes('client')) {
-            return {
-                FortressClient: {
-                    init: async () => {
-                        return {
-                            execute: async (executeArgs: any[]) => {
-                                const actualArgs = executeArgs.slice(1);
-                                return runFvmSync(fvmBytecode, opcodeMap, actualArgs);
-                            }
-                        };
-                    }
-                }
-            };
-        }
-        return require(id);
-    };
-    
-    const wrappedJsCode = jsWrapper.replace("module.exports =", "const wrapperFunc =") + "\n; return wrapperFunc;";
-    let wrapperFunc;
-    try {
-        wrapperFunc = new Function("require", "process", wrappedJsCode)(mockRequire, process);
-    } catch (e: any) {
-        console.error("FAILED TO EVALUATE wrappedJsCode:");
-        console.error(wrappedJsCode);
-        throw e;
-    }
-    
-    const testInputs = [
-        0, 
-        1, 
-        -1, 
-        42, 
-        "", 
-        "hello", 
-        [], 
-        [1, 2, 3], 
-        {}, 
-        { a: 1 }, 
-        true, 
-        false, 
-        null
-    ];
-    
-    const arity = originalFunc.length;
-    
-    for (const input of testInputs) {
-        let jsError: any = null;
-        let jsRes: any = null;
-        const args = arity > 0 ? Array.from({ length: arity }, () => JSON.parse(JSON.stringify(input))) : [JSON.parse(JSON.stringify(input))];
-        
-        try {
-            jsRes = originalFunc(...args);
-            if (jsRes && typeof jsRes.then === 'function') {
-                jsRes = await jsRes;
-            }
-        } catch (e: any) {
-            jsError = e.message;
-        }
-        
-        let fvmError: any = null;
-        let fvmRes: any = null;
-        try {
-            fvmRes = wrapperFunc(...args);
-            if (fvmRes && typeof fvmRes.then === 'function') {
-                fvmRes = await fvmRes;
-            }
-        } catch (e: any) {
-            fvmError = e.message;
-        }
-        
-        if (isProxy) {
-            let jsProxyResult: any = null;
-            let fvmProxyResult: any = null;
-            
-            if (jsError === null && jsRes && typeof jsRes === 'object') {
-                jsProxyResult = await testProxyObject(jsRes);
-            } else if (jsError === null) {
-                jsProxyResult = jsRes;
-            }
-            if (fvmError === null && fvmRes && typeof fvmRes === 'object') {
-                fvmProxyResult = await testProxyObject(fvmRes);
-            } else if (fvmError === null) {
-                fvmProxyResult = fvmRes;
-            }
-            
-            const normJs = normalizeVal(jsProxyResult, jsProxyResult);
-            const normFvm = normalizeVal(fvmProxyResult, jsProxyResult);
-            const jsResStr = JSON.stringify(normJs);
-            const fvmResStr = JSON.stringify(normFvm);
-            
-            if (jsResStr !== fvmResStr || (jsError !== null) !== (fvmError !== null)) {
-                console.error("\n==================================================");
-                console.error("VERIFICATION FAILURE DETECTED FOR PROXY INPUT: ", input);
-                console.error("JavaScript Error: ", jsError);
-                console.error("FVM Error:        ", fvmError);
-                console.error("JS Proxy ops:     ", normJs);
-                console.error("FVM Proxy ops:    ", normFvm);
-                console.error("==================================================\n");
-                throw new Error(`Equivalence verification failed for Proxy input: ${JSON.stringify(input)}`);
-            }
-        } else {
-            const normJs = normalizeVal(jsRes, jsRes);
-            const normFvm = normalizeVal(fvmRes, jsRes);
-            let jsResStr = JSON.stringify(normJs);
-            let fvmResStr = JSON.stringify(normFvm);
-            if (jsResStr) jsResStr = jsResStr.replace(/undefined/g, "null");
-            if (fvmResStr) fvmResStr = fvmResStr.replace(/undefined/g, "null");
-            
-            const sameError = (jsError !== null) === (fvmError !== null);
-            const sameResult = jsResStr === fvmResStr;
-            
-            if (!sameError || (!jsError && !sameResult)) {
-                console.error("\n==================================================");
-                console.error("VERIFICATION FAILURE DETECTED FOR SPLIT/ASYNC INPUT: ", input);
-                console.error("JavaScript Output:", jsRes);
-                console.error("JavaScript Error: ", jsError);
-                console.error("FVM Output:       ", fvmRes);
-                console.error("FVM Error:        ", fvmError);
-                console.error("==================================================\n");
-                throw new Error(`Equivalence verification failed for split/async input: ${JSON.stringify(input)}`);
-            }
-        }
-    }
-    console.log("[VERIFIER] Async equivalence verification passed successfully!");
-}
-
-function preparePayload(obj: any, visited: Map<any, any> = new Map()): any {
-    if (obj === null || obj === undefined) return obj;
-    if (typeof SharedArrayBuffer !== 'undefined' && obj instanceof SharedArrayBuffer) {
-        return {
-            __is_sab: true,
-            buffer: Array.from(new Uint8Array(obj))
-        };
-    }
-    if (obj && obj.__is_sab) {
-        return {
-            __is_sab: true,
-            buffer: preparePayload(obj.buffer, visited)
-        };
-    }
-    if (ArrayBuffer.isView(obj)) {
-        obj = Array.from(obj as any);
-    }
-    if (typeof obj !== 'object') return obj;
-    let isFortressPx = false;
-    let target = obj;
-    try {
-        if (obj['__is_fortress_' + 'proxy']) {
-            isFortressPx = true;
-            target = obj['__' + 'proxy_target'];
-        }
-    } catch (e) {}
-    if (isFortressPx) {
-        return preparePayload(target, visited);
-    }
-    if (visited.has(obj)) return visited.get(obj);
-    if (Array.isArray(obj)) {
-        const cloned: any[] = [];
-        visited.set(obj, cloned);
-        for (let i = 0; i < obj.length; i++) {
-            cloned.push(preparePayload(obj[i], visited));
-        }
-        return cloned;
-    }
-    const keys = Reflect.ownKeys(obj).filter(k => k !== '__ownKeys');
-    const cloned: any = {};
-    visited.set(obj, cloned);
-    for (const k of keys) {
-        cloned[k] = preparePayload((obj as any)[k], visited);
-    }
-    cloned.__ownKeys = keys.map(k => typeof k === 'symbol' ? (k.description || k.toString()) : k);
-    return cloned;
-}
-
-function runFvmSync(code: Uint8Array, opcodeMap: number[], args: any[]): any {
-    const seen = new Set();
-    const inputJson = JSON.stringify(preparePayload(args), (key, value) => {
-        if (value !== null && typeof value === 'object') {
-            if (seen.has(value)) {
-                return "[Circular]";
-            }
-            seen.add(value);
-        }
-        return value;
-    });
-    if (code.length > 0 && code.length % 288 === 0) {
-        const newCode = new Uint8Array(code.length + 1);
-        newCode.set(code);
-        newCode[code.length] = 0;
-        code = newCode;
-    }
-    const hashBytes = crypto.createHash('sha256').update(code).digest();
-    
-    // Set payload hash in VM
-    vmNode.set_payload_hash(new Uint8Array(hashBytes));
-    
-    const dummyPng = new Uint8Array(1024);
-    const mapUint8 = new Uint8Array(opcodeMap);
-    
-    vmNode.init_crypto_with_key(new Uint8Array(32), new Uint8Array(32), new Uint8Array(32), 0);
-    try {
-        const resStr = vmNode.execute(code, dummyPng, inputJson, mapUint8);
-        let res;
-        try {
-            res = JSON.parse(resStr);
-        } catch (parseErr: any) {
-            console.error("JSON PARSE ERROR on resStr:", resStr);
-            throw parseErr;
-        }
-        if (res && res.error) {
-            throw new Error(res.error);
-        }
-        return res;
-    } finally {
-        vmNode.clear_crypto();
-    }
-}
+export { verifyEquivalenceSync, verifyEquivalence } from './transpiler/verifier';

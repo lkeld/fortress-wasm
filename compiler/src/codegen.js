@@ -655,8 +655,10 @@ var CodeGenerator = /** @class */ (function () {
                         }
                     }
                     switch (expr.operator) {
-                        case '*':
-                            if (process.env.DEV_MODE === 'true' || isFloatMath) {
+                        case '*': {
+                            var isIntMath = this.isIntExpression(expr.left) && this.isIntExpression(expr.right);
+                            var useMba = process.env.DEV_MODE !== 'true' && isIntMath;
+                            if (!useMba) {
                                 this.emit(opcodes_1.OpCode.Mul);
                             }
                             else {
@@ -714,8 +716,10 @@ var CodeGenerator = /** @class */ (function () {
                                 this.emit(opcodes_1.OpCode.Add);
                             }
                             break;
+                        }
                         case '/': {
-                            var useMba = process.env.DEV_MODE !== 'true' && !isFloatMath;
+                            var isIntMath = this.isIntExpression(expr.left) && this.isIntExpression(expr.right);
+                            var useMba = process.env.DEV_MODE !== 'true' && isIntMath;
                             if (useMba) {
                                 /*
                                  * Mathematical Proof of Equivalence for Division Polynomial MBA Obfuscation:
@@ -813,6 +817,9 @@ var CodeGenerator = /** @class */ (function () {
                         case '==':
                             this.emit(opcodes_1.OpCode.Eq);
                             break;
+                        case '===':
+                            this.emit(opcodes_1.OpCode.StrictEq);
+                            break;
                         case '<':
                             this.emit(opcodes_1.OpCode.Lt);
                             break;
@@ -827,6 +834,9 @@ var CodeGenerator = /** @class */ (function () {
                             break;
                         case '!=':
                             this.emit(opcodes_1.OpCode.Neq);
+                            break;
+                        case '!==':
+                            this.emit(opcodes_1.OpCode.StrictNeq);
                             break;
                         case '&&':
                             this.emit(opcodes_1.OpCode.And);

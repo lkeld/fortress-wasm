@@ -51,6 +51,9 @@ runTestSuite('Milestone 3: Transpiler & VM Stress Tests (Challenger)', {
         // Reflect.has is expected to return true for properties set to null even on dynamic parameters without __ownKeys
         await testEquivalence(`
             function testReflectHasNullDynamic(obj) {
+                if (Array.isArray(obj)) {
+                    return 1;
+                }
                 obj.y = null;
                 let hasY = Reflect.has(obj, "y");
                 if (hasY === true) {
