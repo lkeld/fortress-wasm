@@ -1,7 +1,22 @@
 import * as vm from 'vm';
 import * as crypto from 'crypto';
+import * as path from 'path';
+import * as Module from 'module';
 import { transpile } from '../index';
 import { verifierInstance } from '../verifier';
+
+// Mock the native FFI 'env' module for the Rust WASM VM Node wrapper
+const originalRequire = (Module as any).prototype.require;
+(Module as any).prototype.require = function (this: any, id: string) {
+    if (id === 'env') {
+        return {
+            native_call: function () {
+                return "{}";
+            }
+        };
+    }
+    return originalRequire.apply(this, arguments);
+};
 
 const vmNode = require('../../../../pkg-node/vm_core.js');
 
@@ -421,7 +436,7 @@ export async function verifyEquivalence(
         }
         if (id === 'crypto') return crypto;
         if (id === '../../pkg-node/vm_core.js' || id.endsWith('pkg-node/vm_core.js')) {
-            return require('/Users/luke/Desktop/fortress-wasm/pkg-node/vm_core.js');
+            return require(path.resolve(__dirname, '../../../../pkg-node/vm_core.js'));
         }
         throw new Error(`Blocked require: ${id}`);
     };

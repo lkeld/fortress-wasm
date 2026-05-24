@@ -1039,36 +1039,48 @@ async function injectNextCsp(filePath, isTS) {
     }
     
     if (!options.headers) {
-      options.headers = parseExpression(`async () => {
-        return [
-          {
-            source: '/(.*)',
-            headers: [
-              {
-                key: 'Content-Security-Policy',
-                value: "worker-src 'self' blob:;"
-              }
-            ]
-          }
-        ];
-      }`);
+      options.headers = parseExpression(`async () => [
+        {
+          source: '/(.*)',
+          headers: [
+            {
+              key: 'Content-Security-Policy',
+              value: "worker-src 'self' blob:;"
+            }
+          ]
+        }
+      ]`);
     }
     await writeFile(mod, filePath);
     
     let updated = fs.readFileSync(filePath, 'utf8');
     updated = updated.replace(
-      "worker-src 'self' blob:;",
+      /['"]worker-src ['"]self['"] blob:;['"]/g,
       "/* fortress-wasm-start */ \"worker-src 'self' blob:;\" /* fortress-wasm-end */"
     );
     fs.writeFileSync(filePath, updated);
   } catch (e) {
     console.error(`[Fortress] Magicast failed for Next.js CSP: ${e.message}`);
     if (!original.includes('fortress-wasm-start')) {
-      const fallback = original.replace(
-        /module\.exports\s*=\s*\{/,
-        `module.exports = {\n  /* fortress-wasm-start */\n  async headers() {\n    return [\n      {\n        source: '/(.*)',\n        headers: [\n          {\n            key: 'Content-Security-Policy',\n            value: "worker-src 'self' blob:;"\n          }\n        ]\n      }\n    ];\n  },\n  /* fortress-wasm-end */`
-      );
-      if (validateFileSyntax(filePath, fallback, isTS)) {
+      let fallback = original;
+      if (original.match(/module\.exports\s*=\s*\{/)) {
+        fallback = original.replace(
+          /module\.exports\s*=\s*\{/,
+          `module.exports = {\n  /* fortress-wasm-start */\n  async headers() {\n    return [\n      {\n        source: '/(.*)',\n        headers: [\n          {\n            key: 'Content-Security-Policy',\n            value: "worker-src 'self' blob:;"\n          }\n        ]\n      }\n    ];\n  },\n  /* fortress-wasm-end */`
+        );
+      } else if (original.match(/export\s+default\s*\{/)) {
+        fallback = original.replace(
+          /export\s+default\s*\{/,
+          `export default {\n  /* fortress-wasm-start */\n  async headers() {\n    return [\n      {\n        source: '/(.*)',\n        headers: [\n          {\n            key: 'Content-Security-Policy',\n            value: "worker-src 'self' blob:;"\n          }\n        ]\n      }\n    ];\n  },\n  /* fortress-wasm-end */`
+        );
+      } else if (original.match(/(?:const|let|var)\s+nextConfig(?:\s*:\s*\w+)?\s*=\s*\{/)) {
+        fallback = original.replace(
+          /(?:const|let|var)\s+nextConfig(?:\s*:\s*\w+)?\s*=\s*\{/,
+          `const nextConfig = {\n  /* fortress-wasm-start */\n  async headers() {\n    return [\n      {\n        source: '/(.*)',\n        headers: [\n          {\n            key: 'Content-Security-Policy',\n            value: "worker-src 'self' blob:;"\n          }\n        ]\n      }\n    ];\n  },\n  /* fortress-wasm-end */`
+        );
+      }
+      
+      if (fallback !== original && validateFileSyntax(filePath, fallback, isTS)) {
         fs.writeFileSync(filePath, fallback);
       } else {
         console.log(`\nManual Instruction for next.config.js: Add CSP 'worker-src 'self' blob:;' to headers.`);
