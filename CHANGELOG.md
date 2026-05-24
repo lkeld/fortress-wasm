@@ -2,15 +2,17 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.5] - 2026-05-25
+
+### Fixed
+- Fixed the invalid commit SHAs specified for pinned third-party actions in `.github/workflows/publish.yml`, resolving workflow setup failures.
+- Fixed a segmentation fault crash in the verifier CLI and scanner by introducing a runtime subprocess probe check that falls back to Node's built-in `vm` module if `isolated-vm` is incompatible with the host environment.
+
 ## [1.5.4] - 2026-05-25
 
 ### Changed
 - **Dependencies Upgrade**: Merged Dependabot package upgrades. Bumped `argon2` to `^0.44.0`, `magicast` to `^0.5.3`, `@types/node` to `^25.9.1`, and `isolated-vm` optional dependency to `^6.1.2`.
 - **GitHub Actions Upgrades**: Upgraded `actions/checkout` and `actions/setup-node` workflow actions to `@v6`.
-
-### Fixed
-- Fixed the invalid commit SHAs specified for pinned third-party actions in `.github/workflows/publish.yml`, resolving workflow setup failures.
-- Fixed a segmentation fault crash in the verifier CLI and scanner by introducing a runtime subprocess probe check that falls back to Node's built-in `vm` module if `isolated-vm` is incompatible with the host environment.
 
 ## [1.5.3] - 2026-05-25
 
