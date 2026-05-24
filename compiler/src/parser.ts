@@ -175,7 +175,7 @@ export class Parser {
         return { type: 'Program', body };
     }
 
-    private parseStatement(): Statement {
+    public parseStatement(): Statement {
         switch (this.currentToken.type) {
             case TokenType.Let: return this.parseLetStatement();
             case TokenType.Return: return this.parseReturnStatement();

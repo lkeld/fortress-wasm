@@ -164,7 +164,7 @@ self.onmessage = async (e: MessageEvent) => {
             const resultJson = execute(
                 new Uint8Array(bytecode), 
                 handshakeBytes,
-                JSON.stringify(input || []),
+                JSON.stringify(Array.isArray(input) ? input : [input]),
                 new Uint8Array(opcodeMap)
             );
             self.postMessage({ type: 'EXECUTE_SUCCESS', result: resultJson });

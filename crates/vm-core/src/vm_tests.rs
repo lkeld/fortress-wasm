@@ -2251,5 +2251,76 @@ mod tests {
         let res = vm.run();
         assert!(res.is_ok());
     }
+
+    #[test]
+    fn test_float_list_indexing() {
+        let mut bytecode = vec![
+            OpCode::NewList as u8,
+            OpCode::PushInt as u8, 42, 0, 0, 0,
+            OpCode::ListPush as u8,
+            OpCode::Dup as u8,
+        ];
+        push_float(&mut bytecode, 0.0);
+        bytecode.push(OpCode::GetMember as u8);
+        
+        bytecode.push(OpCode::Pop as u8);
+        
+        push_float(&mut bytecode, 0.0);
+        bytecode.push(OpCode::PushInt as u8);
+        bytecode.extend_from_slice(&[99, 0, 0, 0]);
+        bytecode.push(OpCode::SetMember as u8);
+        
+        push_float(&mut bytecode, 0.0);
+        bytecode.push(OpCode::GetMember as u8);
+        bytecode.push(OpCode::Halt as u8);
+
+        let mut vm = setup_vm(bytecode);
+        let result = vm.run().unwrap();
+        match result {
+            Value::Int(i) => assert_eq!(i, 99),
+            _ => panic!("Expected Int 99, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_float_string_indexing() {
+        let mut bytecode = vec![];
+        push_string(&mut bytecode, "hello");
+        push_float(&mut bytecode, 1.0);
+        bytecode.push(OpCode::GetMember as u8);
+        bytecode.push(OpCode::Halt as u8);
+
+        let mut vm = setup_vm(bytecode);
+        let result = vm.run().unwrap();
+        match result {
+            Value::Str(s) => assert_eq!(&*s, "e"),
+            _ => panic!("Expected Str 'e', got {:?}", result),
+        }
+    }
+    #[test]
+    fn test_scientific_notation_formatting() {
+        let mut bytecode = vec![
+            OpCode::NewList as u8,
+        ];
+        push_float(&mut bytecode, 1e-7);
+        bytecode.push(OpCode::ListPush as u8);
+        push_float(&mut bytecode, 1e21);
+        bytecode.push(OpCode::ListPush as u8);
+        push_float(&mut bytecode, 0.0001);
+        bytecode.push(OpCode::ListPush as u8);
+        push_float(&mut bytecode, -0.0);
+        bytecode.push(OpCode::ListPush as u8);
+        
+        push_string(&mut bytecode, ",");
+        bytecode.push(OpCode::ArrJoin as u8);
+        bytecode.push(OpCode::Halt as u8);
+        
+        let mut vm = setup_vm(bytecode);
+        let result = vm.run().unwrap();
+        match result {
+            Value::Str(s) => assert_eq!(&*s, "1e-7,1e+21,0.0001,0"),
+            _ => panic!("Expected Str, got {:?}", result),
+        }
+    }
 }
 

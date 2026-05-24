@@ -36,6 +36,21 @@ export class CodeGenerator {
             this.invertedMap[this.opcodeMap[i]] = i;
         }
 
+        const hasTopLevelCode = program.body.some(stmt => stmt.type !== 'FunctionDeclaration');
+        let numParams = 0;
+        if (!hasTopLevelCode && program.body.length > 0) {
+            const firstFunc = program.body.find(stmt => stmt.type === 'FunctionDeclaration');
+            if (firstFunc && firstFunc.type === 'FunctionDeclaration') {
+                numParams = firstFunc.params.length;
+                // Pre-allocate slots 0..numParams-1
+                for (let i = 0; i < numParams; i++) {
+                    const paramName = firstFunc.params[i].name;
+                    this.locals.set(paramName, i);
+                    this.localTypes.set(paramName, 'any');
+                }
+            }
+        }
+
         // Initialise array of diversified dummy variables to defeat taint tracking
         for (let i = 0; i < 7; i++) {
             const name = `_mba_dummy_${i}`;
@@ -54,13 +69,27 @@ export class CodeGenerator {
             }
         }
         
-        this.emit(OpCode.Halt);
+        let entryJumpOffset = -1;
+        if (!hasTopLevelCode && this.functionBodies.length > 0) {
+            entryJumpOffset = this.code.length;
+            this.emit(OpCode.Jump, 0);
+        } else {
+            this.emit(OpCode.Halt);
+        }
         
         // Emit functions after the main program
         for (const funcStmt of this.functionBodies) {
             this.visitStatement(funcStmt);
         }
         
+        if (entryJumpOffset !== -1 && this.functionBodies.length > 0) {
+            const firstFuncName = (this.functionBodies[0] as any).name.name;
+            const target = this.functions.get(firstFuncName);
+            if (target !== undefined && target !== 0) {
+                this.patchJump(entryJumpOffset + 1, target);
+            }
+        }
+
         // Patch all unresolved function calls
         for (const call of this.unresolvedCalls) {
             const target = this.functions.get(call.name);
@@ -167,6 +196,27 @@ export class CodeGenerator {
         }
     }
 
+    private deriveKeystream(nonce: Uint8Array, len: number): Uint8Array {
+        const keystream = new Uint8Array(len);
+        const sessionKey = new Uint8Array(32);
+        let offset = 0;
+        let blockIndex = 0;
+        while (offset < len) {
+            const hasher = crypto.createHash('sha256');
+            hasher.update(sessionKey);
+            hasher.update(nonce);
+            const blockBuf = Buffer.alloc(4);
+            blockBuf.writeUInt32LE(blockIndex);
+            hasher.update(blockBuf);
+            const block = hasher.digest();
+            for (let k = 0; k < block.length && offset < len; k++) {
+                keystream[offset++] = block[k];
+            }
+            blockIndex++;
+        }
+        return keystream;
+    }
+
     private emitString(value: string) {
         this.code.push(this.opcodeMap[OpCode.PushString]);
         const encoder = new TextEncoder();
@@ -184,9 +234,11 @@ export class CodeGenerator {
         this.code.push((bytes.length >> 16) & 0xFF);
         this.code.push((bytes.length >> 24) & 0xFF);
         
-        // Write string bytes in plaintext (scrambler.ts will XOR-encrypt them using the 32-byte session key)
+        const keystream = this.deriveKeystream(nonce, bytes.length);
+        
+        // Write string bytes XOR-encrypted with the all-zeros session key
         for (let i = 0; i < bytes.length; i++) {
-            this.code.push(bytes[i]);
+            this.code.push(bytes[i] ^ keystream[i]);
         }
     }
 
@@ -781,6 +833,252 @@ export class CodeGenerator {
                 break;
             case 'CallExpression':
                 if (expr.callee.type === 'Identifier') {
+                    const name = expr.callee.name;
+
+                    // Single-argument Math opcodes
+                    const mathUnaryOps: Record<string, OpCode> = {
+                        MathFloor: OpCode.MathFloor,
+                        MathCeil: OpCode.MathCeil,
+                        MathRound: OpCode.MathRound,
+                        MathAbs: OpCode.MathAbs,
+                        MathSqrt: OpCode.MathSqrt,
+                        MathLog: OpCode.MathLog,
+                        MathLog2: OpCode.MathLog2,
+                        MathLog10: OpCode.MathLog10,
+                        MathSin: OpCode.MathSin,
+                        MathCos: OpCode.MathCos,
+                        MathTan: OpCode.MathTan,
+                        MathAsin: OpCode.MathAsin,
+                        MathAcos: OpCode.MathAcos,
+                        MathAtan: OpCode.MathAtan,
+                        MathSign: OpCode.MathSign,
+                        MathTrunc: OpCode.MathTrunc,
+                        MathExp: OpCode.MathExp,
+                        MathExpm1: OpCode.MathExpm1,
+                        MathLog1p: OpCode.MathLog1p,
+                        MathSinh: OpCode.MathSinh,
+                        MathCosh: OpCode.MathCosh,
+                        MathTanh: OpCode.MathTanh,
+                        MathCbrt: OpCode.MathCbrt,
+                        MathClz32: OpCode.MathClz32,
+                        MathFround: OpCode.MathFround,
+                    };
+
+                    if (mathUnaryOps[name] !== undefined) {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(mathUnaryOps[name]);
+                        break;
+                    }
+
+                    // Two-argument Math opcodes
+                    const mathBinaryOps: Record<string, OpCode> = {
+                        MathPow: OpCode.MathPow,
+                        MathAtan2: OpCode.MathAtan2,
+                        MathMax: OpCode.MathMax,
+                        MathMin: OpCode.MathMin,
+                        MathHypot: OpCode.MathHypot,
+                        MathImul: OpCode.MathImul,
+                    };
+
+                    if (mathBinaryOps[name] !== undefined) {
+                        this.visitExpression(expr.arguments[0]); // Pushed first (base / y / a)
+                        this.visitExpression(expr.arguments[1]); // Pushed second (exponent / x / b)
+                        this.emit(mathBinaryOps[name]);
+                        break;
+                    }
+
+                    if (name === 'MathRandom') {
+                        this.emit(OpCode.MathRandom);
+                        break;
+                    }
+
+                    // String operations
+                    if (name === 'StrIndexOf' || name === 'StrLastIndexOf' || name === 'StrSplit' || name === 'StrIncludes' || name === 'StrStartsWith' || name === 'StrEndsWith' || name === 'StrConcat') {
+                        // Two string arguments: [string, searchVal]
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        const strOps: Record<string, OpCode> = {
+                            StrIndexOf: OpCode.StrIndexOf,
+                            StrLastIndexOf: OpCode.StrLastIndexOf,
+                            StrSplit: OpCode.StrSplit,
+                            StrIncludes: OpCode.StrIncludes,
+                            StrStartsWith: OpCode.StrStartsWith,
+                            StrEndsWith: OpCode.StrEndsWith,
+                            StrConcat: OpCode.StrConcat,
+                        };
+                        this.emit(strOps[name]);
+                        break;
+                    }
+
+                    if (name === 'StrSlice' || name === 'StrSubstring') {
+                        // Three arguments: [string, start, end]
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        this.visitExpression(expr.arguments[2]);
+                        this.emit(name === 'StrSlice' ? OpCode.StrSlice : OpCode.StrSubstring);
+                        break;
+                    }
+
+                    if (name === 'StrReplace' || name === 'StrReplaceAll' || name === 'StrPadStart' || name === 'StrPadEnd') {
+                        // Three arguments: [string, search/len, replacement/pad]
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        this.visitExpression(expr.arguments[2]);
+                        const strOps3: Record<string, OpCode> = {
+                            StrReplace: OpCode.StrReplace,
+                            StrReplaceAll: OpCode.StrReplaceAll,
+                            StrPadStart: OpCode.StrPadStart,
+                            StrPadEnd: OpCode.StrPadEnd,
+                        };
+                        this.emit(strOps3[name]);
+                        break;
+                    }
+
+                    if (name === 'StrToLower' || name === 'StrToUpper' || name === 'StrTrim' || name === 'StrTrimStart' || name === 'StrTrimEnd') {
+                        this.visitExpression(expr.arguments[0]);
+                        const strUnary: Record<string, OpCode> = {
+                            StrToLower: OpCode.StrToLower,
+                            StrToUpper: OpCode.StrToUpper,
+                            StrTrim: OpCode.StrTrim,
+                            StrTrimStart: OpCode.StrTrimStart,
+                            StrTrimEnd: OpCode.StrTrimEnd,
+                        };
+                        this.emit(strUnary[name]);
+                        break;
+                    }
+
+                    if (name === 'StrRepeat' || name === 'StrCharCodeAt' || name === 'StrAt') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        const strBinary: Record<string, OpCode> = {
+                            StrRepeat: OpCode.StrRepeat,
+                            StrCharCodeAt: OpCode.StrCharCodeAt,
+                            StrAt: OpCode.StrAt,
+                        };
+                        this.emit(strBinary[name]);
+                        break;
+                    }
+
+                    if (name === 'StrFromCharCode') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(OpCode.StrFromCharCode);
+                        break;
+                    }
+
+                    // Regex operations
+                    if (name === 'RegExTest' || name === 'RegExMatch' || name === 'RegExSplit') {
+                        this.visitExpression(expr.arguments[0]); // pattern string
+                        this.visitExpression(expr.arguments[1]); // target string
+                        const regexOps: Record<string, OpCode> = {
+                            RegExTest: OpCode.RegExTest,
+                            RegExMatch: OpCode.RegExMatch,
+                            RegExSplit: OpCode.RegExSplit,
+                        };
+                        this.emit(regexOps[name]);
+                        break;
+                    }
+
+                    if (name === 'RegExReplace') {
+                        this.visitExpression(expr.arguments[0]); // pattern string
+                        this.visitExpression(expr.arguments[1]); // target string
+                        this.visitExpression(expr.arguments[2]); // replacement string
+                        this.emit(OpCode.RegExReplace);
+                        break;
+                    }
+
+                    // JSON and TypeOf
+                    if (name === 'JSONParse') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(OpCode.JSONParse);
+                        break;
+                    }
+
+                    if (name === 'JSONStringify' || name === 'json_stringify') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(OpCode.JSONStringify);
+                        break;
+                    }
+
+                    if (name === 'TypeOf') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(OpCode.TypeOf);
+                        break;
+                    }
+
+                    // Array operations
+                    if (name === 'ArrIndexOf' || name === 'ArrLastIndexOf' || name === 'ArrIncludes' || name === 'ArrSlice') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.visitExpression(expr.arguments[1]); // search / start
+                        if (expr.arguments[2]) {
+                            this.visitExpression(expr.arguments[2]); // end
+                        } else if (name === 'ArrSlice') {
+                            this.emit(OpCode.PushNull); // Default end is null
+                        }
+                        const arrOps: Record<string, OpCode> = {
+                            ArrIndexOf: OpCode.ArrIndexOf,
+                            ArrLastIndexOf: OpCode.ArrLastIndexOf,
+                            ArrIncludes: OpCode.ArrIncludes,
+                            ArrSlice: OpCode.ArrSlice,
+                        };
+                        this.emit(arrOps[name]);
+                        break;
+                    }
+
+                    if (name === 'ArrReverse' || name === 'ArrSortNumeric' || name === 'ArrSortString' || name === 'ArrFlat') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        if (name === 'ArrFlat') {
+                            if (expr.arguments[1]) {
+                                this.visitExpression(expr.arguments[1]); // depth
+                            } else {
+                                this.emit(OpCode.PushInt, 1); // Default depth is 1
+                            }
+                        }
+                        const arrUnary: Record<string, OpCode> = {
+                            ArrReverse: OpCode.ArrReverse,
+                            ArrSortNumeric: OpCode.ArrSortNumeric,
+                            ArrSortString: OpCode.ArrSortString,
+                            ArrFlat: OpCode.ArrFlat,
+                        };
+                        this.emit(arrUnary[name]);
+                        break;
+                    }
+
+                    if (name === 'ArrJoin') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.visitExpression(expr.arguments[1]); // separator
+                        this.emit(OpCode.ArrJoin);
+                        break;
+                    }
+
+                    if (name === 'ArrFill') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.visitExpression(expr.arguments[1]); // value
+                        this.visitExpression(expr.arguments[2]); // start
+                        this.visitExpression(expr.arguments[3]); // end
+                        this.emit(OpCode.ArrFill);
+                        break;
+                    }
+
+                    if (name === 'ArrPush' || name === 'ArrUnshift') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.visitExpression(expr.arguments[1]); // item
+                        this.emit(name === 'ArrPush' ? OpCode.ArrPush : OpCode.ArrUnshift);
+                        break;
+                    }
+
+                    if (name === 'ArrPop' || name === 'ArrShift') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.emit(name === 'ArrPop' ? OpCode.ArrPop : OpCode.ArrShift);
+                        break;
+                    }
+
+                    if (name === 'listPush') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        this.emit(OpCode.ListPush);
+                        break;
+                    }
+
                     if (expr.callee.name === '__native_call') {
                         // expects id, arg_count inline. First argument is id (must be Literal).
                         const idNode = expr.arguments[0];

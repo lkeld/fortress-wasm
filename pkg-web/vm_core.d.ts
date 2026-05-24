@@ -7,6 +7,8 @@ export function execute(bytecode: Uint8Array, handshake_header: Uint8Array, inpu
 
 export function generate_client_keypair(): Uint8Array;
 
+export function get_client_private_key(): Uint8Array;
+
 export function init_crypto(image_bytes: Uint8Array, _width: number, _height: number, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;
 
 export function init_crypto_with_key(stego_key_bytes: Uint8Array, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;
@@ -24,6 +26,7 @@ export interface InitOutput {
     readonly clear_crypto: () => void;
     readonly execute: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly generate_client_keypair: (a: number) => void;
+    readonly get_client_private_key: (a: number) => void;
     readonly init_crypto: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly init_crypto_with_key: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
     readonly set_client_private_key: (a: number, b: number) => number;

@@ -58,6 +58,24 @@ function generate_client_keypair() {
 exports.generate_client_keypair = generate_client_keypair;
 
 /**
+ * @returns {Uint8Array}
+ */
+function get_client_private_key() {
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        wasm.get_client_private_key(retptr);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        var v1 = getArrayU8FromWasm0(r0, r1).slice();
+        wasm.__wbindgen_export4(r0, r1 * 1, 1);
+        return v1;
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+    }
+}
+exports.get_client_private_key = get_client_private_key;
+
+/**
  * @param {Uint8Array} image_bytes
  * @param {number} _width
  * @param {number} _height

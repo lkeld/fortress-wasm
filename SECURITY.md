@@ -74,6 +74,22 @@ Software-only protection cannot achieve the security of hardware enclaves. We re
 
 ---
 
+## VM Runtime Limitations
+
+**Strict Type Checking**
+Unlike V8 which performs automatic, loose type coercions (such as allowing addition/subtraction of mixed objects/arrays or indexing arrays with floats), the Fortress VM operates on strict type boundaries. Mismatched operand types in binary expressions or illegal operations will raise a `TypeError` rather than failing silently.
+
+**Array Float Indexing**
+All array and list indices must be 32-bit integers. Accessing or indexing lists/arrays using floating-point numbers with a non-zero fractional part will raise a `TypeError` instead of performing V8-style implicit casting.
+
+**Destructuring Default Values**
+JavaScript-style destructuring default value fallback logic (e.g. `let { a = 5 } = obj` when `a` is missing, or parameter level default values with null targets) is not supported at runtime. Variables fallback to `null` within the VM.
+
+**Standard Library Subsets**
+Only standard library functions explicitly defined in `stdlib.ts` (e.g. `Map`, `Set`, `Array.prototype.push`/`reverse`/`slice`/`concat`, `JSONStringify`, `TypeOf`) are supported. Unimplemented standard functions or async control flow constructs (such as async/await, promises) are unsupported.
+
+---
+
 ## Threat Model Assumptions
 
 **Capabilities we assume the attacker HAS:**

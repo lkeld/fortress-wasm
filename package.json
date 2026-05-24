@@ -20,6 +20,7 @@
     "test:verify": "node tests/e2e_overhaul/verify.test.js",
     "test:opcodes": "node tests/e2e_overhaul/opcodes.test.js",
     "test:sdk": "node tests/e2e_overhaul/sdk.test.js",
+    "test:complex": "node tests/e2e_overhaul/complex.test.js",
     "build:isa:dev": "DEV_MODE=true node scripts/generate_isa.js",
     "build:isa:prod": "node scripts/generate_isa.js",
     "build:compiler": "tsc -p compiler/tsconfig.json",

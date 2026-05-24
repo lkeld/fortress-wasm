@@ -4,6 +4,7 @@ export const memory: WebAssembly.Memory;
 export const clear_crypto: () => void;
 export const execute: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const generate_client_keypair: (a: number) => void;
+export const get_client_private_key: (a: number) => void;
 export const init_crypto: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
 export const init_crypto_with_key: (a: number, b: number, c: number, d: number, e: number, f: number, g: number) => void;
 export const set_client_private_key: (a: number, b: number) => number;

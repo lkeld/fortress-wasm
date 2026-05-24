@@ -7,6 +7,8 @@ export function execute(bytecode: Uint8Array, handshake_header: Uint8Array, inpu
 
 export function generate_client_keypair(): Uint8Array;
 
+export function get_client_private_key(): Uint8Array;
+
 export function init_crypto(image_bytes: Uint8Array, _width: number, _height: number, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;
 
 export function init_crypto_with_key(stego_key_bytes: Uint8Array, session_seed: Uint8Array, fingerprint: Uint8Array, epoch_day: number): void;

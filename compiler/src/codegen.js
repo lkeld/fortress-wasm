@@ -70,6 +70,20 @@ var CodeGenerator = /** @class */ (function () {
         for (var i = 0; i < 256; i++) {
             this.invertedMap[this.opcodeMap[i]] = i;
         }
+        var hasTopLevelCode = program.body.some(function (stmt) { return stmt.type !== 'FunctionDeclaration'; });
+        var numParams = 0;
+        if (!hasTopLevelCode && program.body.length > 0) {
+            var firstFunc = program.body.find(function (stmt) { return stmt.type === 'FunctionDeclaration'; });
+            if (firstFunc && firstFunc.type === 'FunctionDeclaration') {
+                numParams = firstFunc.params.length;
+                // Pre-allocate slots 0..numParams-1
+                for (var i = 0; i < numParams; i++) {
+                    var paramName = firstFunc.params[i].name;
+                    this.locals.set(paramName, i);
+                    this.localTypes.set(paramName, 'any');
+                }
+            }
+        }
         // Initialise array of diversified dummy variables to defeat taint tracking
         for (var i = 0; i < 7; i++) {
             var name_1 = "_mba_dummy_".concat(i);
@@ -88,11 +102,25 @@ var CodeGenerator = /** @class */ (function () {
                 this.visitStatement(stmt);
             }
         }
-        this.emit(opcodes_1.OpCode.Halt);
+        var entryJumpOffset = -1;
+        if (!hasTopLevelCode && this.functionBodies.length > 0) {
+            entryJumpOffset = this.code.length;
+            this.emit(opcodes_1.OpCode.Jump, 0);
+        }
+        else {
+            this.emit(opcodes_1.OpCode.Halt);
+        }
         // Emit functions after the main program
         for (var _b = 0, _c = this.functionBodies; _b < _c.length; _b++) {
             var funcStmt = _c[_b];
             this.visitStatement(funcStmt);
+        }
+        if (entryJumpOffset !== -1 && this.functionBodies.length > 0) {
+            var firstFuncName = this.functionBodies[0].name.name;
+            var target = this.functions.get(firstFuncName);
+            if (target !== undefined && target !== 0) {
+                this.patchJump(entryJumpOffset + 1, target);
+            }
         }
         // Patch all unresolved function calls
         for (var _d = 0, _e = this.unresolvedCalls; _d < _e.length; _d++) {
@@ -196,6 +224,26 @@ var CodeGenerator = /** @class */ (function () {
             this.code.push(bytes[i]);
         }
     };
+    CodeGenerator.prototype.deriveKeystream = function (nonce, len) {
+        var keystream = new Uint8Array(len);
+        var sessionKey = new Uint8Array(32);
+        var offset = 0;
+        var blockIndex = 0;
+        while (offset < len) {
+            var hasher = crypto.createHash('sha256');
+            hasher.update(sessionKey);
+            hasher.update(nonce);
+            var blockBuf = Buffer.alloc(4);
+            blockBuf.writeUInt32LE(blockIndex);
+            hasher.update(blockBuf);
+            var block = hasher.digest();
+            for (var k = 0; k < block.length && offset < len; k++) {
+                keystream[offset++] = block[k];
+            }
+            blockIndex++;
+        }
+        return keystream;
+    };
     CodeGenerator.prototype.emitString = function (value) {
         this.code.push(this.opcodeMap[opcodes_1.OpCode.PushString]);
         var encoder = new TextEncoder();
@@ -210,9 +258,10 @@ var CodeGenerator = /** @class */ (function () {
         this.code.push((bytes.length >> 8) & 0xFF);
         this.code.push((bytes.length >> 16) & 0xFF);
         this.code.push((bytes.length >> 24) & 0xFF);
-        // Write string bytes in plaintext (scrambler.ts will XOR-encrypt them using the 32-byte session key)
+        var keystream = this.deriveKeystream(nonce, bytes.length);
+        // Write string bytes XOR-encrypted with the all-zeros session key
         for (var i = 0; i < bytes.length; i++) {
-            this.code.push(bytes[i]);
+            this.code.push(bytes[i] ^ keystream[i]);
         }
     };
     CodeGenerator.prototype.resolveLocal = function (name) {
@@ -781,6 +830,230 @@ var CodeGenerator = /** @class */ (function () {
                 break;
             case 'CallExpression':
                 if (expr.callee.type === 'Identifier') {
+                    var name_2 = expr.callee.name;
+                    // Single-argument Math opcodes
+                    var mathUnaryOps = {
+                        MathFloor: opcodes_1.OpCode.MathFloor,
+                        MathCeil: opcodes_1.OpCode.MathCeil,
+                        MathRound: opcodes_1.OpCode.MathRound,
+                        MathAbs: opcodes_1.OpCode.MathAbs,
+                        MathSqrt: opcodes_1.OpCode.MathSqrt,
+                        MathLog: opcodes_1.OpCode.MathLog,
+                        MathLog2: opcodes_1.OpCode.MathLog2,
+                        MathLog10: opcodes_1.OpCode.MathLog10,
+                        MathSin: opcodes_1.OpCode.MathSin,
+                        MathCos: opcodes_1.OpCode.MathCos,
+                        MathTan: opcodes_1.OpCode.MathTan,
+                        MathAsin: opcodes_1.OpCode.MathAsin,
+                        MathAcos: opcodes_1.OpCode.MathAcos,
+                        MathAtan: opcodes_1.OpCode.MathAtan,
+                        MathSign: opcodes_1.OpCode.MathSign,
+                        MathTrunc: opcodes_1.OpCode.MathTrunc,
+                        MathExp: opcodes_1.OpCode.MathExp,
+                        MathExpm1: opcodes_1.OpCode.MathExpm1,
+                        MathLog1p: opcodes_1.OpCode.MathLog1p,
+                        MathSinh: opcodes_1.OpCode.MathSinh,
+                        MathCosh: opcodes_1.OpCode.MathCosh,
+                        MathTanh: opcodes_1.OpCode.MathTanh,
+                        MathCbrt: opcodes_1.OpCode.MathCbrt,
+                        MathClz32: opcodes_1.OpCode.MathClz32,
+                        MathFround: opcodes_1.OpCode.MathFround,
+                    };
+                    if (mathUnaryOps[name_2] !== undefined) {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(mathUnaryOps[name_2]);
+                        break;
+                    }
+                    // Two-argument Math opcodes
+                    var mathBinaryOps = {
+                        MathPow: opcodes_1.OpCode.MathPow,
+                        MathAtan2: opcodes_1.OpCode.MathAtan2,
+                        MathMax: opcodes_1.OpCode.MathMax,
+                        MathMin: opcodes_1.OpCode.MathMin,
+                        MathHypot: opcodes_1.OpCode.MathHypot,
+                        MathImul: opcodes_1.OpCode.MathImul,
+                    };
+                    if (mathBinaryOps[name_2] !== undefined) {
+                        this.visitExpression(expr.arguments[0]); // Pushed first (base / y / a)
+                        this.visitExpression(expr.arguments[1]); // Pushed second (exponent / x / b)
+                        this.emit(mathBinaryOps[name_2]);
+                        break;
+                    }
+                    if (name_2 === 'MathRandom') {
+                        this.emit(opcodes_1.OpCode.MathRandom);
+                        break;
+                    }
+                    // String operations
+                    if (name_2 === 'StrIndexOf' || name_2 === 'StrLastIndexOf' || name_2 === 'StrSplit' || name_2 === 'StrIncludes' || name_2 === 'StrStartsWith' || name_2 === 'StrEndsWith' || name_2 === 'StrConcat') {
+                        // Two string arguments: [string, searchVal]
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        var strOps = {
+                            StrIndexOf: opcodes_1.OpCode.StrIndexOf,
+                            StrLastIndexOf: opcodes_1.OpCode.StrLastIndexOf,
+                            StrSplit: opcodes_1.OpCode.StrSplit,
+                            StrIncludes: opcodes_1.OpCode.StrIncludes,
+                            StrStartsWith: opcodes_1.OpCode.StrStartsWith,
+                            StrEndsWith: opcodes_1.OpCode.StrEndsWith,
+                            StrConcat: opcodes_1.OpCode.StrConcat,
+                        };
+                        this.emit(strOps[name_2]);
+                        break;
+                    }
+                    if (name_2 === 'StrSlice' || name_2 === 'StrSubstring') {
+                        // Three arguments: [string, start, end]
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        this.visitExpression(expr.arguments[2]);
+                        this.emit(name_2 === 'StrSlice' ? opcodes_1.OpCode.StrSlice : opcodes_1.OpCode.StrSubstring);
+                        break;
+                    }
+                    if (name_2 === 'StrReplace' || name_2 === 'StrReplaceAll' || name_2 === 'StrPadStart' || name_2 === 'StrPadEnd') {
+                        // Three arguments: [string, search/len, replacement/pad]
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        this.visitExpression(expr.arguments[2]);
+                        var strOps3 = {
+                            StrReplace: opcodes_1.OpCode.StrReplace,
+                            StrReplaceAll: opcodes_1.OpCode.StrReplaceAll,
+                            StrPadStart: opcodes_1.OpCode.StrPadStart,
+                            StrPadEnd: opcodes_1.OpCode.StrPadEnd,
+                        };
+                        this.emit(strOps3[name_2]);
+                        break;
+                    }
+                    if (name_2 === 'StrToLower' || name_2 === 'StrToUpper' || name_2 === 'StrTrim' || name_2 === 'StrTrimStart' || name_2 === 'StrTrimEnd') {
+                        this.visitExpression(expr.arguments[0]);
+                        var strUnary = {
+                            StrToLower: opcodes_1.OpCode.StrToLower,
+                            StrToUpper: opcodes_1.OpCode.StrToUpper,
+                            StrTrim: opcodes_1.OpCode.StrTrim,
+                            StrTrimStart: opcodes_1.OpCode.StrTrimStart,
+                            StrTrimEnd: opcodes_1.OpCode.StrTrimEnd,
+                        };
+                        this.emit(strUnary[name_2]);
+                        break;
+                    }
+                    if (name_2 === 'StrRepeat' || name_2 === 'StrCharCodeAt' || name_2 === 'StrAt') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        var strBinary = {
+                            StrRepeat: opcodes_1.OpCode.StrRepeat,
+                            StrCharCodeAt: opcodes_1.OpCode.StrCharCodeAt,
+                            StrAt: opcodes_1.OpCode.StrAt,
+                        };
+                        this.emit(strBinary[name_2]);
+                        break;
+                    }
+                    if (name_2 === 'StrFromCharCode') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(opcodes_1.OpCode.StrFromCharCode);
+                        break;
+                    }
+                    // Regex operations
+                    if (name_2 === 'RegExTest' || name_2 === 'RegExMatch' || name_2 === 'RegExSplit') {
+                        this.visitExpression(expr.arguments[0]); // pattern string
+                        this.visitExpression(expr.arguments[1]); // target string
+                        var regexOps = {
+                            RegExTest: opcodes_1.OpCode.RegExTest,
+                            RegExMatch: opcodes_1.OpCode.RegExMatch,
+                            RegExSplit: opcodes_1.OpCode.RegExSplit,
+                        };
+                        this.emit(regexOps[name_2]);
+                        break;
+                    }
+                    if (name_2 === 'RegExReplace') {
+                        this.visitExpression(expr.arguments[0]); // pattern string
+                        this.visitExpression(expr.arguments[1]); // target string
+                        this.visitExpression(expr.arguments[2]); // replacement string
+                        this.emit(opcodes_1.OpCode.RegExReplace);
+                        break;
+                    }
+                    // JSON and TypeOf
+                    if (name_2 === 'JSONParse') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(opcodes_1.OpCode.JSONParse);
+                        break;
+                    }
+                    if (name_2 === 'JSONStringify' || name_2 === 'json_stringify') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(opcodes_1.OpCode.JSONStringify);
+                        break;
+                    }
+                    if (name_2 === 'TypeOf') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.emit(opcodes_1.OpCode.TypeOf);
+                        break;
+                    }
+                    // Array operations
+                    if (name_2 === 'ArrIndexOf' || name_2 === 'ArrLastIndexOf' || name_2 === 'ArrIncludes' || name_2 === 'ArrSlice') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.visitExpression(expr.arguments[1]); // search / start
+                        if (expr.arguments[2]) {
+                            this.visitExpression(expr.arguments[2]); // end
+                        }
+                        else if (name_2 === 'ArrSlice') {
+                            this.emit(opcodes_1.OpCode.PushNull); // Default end is null
+                        }
+                        var arrOps = {
+                            ArrIndexOf: opcodes_1.OpCode.ArrIndexOf,
+                            ArrLastIndexOf: opcodes_1.OpCode.ArrLastIndexOf,
+                            ArrIncludes: opcodes_1.OpCode.ArrIncludes,
+                            ArrSlice: opcodes_1.OpCode.ArrSlice,
+                        };
+                        this.emit(arrOps[name_2]);
+                        break;
+                    }
+                    if (name_2 === 'ArrReverse' || name_2 === 'ArrSortNumeric' || name_2 === 'ArrSortString' || name_2 === 'ArrFlat') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        if (name_2 === 'ArrFlat') {
+                            if (expr.arguments[1]) {
+                                this.visitExpression(expr.arguments[1]); // depth
+                            }
+                            else {
+                                this.emit(opcodes_1.OpCode.PushInt, 1); // Default depth is 1
+                            }
+                        }
+                        var arrUnary = {
+                            ArrReverse: opcodes_1.OpCode.ArrReverse,
+                            ArrSortNumeric: opcodes_1.OpCode.ArrSortNumeric,
+                            ArrSortString: opcodes_1.OpCode.ArrSortString,
+                            ArrFlat: opcodes_1.OpCode.ArrFlat,
+                        };
+                        this.emit(arrUnary[name_2]);
+                        break;
+                    }
+                    if (name_2 === 'ArrJoin') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.visitExpression(expr.arguments[1]); // separator
+                        this.emit(opcodes_1.OpCode.ArrJoin);
+                        break;
+                    }
+                    if (name_2 === 'ArrFill') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.visitExpression(expr.arguments[1]); // value
+                        this.visitExpression(expr.arguments[2]); // start
+                        this.visitExpression(expr.arguments[3]); // end
+                        this.emit(opcodes_1.OpCode.ArrFill);
+                        break;
+                    }
+                    if (name_2 === 'ArrPush' || name_2 === 'ArrUnshift') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.visitExpression(expr.arguments[1]); // item
+                        this.emit(name_2 === 'ArrPush' ? opcodes_1.OpCode.ArrPush : opcodes_1.OpCode.ArrUnshift);
+                        break;
+                    }
+                    if (name_2 === 'ArrPop' || name_2 === 'ArrShift') {
+                        this.visitExpression(expr.arguments[0]); // list
+                        this.emit(name_2 === 'ArrPop' ? opcodes_1.OpCode.ArrPop : opcodes_1.OpCode.ArrShift);
+                        break;
+                    }
+                    if (name_2 === 'listPush') {
+                        this.visitExpression(expr.arguments[0]);
+                        this.visitExpression(expr.arguments[1]);
+                        this.emit(opcodes_1.OpCode.ListPush);
+                        break;
+                    }
                     if (expr.callee.name === '__native_call') {
                         // expects id, arg_count inline. First argument is id (must be Literal).
                         var idNode = expr.arguments[0];

@@ -405,31 +405,33 @@ pub fn op_getmember(vm: &mut Vm) -> Result<bool, VmError> {
             }
         }
         Value::List(vec_rc) => {
-            if let Value::Int(i) = key {
-                let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
-                let vec = vec_rc.try_borrow().map_err(|_| VmError::BorrowError)?;
-                if idx < vec.len() {
-                    let val = vec.get(idx).cloned().unwrap_or(Value::Null);
-                    vm.stack.push(val)?;
-                } else {
-                    return Err(VmError::IndexOutOfBounds);
-                }
+            let i = match key {
+                Value::Int(i) => i,
+                Value::Float(f) if f.fract() == 0.0 => f as i64,
+                _ => return Err(VmError::TypeError),
+            };
+            let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
+            let vec = vec_rc.try_borrow().map_err(|_| VmError::BorrowError)?;
+            if idx < vec.len() {
+                let val = vec.get(idx).cloned().unwrap_or(Value::Null);
+                vm.stack.push(val)?;
             } else {
-                return Err(VmError::TypeError);
+                return Err(VmError::IndexOutOfBounds);
             }
         }
         Value::Str(s) => {
-            if let Value::Int(i) = key {
-                let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
-                let char_count = s.chars().count();
-                if idx < char_count {
-                    let ch = s.chars().nth(idx).unwrap_or('\0').to_string();
-                    vm.stack.push(Value::Str(std::sync::Arc::new(ch)))?;
-                } else {
-                    return Err(VmError::IndexOutOfBounds);
-                }
+            let i = match key {
+                Value::Int(i) => i,
+                Value::Float(f) if f.fract() == 0.0 => f as i64,
+                _ => return Err(VmError::TypeError),
+            };
+            let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
+            let char_count = s.chars().count();
+            if idx < char_count {
+                let ch = s.chars().nth(idx).unwrap_or('\0').to_string();
+                vm.stack.push(Value::Str(std::sync::Arc::new(ch)))?;
             } else {
-                return Err(VmError::TypeError);
+                return Err(VmError::IndexOutOfBounds);
             }
         }
         _ => return Err(VmError::TypeError),
@@ -451,21 +453,22 @@ pub fn op_setmember(vm: &mut Vm) -> Result<bool, VmError> {
             }
         }
         Value::List(ref vec_rc) => {
-            if let Value::Int(i) = key {
-                let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
-                let mut vec = vec_rc.try_borrow_mut().map_err(|_| VmError::BorrowError)?;
-                if idx < vec.len() {
-                    let slot = vec.get_mut(idx).ok_or(VmError::IndexOutOfBounds)?;
-                    *slot = val;
-                } else if idx == vec.len() {
-                    vec.push(val);
-                } else {
-                    return Err(VmError::IndexOutOfBounds);
-                }
-                vm.stack.push(target.clone())?;
+            let i = match key {
+                Value::Int(i) => i,
+                Value::Float(f) if f.fract() == 0.0 => f as i64,
+                _ => return Err(VmError::TypeError),
+            };
+            let idx = usize::try_from(i).map_err(|_| VmError::IndexOutOfBounds)?;
+            let mut vec = vec_rc.try_borrow_mut().map_err(|_| VmError::BorrowError)?;
+            if idx < vec.len() {
+                let slot = vec.get_mut(idx).ok_or(VmError::IndexOutOfBounds)?;
+                *slot = val;
+            } else if idx == vec.len() {
+                vec.push(val);
             } else {
-                return Err(VmError::TypeError);
+                return Err(VmError::IndexOutOfBounds);
             }
+            vm.stack.push(target.clone())?;
         }
         _ => return Err(VmError::TypeError),
     }
@@ -492,7 +495,7 @@ pub fn op_hash256(vm: &mut Vm) -> Result<bool, VmError> {
     let str_val = match val {
         Value::Str(s) => s.to_string(),
         Value::Int(i) => i.to_string(),
-        Value::Float(f) => f.to_string(),
+        Value::Float(f) => to_js_string(f),
         Value::Bool(b) => b.to_string(),
         _ => return Err(VmError::TypeError),
     };
@@ -703,6 +706,40 @@ fn pop_string(vm: &mut Vm) -> Result<std::sync::Arc<String>, VmError> {
     match vm.stack.pop()? {
         Value::Str(s) => Ok(s),
         _ => Err(VmError::TypeError),
+    }
+}
+
+fn to_js_string(f: f64) -> String {
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    if f.is_infinite() {
+        return if f.is_sign_positive() {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        };
+    }
+    if f == 0.0 || f == -0.0 {
+        return "0".to_string();
+    }
+
+    let abs_f = f.abs();
+    if abs_f < 1e-6 || abs_f >= 1e21 {
+        let s = format!("{:e}", f);
+        if let Some(pos) = s.find('e') {
+            let (coef, exp_str) = s.split_at(pos);
+            let exp_val = exp_str[1..].parse::<i32>().unwrap_or(0);
+            let exp_sign = if exp_val >= 0 { "+" } else { "" };
+            let mut coef_clean = coef.to_string();
+            if coef_clean.ends_with(".0") {
+                coef_clean.truncate(coef_clean.len() - 2);
+            }
+            return format!("{}e{}{}", coef_clean, exp_sign, exp_val);
+        }
+        s
+    } else {
+        f.to_string()
     }
 }
 
@@ -1570,7 +1607,7 @@ pub fn op_arrsortstring(vm: &mut Vm) -> Result<bool, VmError> {
                 let as_str = match a {
                     Value::Str(s) => (**s).clone(),
                     Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.to_string(),
+                    Value::Float(f) => to_js_string(*f),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     _ => String::new(),
@@ -1578,7 +1615,7 @@ pub fn op_arrsortstring(vm: &mut Vm) -> Result<bool, VmError> {
                 let bs_str = match b {
                     Value::Str(s) => (**s).clone(),
                     Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.to_string(),
+                    Value::Float(f) => to_js_string(*f),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "null".to_string(),
                     _ => String::new(),
@@ -1631,7 +1668,7 @@ pub fn op_arrjoin(vm: &mut Vm) -> Result<bool, VmError> {
                 let s = match item {
                     Value::Str(s) => (**s).clone(),
                     Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.to_string(),
+                    Value::Float(f) => to_js_string(*f),
                     Value::Bool(b) => b.to_string(),
                     Value::Null => "".to_string(),
                     _ => String::new(),

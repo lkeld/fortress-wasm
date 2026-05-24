@@ -152,7 +152,7 @@ self.onmessage = async (e) => {
         try {
             const { bytecode, opcodeMap, input, handshakeHeader } = payload;
             const header = handshakeHeader ? new Uint8Array(handshakeHeader) : globalStegoImage;
-            const resultJson = execute(new Uint8Array(bytecode), header, JSON.stringify(input || []), new Uint8Array(opcodeMap));
+            const resultJson = execute(new Uint8Array(bytecode), header, JSON.stringify(Array.isArray(input) ? input : [input]), new Uint8Array(opcodeMap));
             self.postMessage({ type: 'EXECUTE_SUCCESS', result: resultJson });
         }
         catch (err) {

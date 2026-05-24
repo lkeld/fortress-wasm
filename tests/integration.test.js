@@ -183,3 +183,47 @@ test('Integration: Scrambler offset-parsing safety test (trailing hash byte maps
     assert.strictEqual(errorOccurred, null, `Scrambler should not have crashed but got: ${errorOccurred}`);
 });
 
+test('Integration: Scrambler key seed environment variable overrides', async () => {
+    // Save current environment variables
+    const oldPassword = process.env.FORTRESS_SIGNING_PASSWORD;
+    const oldSeed = process.env.FORTRESS_SIGNING_SEED;
+
+    try {
+        // Set seed directly
+        const testSeed = 'a'.repeat(64); // 32 bytes hex
+        process.env.FORTRESS_SIGNING_SEED = testSeed;
+        delete process.env.FORTRESS_SIGNING_PASSWORD; // Verify password isn't required
+
+        // Run the pipeline
+        const sourceCode = `return 1;`;
+        const parser = new Parser(sourceCode);
+        const codegen = new CodeGenerator();
+        const { code, opcodeMap } = codegen.generate(parser.parseProgram());
+        
+        const fvbcPath = path.join(TEMP_DIR, 'test_env_override.fvbc');
+        const mapPath = path.join(TEMP_DIR, 'test_env_override.opcodes.json');
+        fs.writeFileSync(fvbcPath, Buffer.from(code));
+        fs.writeFileSync(mapPath, JSON.stringify(Array.from(opcodeMap)));
+        
+        const nonceStore = new InMemoryNonceStore();
+        // This should run and derive the signing key successfully from FORTRESS_SIGNING_SEED
+        const res = await scrambleSessionPayload(fvbcPath, mapPath, undefined, nonceStore);
+        assert.ok(res.payload);
+        
+        fs.unlinkSync(fvbcPath);
+        fs.unlinkSync(mapPath);
+    } finally {
+        // Restore environment variables
+        if (oldPassword) {
+            process.env.FORTRESS_SIGNING_PASSWORD = oldPassword;
+        } else {
+            delete process.env.FORTRESS_SIGNING_PASSWORD;
+        }
+        if (oldSeed) {
+            process.env.FORTRESS_SIGNING_SEED = oldSeed;
+        } else {
+            delete process.env.FORTRESS_SIGNING_SEED;
+        }
+    }
+});
+

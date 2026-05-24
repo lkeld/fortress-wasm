@@ -53,6 +53,17 @@ pub fn set_client_private_key(key: &[u8]) -> bool {
     }
 }
 
+#[wasm_bindgen]
+pub fn get_client_private_key() -> Box<[u8]> {
+    let mut key_bytes = vec![0u8; 32];
+    CLIENT_PRIVATE_KEY.with(|k| {
+        if let Some(bytes) = *k.borrow() {
+            key_bytes.copy_from_slice(&bytes);
+        }
+    });
+    key_bytes.into_boxed_slice()
+}
+
 // No wee_alloc for now to keep dependencies simple
 
 const SERVER_LONG_TERM_PUBLIC_KEY: [u8; 32] = *include_bytes!("public_key.bin");

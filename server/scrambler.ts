@@ -14,36 +14,52 @@ async function loadServerSigningKey(): Promise<crypto.KeyObject> {
         return cachedSigningKey;
     }
 
-    const password = process.env.FORTRESS_SIGNING_PASSWORD;
-    if (!password) {
-        throw new Error("Missing FORTRESS_SIGNING_PASSWORD environment variable");
-    }
-
-    const paramsPath = path.join(__dirname, '.signing_params');
-    let salt: Buffer;
+    let seed: Buffer;
     let isColdStart = false;
-
-    if (fs.existsSync(paramsPath)) {
-        salt = fs.readFileSync(paramsPath);
-        if (salt.length !== 32) {
-            throw new Error(`Invalid salt length in ${paramsPath}. Expected 32 bytes.`);
+    const envSeed = process.env.FORTRESS_SIGNING_SEED || process.env.FORTRESS_SCRAMBLER_SEED;
+    if (envSeed) {
+        if (/^[0-9a-fA-F]{64}$/.test(envSeed)) {
+            seed = Buffer.from(envSeed, 'hex');
+        } else {
+            seed = Buffer.from(envSeed, 'utf-8');
+            if (seed.length !== 32) {
+                const padded = Buffer.alloc(32);
+                seed.copy(padded);
+                seed = padded;
+            }
         }
     } else {
-        salt = crypto.randomBytes(32);
-        fs.writeFileSync(paramsPath, salt);
-        isColdStart = true;
-    }
+        const password = process.env.FORTRESS_SIGNING_PASSWORD;
+        if (!password) {
+            throw new Error("Missing FORTRESS_SIGNING_PASSWORD environment variable");
+        }
 
-    // Derive seed using Argon2id (memoryCost: 65536, timeCost: 3, parallelism: 1, hashLength: 32)
-    const seed = await argon2.hash(password, {
-        type: argon2.argon2id,
-        memoryCost: 65536,
-        timeCost: 3,
-        parallelism: 1,
-        hashLength: 32,
-        salt: salt,
-        raw: true
-    });
+        const paramsPath = path.join(__dirname, '.signing_params');
+        let salt: Buffer;
+
+        if (fs.existsSync(paramsPath)) {
+            salt = fs.readFileSync(paramsPath);
+            if (salt.length !== 32) {
+                throw new Error(`Invalid salt length in ${paramsPath}. Expected 32 bytes.`);
+            }
+        } else {
+            salt = crypto.randomBytes(32);
+            fs.writeFileSync(paramsPath, salt);
+            isColdStart = true;
+        }
+
+        // Derive seed using Argon2id (memoryCost: 65536, timeCost: 3, parallelism: 1, hashLength: 32)
+        const rawSeed = await argon2.hash(password, {
+            type: argon2.argon2id,
+            memoryCost: 65536,
+            timeCost: 3,
+            parallelism: 1,
+            hashLength: 32,
+            salt: salt,
+            raw: true
+        });
+        seed = Buffer.from(rawSeed);
+    }
 
     // Wrap the derived 32-byte seed in the PKCS#8 DER header 302e020100300506032b657004220420
     const derHeader = Buffer.from('302e020100300506032b657004220420', 'hex');
@@ -223,6 +239,10 @@ export async function scrambleSessionPayload(
         i++;
 
         if (standardOpcode === OpCode.PushString) {
+            const originalNonce = new Uint8Array(4);
+            for (let j = 0; j < 4; j++) {
+                originalNonce[j] = originalBytecode[i + j];
+            }
             const nonce = new Uint8Array(crypto.randomBytes(4));
             for (let j = 0; j < 4; j++) {
                 if (i < originalBytecode.length) {
@@ -239,6 +259,7 @@ export async function scrambleSessionPayload(
                 }
             }
             const keystream = new Uint8Array(len);
+            const keystreamAllZeros = new Uint8Array(len);
             {
                 let offset = 0;
                 let blockIndex = 0;
@@ -256,10 +277,28 @@ export async function scrambleSessionPayload(
                     blockIndex++;
                 }
             }
+            {
+                let offset = 0;
+                let blockIndex = 0;
+                const zeroKey = new Uint8Array(32);
+                while (offset < len) {
+                    const hasher = crypto.createHash('sha256');
+                    hasher.update(zeroKey);
+                    hasher.update(originalNonce);
+                    const blockBuf = Buffer.alloc(4);
+                    blockBuf.writeUInt32LE(blockIndex);
+                    hasher.update(blockBuf);
+                    const block = hasher.digest();
+                    for (let k = 0; k < block.length && offset < len; k++) {
+                        keystreamAllZeros[offset++] = block[k];
+                    }
+                    blockIndex++;
+                }
+            }
             for (let j = 0; j < len; j++) {
                 if (i < originalBytecode.length) {
-                    const plaintext = originalBytecode[i];
-                    newBytecode[i] = plaintext ^ keystream[j];
+                    const encryptedByte = originalBytecode[i];
+                    newBytecode[i] = encryptedByte ^ keystreamAllZeros[j] ^ keystream[j];
                     i++;
                 }
             }
