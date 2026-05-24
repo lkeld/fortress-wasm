@@ -11,6 +11,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      FORTRESS_SIGNING_PASSWORD: ${{ secrets.FORTRESS_SIGNING_PASSWORD }}
 
     steps:
       - name: Checkout repository
@@ -54,8 +56,6 @@ jobs:
 
       - name: Build Fortress WASM Pipeline
         run: npm run build
-        env:
-          FORTRESS_SIGNING_PASSWORD: ${{ secrets.FORTRESS_SIGNING_PASSWORD }}
 
       - name: Generate WASM Integrity Hashes
         run: |
