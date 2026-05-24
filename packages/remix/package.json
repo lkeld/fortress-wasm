@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/remix",
+  "version": "1.2.0",
+  "description": "Remix integration for fortress-wasm",
+  "main": "index.js"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/nestjs",
+  "version": "1.2.0",
+  "description": "Nestjs integration for fortress-wasm",
+  "main": "index.js"
+}

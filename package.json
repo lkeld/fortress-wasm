@@ -3,6 +3,25 @@
   "version": "1.2.0",
   "description": "Virtualised, self-checksumming WebAssembly runtime with steganographic session keys",
   "main": "index.js",
+  "exports": {
+    "./next": "./packages/next/index.js",
+    "./vite": "./packages/vite/index.js",
+    "./sveltekit": "./packages/sveltekit/index.js",
+    "./nuxt": "./packages/nuxt/index.js",
+    "./remix": "./packages/remix/index.js",
+    "./astro": "./packages/astro/index.js",
+    "./angular": "./packages/angular/index.js",
+    "./solid": "./packages/solid/index.js",
+    "./qwik": "./packages/qwik/index.js",
+    "./express": "./packages/express/index.js",
+    "./fastify": "./packages/fastify/index.js",
+    "./hono": "./packages/hono/index.js",
+    "./koa": "./packages/koa/index.js",
+    "./nestjs": "./packages/nestjs/index.js",
+    "./bun": "./packages/bun/index.js",
+    "./deno": "./packages/deno/index.js",
+    "./html": "./packages/html/index.js"
+  },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com/"
   },

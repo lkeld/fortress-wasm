@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/html",
+  "version": "1.2.0",
+  "description": "Html integration for fortress-wasm",
+  "main": "index.js"
+}

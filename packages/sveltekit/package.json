@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/sveltekit",
+  "version": "1.2.0",
+  "description": "Sveltekit integration for fortress-wasm",
+  "main": "index.js"
+}

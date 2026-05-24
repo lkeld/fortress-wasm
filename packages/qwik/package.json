@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/qwik",
+  "version": "1.2.0",
+  "description": "Qwik integration for fortress-wasm",
+  "main": "index.js"
+}

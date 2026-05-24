@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/angular",
+  "version": "1.2.0",
+  "description": "Angular integration for fortress-wasm",
+  "main": "index.js"
+}

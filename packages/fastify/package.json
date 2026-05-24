@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/fastify",
+  "version": "1.2.0",
+  "description": "Fastify integration for fortress-wasm",
+  "main": "index.js"
+}

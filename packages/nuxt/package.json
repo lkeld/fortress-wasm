@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/nuxt",
+  "version": "1.2.0",
+  "description": "Nuxt integration for fortress-wasm",
+  "main": "index.js"
+}

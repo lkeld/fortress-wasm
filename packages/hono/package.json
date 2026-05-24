@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/hono",
+  "version": "1.2.0",
+  "description": "Hono integration for fortress-wasm",
+  "main": "index.js"
+}

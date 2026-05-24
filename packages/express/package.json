@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/express",
+  "version": "1.2.0",
+  "description": "Express integration for fortress-wasm",
+  "main": "index.js"
+}

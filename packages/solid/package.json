@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/solid",
+  "version": "1.2.0",
+  "description": "Solid integration for fortress-wasm",
+  "main": "index.js"
+}

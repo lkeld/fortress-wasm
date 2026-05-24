@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/next",
+  "version": "1.2.0",
+  "description": "Next integration for fortress-wasm",
+  "main": "index.js"
+}

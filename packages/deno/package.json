@@ -1,0 +1,6 @@
+{
+  "name": "@fortress-wasm/deno",
+  "version": "1.2.0",
+  "description": "Deno integration for fortress-wasm",
+  "main": "index.js"
+}
