@@ -492,17 +492,26 @@ function getFriendlyName(id) {
     return item ? item.name : id;
 }
 
-function findSourceFiles(dir, maxCount = 15) {
+function findSourceFiles(dir) {
     const results = [];
     const ignoredDirs = ['node_modules', '.git', 'dist', 'build', '.nuxt', '.next', '.svelte-kit', '.fortress_keys', 'protected'];
-    function walk(currentDir) {
-        if (results.length >= maxCount) return;
+    // Prioritise lib/util/helpers/services dirs so they appear at the top
+    const priorityDirs = ['lib', 'utils', 'helpers', 'services', 'core', 'shared'];
+    function walk(currentDir, depth) {
         let files;
         try {
             files = fs.readdirSync(currentDir);
         } catch (e) {
             return;
         }
+        // Sort: priority dirs first, then alphabetical
+        files.sort((a, b) => {
+            const aIsPriority = priorityDirs.includes(a.toLowerCase());
+            const bIsPriority = priorityDirs.includes(b.toLowerCase());
+            if (aIsPriority && !bIsPriority) return -1;
+            if (!aIsPriority && bIsPriority) return 1;
+            return a.localeCompare(b);
+        });
         for (const file of files) {
             const fullPath = path.join(currentDir, file);
             let stat;
@@ -513,7 +522,7 @@ function findSourceFiles(dir, maxCount = 15) {
             }
             if (stat.isDirectory()) {
                 if (!ignoredDirs.includes(file)) {
-                    walk(fullPath);
+                    walk(fullPath, depth + 1);
                 }
             } else if (stat.isFile()) {
                 const ext = path.extname(file);
@@ -523,7 +532,7 @@ function findSourceFiles(dir, maxCount = 15) {
             }
         }
     }
-    walk(dir);
+    walk(dir, 0);
     return results;
 }
 
@@ -740,7 +749,7 @@ function getCanonicalFramework(fw) {
     return lower;
 }
 
-function writeConfigAndKeys(framework, isTS, pm, protectedDirName, password, addToEnv, selectedFunctions) {
+function writeConfigAndKeys(framework, isTS, pm, protectedDirName, password, addToEnv, selectedFunctions, selectedFilePath) {
     const canonicalFw = getCanonicalFramework(framework);
     
     const resolvedProtectedDir = path.resolve(targetDir, protectedDirName);
@@ -766,13 +775,21 @@ function writeConfigAndKeys(framework, isTS, pm, protectedDirName, password, add
     fs.mkdirSync(resolvedProtectedDir, { recursive: true });
     
     const entryFile = isTS ? 'index.ts' : 'index.js';
-    let entryContent = '// Protected functions scaffolded by create-fortress-app\n';
-    if (selectedFunctions && selectedFunctions.length > 0) {
-      selectedFunctions.forEach(func => {
-        entryContent += `export function ${func}() {\n  // TODO: Add protected logic for ${func}\n  return "fortress-wasm: ${func}";\n}\n\n`;
-      });
+    let entryContent;
+    
+    // If a real source file was selected, copy its actual content
+    if (selectedFilePath && fs.existsSync(selectedFilePath)) {
+        entryContent = fs.readFileSync(selectedFilePath, 'utf8');
     } else {
-      entryContent += `export function run() {\n  return "fortress-wasm entry";\n}\n`;
+        // Fallback to stubs only if no file was selected
+        entryContent = '// Protected functions scaffolded by create-fortress-app\n';
+        if (selectedFunctions && selectedFunctions.length > 0) {
+            selectedFunctions.forEach(func => {
+                entryContent += `export function ${func}() {\n  // TODO: Replace with your real logic\n  return "fortress-wasm: ${func}";\n}\n\n`;
+            });
+        } else {
+            entryContent += `export function run() {\n  return "fortress-wasm entry";\n}\n`;
+        }
     }
     fs.writeFileSync(path.join(resolvedProtectedDir, entryFile), entryContent);
     
@@ -956,7 +973,8 @@ async function runInteractive() {
     await showProgressBar('Scaffolding route files     ', 600);
     await showProgressBar('Compiling configurations     ', 800);
     
-    writeConfigAndKeys(framework, finalTypeScript, finalPackageManager, protectedDirName, password, addToEnv, selectedFunctions);
+    const fullSelectedFilePath = selectedFile ? path.resolve(targetDir, selectedFile) : null;
+    writeConfigAndKeys(framework, finalTypeScript, finalPackageManager, protectedDirName, password, addToEnv, selectedFunctions, fullSelectedFilePath);
     
     const summaryLines = [
       `Framework:       ${getFriendlyName(framework)}`,
@@ -972,6 +990,28 @@ async function runInteractive() {
     }
     const box = renderBox('Fortress App Scaffolded successfully!', summaryLines);
     console.log('\n' + box + '\n');
+    
+    // Auto-run the build
+    console.log('Building protected functions...');
+    const fortressBin = path.resolve(__dirname, '../../../bin/index.js');
+    const { execSync } = require('child_process');
+    try {
+        execSync(`FORTRESS_SIGNING_PASSWORD="${password}" node "${fortressBin}" build`, {
+            cwd: targetDir,
+            stdio: 'inherit',
+            env: { ...process.env, FORTRESS_SIGNING_PASSWORD: password }
+        });
+        console.log('\n✅ Build complete! Your protected functions are compiled and ready.');
+        console.log('\nNext steps:');
+        console.log('  1. Import the useFortress hook in your components:');
+        console.log('       import { useFortress } from \'@/hooks/useFortress\';');
+        console.log('  2. Add worker-src CSP header to next.config.ts:');
+        console.log('       worker-src \'self\' blob:;');
+        console.log('  3. Run `fortress build` any time you change protected/ code.\n');
+    } catch (e) {
+        console.log('\n⚠️  Scaffolding complete, but auto-build failed. Run manually:');
+        console.log(`  FORTRESS_SIGNING_PASSWORD="<your-password>" npx fortress build\n`);
+    }
 }
 
 function runNonInteractive() {
