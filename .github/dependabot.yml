@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Automatically track and update GitHub Actions dependencies (including SHA-pinned ones)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Automatically track and update npm dependencies in the workspace root
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Automatically track and update npm dependencies for create-fortress-app CLI
+  - package-ecosystem: "npm"
+    directory: "/packages/create-fortress-app"
+    schedule:
+      interval: "weekly"
