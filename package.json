@@ -84,7 +84,7 @@
     "argon2": "^0.40.3",
     "cross-spawn": "^7.0.3",
     "jimp": "^1.6.1",
-    "magicast": "^0.3.4",
+    "magicast": "^0.5.3",
     "pngjs": "^7.0.0",
     "tree-kill": "^1.2.2"
   },
