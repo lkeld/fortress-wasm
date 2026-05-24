@@ -89,7 +89,9 @@
     "tree-kill": "^1.2.2"
   },
   "devDependencies": {
+    "@babel/traverse": "^7.29.0",
     "@playwright/test": "^1.60.0",
+    "@types/babel__traverse": "^7.28.0",
     "@types/node": "^20.0.0",
     "@types/pngjs": "^6.0.5",
     "typescript": "^5.0.0"
