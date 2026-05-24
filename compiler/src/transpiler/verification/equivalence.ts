@@ -18,7 +18,7 @@ const originalRequire = (Module as any).prototype.require;
     return originalRequire.apply(this, arguments);
 };
 
-const vmNode = require('../../../../pkg-node/vm_core.js');
+let vmNode: any = null;
 
 export function verifyEquivalenceSync(
     originalJsCode: string,
@@ -616,6 +616,9 @@ function preparePayload(obj: any, visited: Map<any, any> = new Map()): any {
 }
 
 function runFvmSync(code: Uint8Array, opcodeMap: number[], args: any[]): any {
+    if (!vmNode) {
+        vmNode = require('../../../../pkg-node/vm_core.js');
+    }
     const seen = new Set();
     const inputJson = JSON.stringify(preparePayload(args), (key, value) => {
         if (value !== null && typeof value === 'object') {

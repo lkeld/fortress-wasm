@@ -25,12 +25,19 @@ class IsolatedVerifier {
     constructor() {
         try {
             // Dynamically require isolated-vm to support optional dependency pattern
-            this.ivm = require('isolated-vm');
+            const ivm = require('isolated-vm');
+            // Probe if isolated-vm is functional (does not segfault) on this Node/OS setup
+            const { execSync } = require('child_process');
+            execSync('node -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
+                stdio: 'ignore',
+                timeout: 1000
+            });
+            this.ivm = ivm;
             this.hasIvm = true;
         } catch (e) {
             if (isMainThread) {
                 console.warn(
-                    "[WARNING] 'isolated-vm' is not installed. Falling back to Node.js built-in 'vm' module.\n" +
+                    "[WARNING] 'isolated-vm' is not installed or failed probe checks. Falling back to Node.js built-in 'vm' module.\n" +
                     "RISK WARNING: The built-in 'vm' module does not provide a secure sandbox. " +
                     "Executing untrusted code can lead to Remote Code Execution (RCE) on the host system."
                 );

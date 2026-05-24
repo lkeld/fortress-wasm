@@ -29,7 +29,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@23bde3305096680d1a6925154d72ec2864996d1c
+        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
@@ -44,7 +44,7 @@ jobs:
         run: npm audit --audit-level=high
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@100cc647b0a7dbfaef6a26cf03fcf22880cf5581
+        uses: taiki-e/install-action@d8c10dae823f48238abff23fee4146b448aed2f1
         with:
           tool: cargo-audit
 
@@ -52,7 +52,7 @@ jobs:
         run: cargo audit
 
       - name: Run cargo-deny checks
-        uses: EmbarkStudios/cargo-deny-action@3f4a382bd2309854e487dbcc0e1e240573c74877
+        uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979
 
       - name: Run Tests
         run: npm test
