@@ -5,7 +5,10 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 
-const version = "1.2.0";
+let version = "1.5.2";
+try {
+    version = require('../package.json').version;
+} catch (e) {}
 
 const command = process.argv[2];
 const args = process.argv.slice(3);

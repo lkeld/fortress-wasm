@@ -6,7 +6,11 @@ const crypto = require('crypto');
 const readline = require('readline');
 const compatibility = require('../compatibility');
 
-console.log("create-fortress-app CLI - version 1.2.0");
+let version = '1.3.0';
+try {
+    version = require('../package.json').version;
+} catch (e) {}
+console.log(`create-fortress-app CLI - version ${version}`);
 
 const args = process.argv.slice(2);
 
@@ -103,11 +107,6 @@ try {
 
 const configPath = path.join(targetDir, 'fortress.config.js');
 const protectedDir = path.join(targetDir, 'protected');
-
-if (fs.existsSync(configPath) || fs.existsSync(protectedDir)) {
-    console.log("Warning: fortress.config.js or protected/ directory already exists. Scaffolding aborted to prevent overwrite.");
-    process.exit(2);
-}
 
 // Environment Detection Helper
 function detectEnvironment(dir) {
@@ -2372,6 +2371,16 @@ function setupLintStagedCompatibility(targetDir, relativeProtectedDir) {
 }
 
 async function runInteractive() {
+    if (fs.existsSync(configPath) || fs.existsSync(protectedDir)) {
+        console.log("\nWarning: fortress.config.js or protected/ directory already exists.");
+        const answer = await askQuestion("Do you want to overwrite them and proceed? (y/n) ", "n");
+        if (!answer.toLowerCase().startsWith('y')) {
+            console.log("Scaffolding aborted.");
+            process.exit(2);
+        }
+        console.log("Proceeding with overwrite...\n");
+    }
+
     printBanner();
     
     let framework = finalFramework;
@@ -2494,6 +2503,11 @@ async function runInteractive() {
 }
 
 async function runNonInteractive() {
+    if (fs.existsSync(configPath) || fs.existsSync(protectedDir)) {
+        console.log("Warning: fortress.config.js or protected/ directory already exists. Scaffolding aborted to prevent overwrite.");
+        process.exit(2);
+    }
+
     let pw;
     if (overridePassword) {
         if (overridePassword.length < 12) {

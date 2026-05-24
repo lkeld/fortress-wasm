@@ -2,6 +2,14 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.3] - 2026-05-25
+
+### Added
+- **Interactive Scaffolding Overwrite Mode**: Enhanced `create-fortress-app` to ask the user if they wish to overwrite existing configurations or directories when running interactively, rather than immediately aborting.
+
+### Fixed
+- **Dynamic CLI Version Detection**: Updated both `create-fortress-app` and the main `fortress` CLI entry points to load their version numbers dynamically from their respective `package.json` files, preventing version mismatches.
+
 ## [1.5.2] - 2026-05-25
 
 ### Fixed

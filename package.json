@@ -1,6 +1,6 @@
 {
   "name": "@lkeld/fortress-wasm",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "description": "Virtualised, self-checksumming WebAssembly runtime with steganographic session keys",
   "main": "index.js",
   "bin": {
@@ -81,6 +81,7 @@
   },
   "homepage": "https://github.com/lkeld/fortress-wasm#readme",
   "dependencies": {
+    "@lkeld/fortress-wasm": "^1.5.2",
     "argon2": "^0.40.3",
     "cross-spawn": "^7.0.3",
     "jimp": "^1.6.1",
