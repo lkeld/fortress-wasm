@@ -2,6 +2,13 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.1] - 2026-05-25
+
+### Fixed
+- **Next.js CSP Magicast Injection**: Resolved a Next.js configuration parser error (`Casting "BlockStatement" is not supported`) by shifting the dynamically generated `headers` injection to use an expression body arrow function (`async () => [...]`) instead of a block body.
+- **Robust ES Module Config Fallback**: Upgraded the config-scaffolding fallback mechanisms in the CLI to support modern ESM and declarative export setups (`export default { ... }` or `const nextConfig = { ... }`).
+- **VM Node Wrapper Native 'env' Import**: Resolved a `MODULE_NOT_FOUND` error for `'env'` that crashed the compiler's equivalence verification sandbox when run inside external repositories. Dynamically intercepts the native Rust module loader's import requests.
+
 ## [1.5.0] - 2026-05-25
 
 ### Added
