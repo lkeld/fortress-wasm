@@ -2,6 +2,11 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.6] - 2026-05-25
+
+### Fixed
+- Fixed an event loop handle leak in `create-fortress-app` by ensuring that `stdin` is paused when interactive prompts and password inputs finished execution, preventing the CLI process from hanging.
+
 ## [1.5.5] - 2026-05-25
 
 ### Fixed

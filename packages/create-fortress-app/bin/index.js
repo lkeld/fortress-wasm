@@ -698,6 +698,7 @@ function askPassword(query) {
         function handler(char) {
             if (char === '\n' || char === '\r' || char === '\u0004') {
                 stdin.setRawMode(false);
+                stdin.pause();
                 stdin.removeListener('data', handler);
                 stdout.write('\n');
                 resolve(password);
@@ -763,7 +764,7 @@ async function promptSelect(message, options, { visibleCount = 10 } = {}) {
             drawn = renderLines(stdout, lines, drawn);
         }
         function done(val) {
-            stdin.setRawMode(false); stdin.removeListener('data', onKey); stdout.write(C.show);
+            stdin.setRawMode(false); stdin.pause(); stdin.removeListener('data', onKey); stdout.write(C.show);
             stdout.write(C.up(drawn));
             for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
             stdout.write(C.up(drawn));
@@ -810,7 +811,7 @@ async function promptMultiSelect(message, options, { visibleCount = 10 } = {}) {
             drawn = renderLines(stdout, lines, drawn);
         }
         function done() {
-            stdin.setRawMode(false); stdin.removeListener('data', onKey); stdout.write(C.show);
+            stdin.setRawMode(false); stdin.pause(); stdin.removeListener('data', onKey); stdout.write(C.show);
             const result = selected.size > 0 ? [...selected].sort((a,b)=>a-b).map(i => options[i]) : [options[idx]];
             stdout.write(C.up(drawn));
             for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
@@ -876,7 +877,7 @@ async function promptFileSearch(message, files) {
             drawn = renderLines(stdout, lines, drawn);
         }
         function done(val) {
-            stdin.setRawMode(false); stdin.removeListener('data', onKey); stdout.write(C.show);
+            stdin.setRawMode(false); stdin.pause(); stdin.removeListener('data', onKey); stdout.write(C.show);
             stdout.write(C.up(drawn));
             for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
             stdout.write(C.up(drawn));
