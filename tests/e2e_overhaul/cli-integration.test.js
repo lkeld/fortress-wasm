@@ -230,6 +230,7 @@ runTestSuite('F4: create-fortress-app CLI E2E Overhaul Test Suite', {
         const protectedDir = path.join(dir, 'protected');
         assert.ok(fs.existsSync(path.join(protectedDir, 'index.js')));
         const entryContent = fs.readFileSync(path.join(protectedDir, 'index.js'), 'utf8');
+        assert.ok(entryContent.includes('/** @protect */'));
         assert.ok(entryContent.includes('export function originalFunction()'));
     },
 

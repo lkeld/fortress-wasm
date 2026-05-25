@@ -2,6 +2,11 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.9] - 2026-05-25
+
+### Fixed
+- Fixed the interactive scaffolding function selection in `create-fortress-app` by automatically injecting `/** @protect */` JSDoc annotations above the chosen functions in the copied source files, ensuring they are automatically compiled to bytecode.
+
 ## [1.5.8] - 2026-05-25
 
 ### Fixed

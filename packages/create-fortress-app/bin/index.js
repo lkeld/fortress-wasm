@@ -1912,6 +1912,122 @@ function printSecretReminder() {
 `);
 }
 
+function injectProtectAnnotations(content, selectedFunctions) {
+    if (!selectedFunctions || selectedFunctions.length === 0) return content;
+    
+    const parser = require('@babel/parser');
+    let ast;
+    try {
+        ast = parser.parse(content, {
+            sourceType: 'module',
+            plugins: ['typescript', 'jsx', 'decorators-legacy']
+        });
+    } catch (e) {
+        return content;
+    }
+    
+    const insertIndices = [];
+    const funcsToProtect = new Set(selectedFunctions);
+    
+    function traverse(node) {
+        if (!node) return;
+        
+        let foundName = null;
+        let declNode = null;
+        
+        if (node.type === 'ExportNamedDeclaration') {
+            if (node.declaration) {
+                const decl = node.declaration;
+                declNode = node;
+                if (decl.type === 'FunctionDeclaration' && decl.id) {
+                    foundName = decl.id.name;
+                } else if (decl.type === 'VariableDeclaration') {
+                    for (const vDecl of decl.declarations) {
+                        if (vDecl.id && vDecl.id.type === 'Identifier') {
+                            if (funcsToProtect.has(vDecl.id.name)) {
+                                foundName = vDecl.id.name;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (node.specifiers && !foundName) {
+                for (const spec of node.specifiers) {
+                    if (spec.exported && spec.exported.type === 'Identifier') {
+                        if (funcsToProtect.has(spec.exported.name)) {
+                            foundName = spec.exported.name;
+                            declNode = node;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else if (node.type === 'ExportDefaultDeclaration') {
+            const decl = node.declaration;
+            declNode = node;
+            if (decl.type === 'FunctionDeclaration' && decl.id) {
+                foundName = decl.id.name;
+            } else if (decl.type === 'Identifier') {
+                foundName = decl.name;
+            }
+        } else if (node.type === 'FunctionDeclaration' && node.id) {
+            foundName = node.id.name;
+            declNode = node;
+        } else if (node.type === 'VariableDeclaration') {
+            for (const vDecl of node.declarations) {
+                if (vDecl.id && vDecl.id.type === 'Identifier') {
+                    if (funcsToProtect.has(vDecl.id.name)) {
+                        foundName = vDecl.id.name;
+                        declNode = node;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (foundName && funcsToProtect.has(foundName) && declNode && declNode.start !== undefined) {
+            insertIndices.push(declNode.start);
+        }
+        
+        for (const key in node) {
+            const child = node[key];
+            if (Array.isArray(child)) {
+                for (const item of child) {
+                    if (item && typeof item === 'object' && typeof item.type === 'string') {
+                        traverse(item);
+                    }
+                }
+            } else if (child && typeof child === 'object' && typeof child.type === 'string') {
+                traverse(child);
+            }
+        }
+    }
+    
+    traverse(ast);
+    
+    const uniqueIndices = Array.from(new Set(insertIndices)).sort((a, b) => b - a);
+    
+    let result = content;
+    for (const idx of uniqueIndices) {
+        const beforeStr = result.substring(Math.max(0, idx - 100), idx);
+        if (/@protect\b/.test(beforeStr)) {
+            continue;
+        }
+        
+        const lastNewLine = result.lastIndexOf('\n', idx);
+        const insertAt = lastNewLine === -1 ? 0 : lastNewLine + 1;
+        
+        const lineStart = result.substring(insertAt, idx);
+        const indentMatch = lineStart.match(/^\s*/);
+        const indent = indentMatch ? indentMatch[0] : '';
+        
+        result = result.substring(0, insertAt) + indent + '/** @protect */\n' + result.substring(insertAt);
+    }
+    
+    return result;
+}
+
 async function writeConfigAndKeys(framework, isTS, pm, protectedDirName, password, addToEnv, selectedFunctions, selectedFilePath) {
     const canonicalFw = getCanonicalFramework(framework);
     
@@ -1943,6 +2059,9 @@ async function writeConfigAndKeys(framework, isTS, pm, protectedDirName, passwor
     // If a real source file was selected, copy its actual content
     if (selectedFilePath && fs.existsSync(selectedFilePath)) {
         entryContent = fs.readFileSync(selectedFilePath, 'utf8');
+        if (selectedFunctions && selectedFunctions.length > 0) {
+            entryContent = injectProtectAnnotations(entryContent, selectedFunctions);
+        }
     } else {
         // Fallback to stubs only if no file was selected
         entryContent = '// Protected functions scaffolded by create-fortress-app\n';
