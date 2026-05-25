@@ -50,6 +50,117 @@ if (!command || command === '--help' || command === '-h') {
 
 (async () => {
     if (command === 'build') {
+        function askYesNo(query) {
+            return new Promise((resolve) => {
+                const readline = require('readline');
+                const rl = readline.createInterface({
+                    input: process.stdin,
+                    output: process.stdout
+                });
+                rl.question(query, (answer) => {
+                    rl.close();
+                    process.stdin.pause();
+                    const lower = answer.trim().toLowerCase();
+                    resolve(lower === 'y' || lower === 'yes');
+                });
+            });
+        }
+
+        // 1. Probe check for isolated-vm
+        let hasIvm = false;
+        try {
+            require('isolated-vm');
+            const { execSync } = require('child_process');
+            execSync('node -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
+                stdio: 'ignore',
+                timeout: 1000
+            });
+            hasIvm = true;
+        } catch (e) {
+            hasIvm = false;
+        }
+
+        // 2. If missing and interactive, prompt the user
+        if (!hasIvm && process.stdin.isTTY && process.stdout.isTTY) {
+            console.log("\n[INFO] The secure sandbox package 'isolated-vm' is not installed or failed to load.");
+            console.log("Without it, the compiler will fall back to Node's built-in 'vm' module (which is less secure for untrusted code).");
+            console.log("");
+            const install = await askYesNo("Would you like to install and compile 'isolated-vm' now? (y/n) ");
+            if (install) {
+                // Check for compilers
+                let hasCompilers = false;
+                const { execSync } = require('child_process');
+                try {
+                    if (process.platform === 'darwin') {
+                        execSync('xcode-select -p', { stdio: 'ignore' });
+                        hasCompilers = true;
+                    } else if (process.platform === 'win32') {
+                        execSync('where cl.exe', { stdio: 'ignore' });
+                        hasCompilers = true;
+                    } else {
+                        execSync('make --version && (gcc --version || g++ --version || clang --version)', { stdio: 'ignore', shell: true });
+                        hasCompilers = true;
+                    }
+                } catch (err) {
+                    hasCompilers = false;
+                }
+
+                if (!hasCompilers) {
+                    console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                    if (process.platform === 'darwin') {
+                        console.log("[INFO] Native C++ compiler tools are missing on your system.");
+                        console.log("Fortress will trigger the macOS Command Line Tools installer now.");
+                        console.log("Please complete the installation dialog that appears on your screen,");
+                        console.log("then run the build command again once finished.");
+                        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                        try {
+                            const spawn = require('cross-spawn');
+                            spawn.sync('xcode-select', ['--install'], { stdio: 'inherit' });
+                        } catch (e) {}
+                    } else if (process.platform === 'win32') {
+                        console.log("[ERROR] Native C++ compiler tools (MSVC cl.exe) are missing.");
+                        console.log("To compile the secure sandbox, please install the build tools:");
+                        console.log("  winget install Microsoft.VisualStudio.Workload.VCTools");
+                        console.log("After installing, please run the build command again.");
+                        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                    } else {
+                        console.log("[ERROR] Native C++ compiler tools (gcc, make, or clang) are missing.");
+                        console.log("To compile the secure sandbox, please install the build tools:");
+                        console.log("  Ubuntu/Debian: sudo apt install build-essential");
+                        console.log("  Fedora/RHEL:   sudo dnf groupinstall \"Development Tools\"");
+                        console.log("After installing, please run the build command again.");
+                        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+                    }
+                    process.exit(1);
+                } else {
+                    console.log("\n[INFO] Compiler tools detected. Compiling and installing 'isolated-vm'...");
+                    let installCmd = 'npm install --save-dev isolated-vm';
+                    if (fs.existsSync('pnpm-lock.yaml')) {
+                        installCmd = 'pnpm add -D isolated-vm';
+                    } else if (fs.existsSync('yarn.lock')) {
+                        installCmd = 'yarn add -D isolated-vm';
+                    } else if (fs.existsSync('bun.lockb') || fs.existsSync('bun.lock')) {
+                        installCmd = 'bun add -d isolated-vm';
+                    }
+                    
+                    try {
+                        const spawn = require('cross-spawn');
+                        const parts = installCmd.split(' ');
+                        const result = spawn.sync(parts[0], parts.slice(1), { stdio: 'inherit', cwd: process.cwd() });
+                        if (result.status === 0) {
+                            console.log("\n✓ 'isolated-vm' compiled and installed successfully!\n");
+                        } else {
+                            console.log("\n⚠️ Compilation failed. Falling back to the Node.js built-in 'vm' module.\n");
+                        }
+                    } catch (err) {
+                        console.log(`\n⚠️ Failed to run installer: ${err.message}. Falling back to 'vm'.\n`);
+                    }
+                }
+            } else {
+                console.log("\n[INFO] Proceeding with the Node.js built-in 'vm' module fallback.\n");
+            }
+        }
+
         const configPath = path.resolve(process.cwd(), 'fortress.config.js');
         let config = {};
         if (fs.existsSync(configPath)) {

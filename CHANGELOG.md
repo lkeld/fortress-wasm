@@ -2,6 +2,11 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.7] - 2026-05-25
+
+### Added
+- Added an interactive installation assistant and compiler diagnostics wizard to the CLI build pipeline, which automatically checks for compiler tools and offers to compile and install the secure `isolated-vm` sandbox package if it is missing.
+
 ## [1.5.6] - 2026-05-25
 
 ### Fixed
