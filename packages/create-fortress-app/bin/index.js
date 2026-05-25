@@ -319,7 +319,7 @@ const scaffoldFiles = {
     const componentsDir = path.join(tDir, 'src/components');
     fs.mkdirSync(componentsDir, { recursive: true });
     fs.writeFileSync(path.join(componentsDir, `Fortress.astro`),
-      `---\n// Astro component\n---\n<div data-fortress>Secured by Fortress</div>\n<script>\n  import FortressClient from '@lkeld/fortress-wasm/client';\n  FortressClient.init('/api/fortress').then(() => {\n    console.log('Fortress initialized');\n  }).catch(console.error);\n</script>\n`
+      `---\n// Astro component\n---\n<div data-fortress>Secured by Fortress</div>\n<script>\n  import FortressClient from '@lkeld/fortress-wasm/client';\n  FortressClient.init('/api/fortress').then(() => {\n    console.log('Fortress initialised');\n  }).catch(console.error);\n</script>\n`
     );
   },
   
@@ -338,11 +338,11 @@ const scaffoldFiles = {
     
     if (isStandalone) {
       fs.writeFileSync(path.join(compDir, `fortress.component.${ext}`),
-        `import { Component } from '@angular/core';\nimport { CommonModule } from '@angular/common';\nimport { FortressService } from '../api/fortress.service';\n\n@Component({\n  selector: 'app-fortress',\n  standalone: true,\n  imports: [CommonModule],\n  template: '<div>Secured by Fortress: {{ service.client ? "Active" : "Initializing" }}</div>'\n})\nexport class FortressComponent {\n  constructor(public service: FortressService) {}\n}\n`
+        `import { Component } from '@angular/core';\nimport { CommonModule } from '@angular/common';\nimport { FortressService } from '../api/fortress.service';\n\n@Component({\n  selector: 'app-fortress',\n  standalone: true,\n  imports: [CommonModule],\n  template: '<div>Secured by Fortress: {{ service.client ? "Active" : "Initialising" }}</div>'\n})\nexport class FortressComponent {\n  constructor(public service: FortressService) {}\n}\n`
       );
     } else {
       fs.writeFileSync(path.join(compDir, `fortress.component.${ext}`),
-        `import { Component } from '@angular/core';\nimport { FortressService } from '../api/fortress.service';\n\n@Component({\n  selector: 'app-fortress',\n  template: '<div>Secured by Fortress: {{ service.client ? "Active" : "Initializing" }}</div>'\n})\nexport class FortressComponent {\n  constructor(public service: FortressService) {}\n}\n`
+        `import { Component } from '@angular/core';\nimport { FortressService } from '../api/fortress.service';\n\n@Component({\n  selector: 'app-fortress',\n  template: '<div>Secured by Fortress: {{ service.client ? "Active" : "Initialising" }}</div>'\n})\nexport class FortressComponent {\n  constructor(public service: FortressService) {}\n}\n`
       );
     }
   },
@@ -377,7 +377,7 @@ const scaffoldFiles = {
     const compDir = path.join(tDir, 'src/components/fortress');
     fs.mkdirSync(compDir, { recursive: true });
     fs.writeFileSync(path.join(compDir, `fortress.${compExt}`),
-      `import { component$, useVisibleTask$, useStore } from '@builder.io/qwik';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport const Fortress = component$(() => {\n  const state = useStore({ secured: false });\n  useVisibleTask$(() => {\n    FortressClient.init('/api/fortress').then(() => {\n      state.secured = true;\n    }).catch(console.error);\n  });\n  return <div>Secured by Fortress: {state.secured ? "Active" : "Initializing"}</div>;\n});\n`
+      `import { component$, useVisibleTask$, useStore } from '@builder.io/qwik';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport const Fortress = component$(() => {\n  const state = useStore({ secured: false });\n  useVisibleTask$(() => {\n    FortressClient.init('/api/fortress').then(() => {\n      state.secured = true;\n    }).catch(console.error);\n  });\n  return <div>Secured by Fortress: {state.secured ? "Active" : "Initialising"}</div>;\n});\n`
     );
   },
   
@@ -393,7 +393,7 @@ const scaffoldFiles = {
     const srcDir = path.join(tDir, 'src');
     fs.mkdirSync(srcDir, { recursive: true });
     fs.writeFileSync(path.join(srcDir, `fortress.${ext}`),
-      `import FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function initFortress() {\n  FortressClient.init('/api/fortress')\n    .then(() => console.log("Fortress initialized"))\n    .catch(console.error);\n}\n`
+      `import FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function initFortress() {\n  FortressClient.init('/api/fortress')\n    .then(() => console.log("Fortress initialised"))\n    .catch(console.error);\n}\n`
     );
   },
   
@@ -835,14 +835,28 @@ async function promptMultiSelect(message, options, { visibleCount = 10 } = {}) {
 }
 
 async function promptFileSearch(message, files) {
+    function getBadge(classification) {
+        if (classification === 'AMBIGUOUS') {
+            return `${C.yellow} ⚠ ambiguous${C.reset}`;
+        }
+        if (classification === 'UNKNOWN') {
+            return `${C.gray} ? unclassified${C.reset}`;
+        }
+        return '';
+    }
+
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.log(`\n${message}`);
-        files.forEach((f, i) => console.log(`${i + 1}) ${f}`));
+        files.forEach((f, i) => {
+            const badge = f.classification === 'AMBIGUOUS' ? ' ⚠ ambiguous' : (f.classification === 'UNKNOWN' ? ' ? unclassified' : '');
+            console.log(`${i + 1}) ${f.file}${badge}`);
+        });
         console.log(`${files.length + 1}) [Enter custom path]`);
         const ans = await askQuestion(`Enter number (1-${files.length + 1}): `);
         const n = parseInt(ans, 10);
         if (n >= 1 && n <= files.length) return files[n - 1];
-        return await askQuestion('Enter custom file path: ');
+        const customPath = await askQuestion('Enter custom file path: ');
+        return { file: customPath, classification: 'UNKNOWN' };
     }
     return new Promise((resolve) => {
         let query = '', idx = 0, scroll = 0, drawn = 0;
@@ -850,7 +864,7 @@ async function promptFileSearch(message, files) {
         const { stdin, stdout } = process;
         stdout.write(C.hide);
         function getFiltered() {
-            const base = query ? files.filter(f => f.toLowerCase().includes(query.toLowerCase())) : [...files];
+            const base = query ? files.filter(f => f.file.toLowerCase().includes(query.toLowerCase())) : [...files];
             return [...base, '[Enter custom path]'];
         }
         function highlightMatch(str, q) {
@@ -869,10 +883,23 @@ async function promptFileSearch(message, files) {
             const end = Math.min(scroll + VISIBLE, filtered.length);
             if (scroll > 0) lines.push(`${C.dim}  ↑ ${scroll} more${C.reset}`);
             for (let i = scroll; i < end; i++) {
-                const active = i === idx, isCustom = filtered[i] === '[Enter custom path]';
+                const active = i === idx;
+                const item = filtered[i];
+                const isCustom = item === '[Enter custom path]';
                 const prefix = active ? `${C.cyan}❯ ${C.reset}` : '  ';
-                let lbl = isCustom ? `${C.dim}[Enter custom path]${C.reset}` : highlightMatch(filtered[i], query);
-                if (active) lbl = `${C.cyan}${C.bold}${isCustom ? '[Enter custom path]' : filtered[i]}${C.reset}`;
+                
+                let lbl = '';
+                if (isCustom) {
+                    lbl = active 
+                        ? `${C.cyan}${C.bold}[Enter custom path]${C.reset}` 
+                        : `${C.dim}[Enter custom path]${C.reset}`;
+                } else {
+                    const badge = getBadge(item.classification);
+                    const highlighted = highlightMatch(item.file, query);
+                    lbl = active 
+                        ? `${C.cyan}${C.bold}${item.file}${C.reset}${badge}` 
+                        : `${highlighted}${badge}`;
+                }
                 lines.push(`${prefix}${lbl}`);
             }
             if (end < filtered.length) lines.push(`${C.dim}  ↓ ${filtered.length - end} more${C.reset}`);
@@ -885,9 +912,11 @@ async function promptFileSearch(message, files) {
             stdout.write(C.up(drawn));
             if (val === '[Enter custom path]') {
                 stdout.write(`${C.bold}${message}${C.reset} ${C.dim}custom path${C.reset}\n`);
-                askQuestion('Enter custom file path: ').then(resolve);
+                askQuestion('Enter custom file path: ').then(customPath => {
+                    resolve({ file: customPath, classification: 'UNKNOWN' });
+                });
             } else {
-                stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${val}${C.reset}\n`);
+                stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${val.file}${C.reset}\n`);
                 resolve(val);
             }
         }
@@ -1260,6 +1289,19 @@ async function injectViteCsp(filePath, isTS) {
 
 async function performAutoInjection(targetDir, framework, isTS, compatCtx) {
   const canonicalFw = getCanonicalFramework(framework);
+  const lowerFw = framework ? framework.toLowerCase() : '';
+  let fwKey = lowerFw;
+  if (lowerFw === 'next' || lowerFw.startsWith('next')) {
+    const hasApp = fs.existsSync(path.join(targetDir, 'app')) || 
+                   fs.existsSync(path.join(targetDir, 'src/app'));
+    fwKey = hasApp ? 'next-app' : 'next-pages';
+  } else if (lowerFw === 'solidjs') {
+    fwKey = 'solid';
+  } else if (lowerFw.startsWith('nuxt')) {
+    fwKey = 'nuxt';
+  } else {
+    fwKey = canonicalFw;
+  }
   
   const fwMeta = {
     'next-app': {
@@ -1331,7 +1373,7 @@ async function performAutoInjection(targetDir, framework, isTS, compatCtx) {
     'deno': { routeFile: 'server.ts' }
   };
 
-  const meta = fwMeta[framework];
+  const meta = fwMeta[fwKey];
   if (!meta) return;
 
   if (meta.routeFile) {
@@ -1351,7 +1393,7 @@ async function performAutoInjection(targetDir, framework, isTS, compatCtx) {
   fs.mkdirSync(path.dirname(hookPath), { recursive: true });
   
   let hookContent = '';
-  switch (framework) {
+  switch (fwKey) {
     case 'next-app':
     case 'next-pages':
       hookContent = `import { useState, useEffect } from 'react';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function useFortress() {\n  const [client, setClient] = useState<any>(null);\n  useEffect(() => {\n    FortressClient.init('/api/fortress').then(setClient).catch(console.error);\n  }, []);\n  return { client, secured: !!client };\n}\n`;
@@ -1366,20 +1408,20 @@ async function performAutoInjection(targetDir, framework, isTS, compatCtx) {
       hookContent = `import { useState, useEffect } from 'react';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function useFortress() {\n  const [client, setClient] = useState<any>(null);\n  useEffect(() => {\n    FortressClient.init('/api/fortress').then(setClient).catch(console.error);\n  }, []);\n  return client;\n}\n`;
       break;
     case 'astro':
-      hookContent = `---\n// Astro component\n---\n<div data-fortress>Secured by Fortress</div>\n<script>\n  import FortressClient from '@lkeld/fortress-wasm/client';\n  FortressClient.init('/api/fortress').then(() => {\n    console.log('Fortress initialized');\n  }).catch(console.error);\n</script>\n`;
+      hookContent = `---\n// Astro component\n---\n<div data-fortress>Secured by Fortress</div>\n<script>\n  import FortressClient from '@lkeld/fortress-wasm/client';\n  FortressClient.init('/api/fortress').then(() => {\n    console.log('Fortress initialised');\n  }).catch(console.error);\n</script>\n`;
       break;
     case 'solid':
     case 'solidjs':
       hookContent = `import { createSignal, createEffect } from 'solid-js';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function useFortress() {\n  const [client, setClient] = createSignal<any>(null);\n  createEffect(() => {\n    FortressClient.init('/api/fortress').then(setClient).catch(console.error);\n  });\n  return client;\n}\n`;
       break;
     case 'qwik':
-      hookContent = `import { component$, useVisibleTask$, useStore } from '@builder.io/qwik';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport const Fortress = component$(() => {\n  const state = useStore({ secured: false });\n  useVisibleTask$(() => {\n    FortressClient.init('/api/fortress').then(() => {\n      state.secured = true;\n    }).catch(console.error);\n  });\n  return <div>Secured by Fortress: {state.secured ? "Active" : "Initializing"}</div>;\n});\n`;
+      hookContent = `import { component$, useVisibleTask$, useStore } from '@builder.io/qwik';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\nexport const Fortress = component$(() => {\n  const state = useStore({ secured: false });\n  useVisibleTask$(() => {\n    FortressClient.init('/api/fortress').then(() => {\n      state.secured = true;\n    }).catch(console.error);\n  });\n  return <div>Secured by Fortress: {state.secured ? "Active" : "Initialising"}</div>;\n});\n`;
       break;
     case 'angular':
       hookContent = `import { Injectable } from '@angular/core';\nimport FortressClient from '@lkeld/fortress-wasm/client';\n\n@Injectable({ providedIn: 'root' })\nexport class FortressService {\n  client: any = null;\n  constructor() {\n    if (typeof window !== 'undefined') {\n      FortressClient.init('/api/fortress').then(c => this.client = c).catch(console.error);\n    }\n  }\n}\n`;
       break;
     case 'vite':
-      hookContent = `import FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function initFortress() {\n  FortressClient.init('/api/fortress')\n    .then(() => console.log("Fortress initialized"))\n    .catch(console.error);\n}\n`;
+      hookContent = `import FortressClient from '@lkeld/fortress-wasm/client';\n\nexport function initFortress() {\n  FortressClient.init('/api/fortress')\n    .then(() => console.log("Fortress initialised"))\n    .catch(console.error);\n}\n`;
       break;
     case 'html':
       hookContent = `import FortressClient from '@lkeld/fortress-wasm/client';\n\nif (typeof window !== 'undefined') {\n  FortressClient.init('/api/fortress')\n    .then(() => console.log('Fortress HTML page integration loaded'))\n    .catch(console.error);\n}\n`;
@@ -1404,7 +1446,7 @@ async function performAutoInjection(targetDir, framework, isTS, compatCtx) {
 
   if (fs.existsSync(entryResolved)) {
     safeModifyFile(entryResolved, (content) => {
-      switch (framework) {
+      switch (fwKey) {
         case 'next-app':
           if (content.includes('fortress-wasm-start')) return content;
           let naContent = `// fortress-wasm-start\nimport { useFortress } from '../hooks/useFortress';\n// fortress-wasm-end\n` + content;
@@ -1532,7 +1574,7 @@ async function performAutoInjection(targetDir, framework, isTS, compatCtx) {
     }
   }
 
-  switch (framework) {
+  switch (fwKey) {
     case 'next-app':
     case 'next-pages':
       await injectNextCsp(cspResolved, isTS);
@@ -2211,7 +2253,7 @@ function setupHuskyPreCommitHook(targetDir, relativeProtectedDir) {
     try {
       execSync('npx husky init', { cwd: targetDir, stdio: 'ignore' });
     } catch (e) {
-      console.error('[Fortress] Failed to initialize Husky:', e.message);
+      console.error('[Fortress] Failed to initialise Husky:', e.message);
     }
   }
   
@@ -2492,6 +2534,252 @@ function setupLintStagedCompatibility(targetDir, relativeProtectedDir) {
   }
 }
 
+function printSummary(framework, protectedDirName) {
+    let entryResolved = null;
+    let cspResolved = null;
+    let clientHookStatus = 'skipped';
+    let cspStatus = 'skipped';
+    
+    const fwMeta = {
+      'next-app': {
+        hookFile: 'hooks/useFortress.tsx',
+        entryFile: 'app/layout.tsx',
+        cspFile: 'next.config.js',
+      },
+      'next-pages': {
+        hookFile: 'hooks/useFortress.tsx',
+        entryFile: 'pages/_app.tsx',
+        cspFile: 'next.config.js',
+      },
+      'nuxt': {
+        hookFile: 'composables/useFortressInit.ts',
+        entryFile: 'app.vue',
+        cspFile: 'nuxt.config.ts',
+      },
+      'sveltekit': {
+        hookFile: 'src/lib/fortressStore.ts',
+        entryFile: 'src/routes/+layout.svelte',
+        cspFile: 'svelte.config.js',
+      },
+      'remix': {
+        hookFile: 'app/hooks/useFortress.ts',
+        entryFile: 'app/root.tsx',
+        cspFile: 'app/entry.server.tsx',
+      },
+      'astro': {
+        hookFile: 'src/components/FortressInit.astro',
+        entryFile: 'src/layouts/Layout.astro',
+        cspFile: 'src/middleware.ts',
+      },
+      'solid': {
+        hookFile: 'src/hooks/useFortress.tsx',
+        entryFile: 'src/root.tsx',
+        cspFile: 'vite.config.ts',
+      },
+      'solidjs': {
+        hookFile: 'src/hooks/useFortress.tsx',
+        entryFile: 'src/root.tsx',
+        cspFile: 'vite.config.ts',
+      },
+      'qwik': {
+        hookFile: 'src/components/fortress/fortress.tsx',
+        entryFile: 'src/routes/layout.tsx',
+        cspFile: 'vite.config.ts',
+      },
+      'angular': {
+        hookFile: 'src/app/api/fortress.service.ts',
+        entryFile: 'src/app/app.component.ts',
+        cspFile: 'src/app/app.component.ts',
+      },
+      'vite': {
+        hookFile: 'src/fortress.ts',
+        entryFile: 'src/App.tsx',
+        cspFile: 'vite.config.ts',
+      },
+      'html': {
+        hookFile: 'fortress.js',
+        entryFile: 'index.html',
+        cspFile: 'index.html',
+      }
+    };
+    
+    const lowerFw = framework ? framework.toLowerCase() : '';
+    let fwKey = lowerFw;
+    if (lowerFw === 'next' || lowerFw.startsWith('next')) {
+      const hasApp = fs.existsSync(path.join(targetDir, 'app')) || 
+                     fs.existsSync(path.join(targetDir, 'src/app'));
+      fwKey = hasApp ? 'next-app' : 'next-pages';
+    } else if (lowerFw === 'solidjs') {
+      fwKey = 'solid';
+    } else if (lowerFw.startsWith('nuxt')) {
+      fwKey = 'nuxt';
+    }
+    
+    let meta = fwMeta[fwKey];
+    if (!meta && (fwKey === 'next' || fwKey.startsWith('next'))) {
+      const hasApp = fs.existsSync(path.join(targetDir, 'app')) || 
+                     fs.existsSync(path.join(targetDir, 'src/app'));
+      meta = hasApp ? fwMeta['next-app'] : fwMeta['next-pages'];
+    }
+
+    const serverOnlyFrameworks = ['express', 'fastify', 'hono', 'koa', 'nestjs', 'bun', 'deno'];
+    const isServerOnly = serverOnlyFrameworks.includes(lowerFw);
+
+    if (meta && !isServerOnly) {
+      if (meta.entryFile) {
+        entryResolved = path.join(targetDir, meta.entryFile);
+        if (!fs.existsSync(entryResolved)) {
+          const baseWithoutExt = entryResolved.slice(0, entryResolved.lastIndexOf('.'));
+          for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.svelte', '.astro']) {
+            if (fs.existsSync(baseWithoutExt + ext)) {
+              entryResolved = baseWithoutExt + ext;
+              break;
+            }
+          }
+        }
+        if (fs.existsSync(entryResolved)) {
+          const content = fs.readFileSync(entryResolved, 'utf8');
+          if (content.includes('fortress-wasm-start')) {
+            clientHookStatus = 'done';
+          } else {
+            clientHookStatus = 'failed';
+          }
+        } else {
+          clientHookStatus = 'failed';
+        }
+      }
+      
+      if (meta.cspFile) {
+        cspResolved = path.join(targetDir, meta.cspFile);
+        if (!fs.existsSync(cspResolved)) {
+          const baseWithoutExt = cspResolved.slice(0, cspResolved.lastIndexOf('.'));
+          for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']) {
+            if (fs.existsSync(baseWithoutExt + ext)) {
+              cspResolved = baseWithoutExt + ext;
+              break;
+            }
+          }
+        }
+        if (fs.existsSync(cspResolved)) {
+          const content = fs.readFileSync(cspResolved, 'utf8');
+          if (content.includes('fortress-wasm-start') || content.includes('worker-src')) {
+            cspStatus = 'done';
+          } else {
+            cspStatus = 'failed';
+          }
+        } else {
+          cspStatus = 'failed';
+        }
+      }
+    }
+
+    let cicdStatus = 'skipped';
+    const cicdFiles = [
+        '.github/workflows',
+        '.gitlab-ci.yml',
+        '.circleci/config.yml',
+        '.circleci/config.yaml',
+        'netlify.toml',
+        'vercel.json'
+    ];
+    let hasCicdFileWithFortress = false;
+    for (const file of cicdFiles) {
+        const fullPath = path.join(targetDir, file);
+        if (fs.existsSync(fullPath)) {
+            const stats = fs.statSync(fullPath);
+            if (stats.isDirectory()) {
+                try {
+                    const subfiles = fs.readdirSync(fullPath);
+                    for (const sf of subfiles) {
+                        const sfPath = path.join(fullPath, sf);
+                        if (fs.statSync(sfPath).isFile()) {
+                            const content = fs.readFileSync(sfPath, 'utf8');
+                            if (content.includes('fortress build') || content.includes('fortress-wasm-start')) {
+                                hasCicdFileWithFortress = true;
+                                break;
+                            }
+                        }
+                    }
+                } catch (e) {}
+            } else {
+                try {
+                    const content = fs.readFileSync(fullPath, 'utf8');
+                    if (content.includes('fortress build') || content.includes('fortress-wasm-start')) {
+                        hasCicdFileWithFortress = true;
+                    }
+                } catch (e) {}
+            }
+        }
+        if (hasCicdFileWithFortress) break;
+    }
+    
+    if (hasCicdFileWithFortress) {
+        cicdStatus = 'done';
+    } else {
+        const pkgPath = path.join(targetDir, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+            try {
+                const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+                if (pkg.scripts) {
+                    let hasBuildScript = false;
+                    for (const key in pkg.scripts) {
+                        if (pkg.scripts[key] && pkg.scripts[key].includes('fortress build')) {
+                            hasBuildScript = true;
+                            break;
+                        }
+                    }
+                    if (hasBuildScript) {
+                        cicdStatus = 'done with package.json';
+                    }
+                }
+            } catch (e) {}
+        }
+    }
+
+    console.log('\nWhat was set up:');
+    console.log('  ✓ Keypair generated in ./.fortress_keys/');
+    console.log('  ✓ Configuration file created at ./fortress.config.js');
+    console.log(`  ✓ Protected functions directory set up at ${protectedDirName}`);
+    if (clientHookStatus === 'done' && entryResolved) {
+      console.log(`  ✓ Client hook auto-injected into ./${path.relative(targetDir, entryResolved).replace(/\\/g, '/')}`);
+    }
+    if (cspStatus === 'done' && cspResolved) {
+      console.log(`  ✓ Content Security Policy (CSP) header auto-configured in ./${path.relative(targetDir, cspResolved).replace(/\\/g, '/')}`);
+    }
+    
+    console.log('\nNext steps:');
+    let stepNum = 1;
+    if ((clientHookStatus === 'failed' || clientHookStatus === 'skipped') && meta && meta.hookFile && !isServerOnly) {
+      console.log(`  ${stepNum++}. To complete setup, manually import and call the useFortress client hook in your components (e.g., in ./${meta.entryFile}):`);
+      if (framework === 'sveltekit') {
+        console.log(`       import { fortressStore } from '../lib/fortressStore';`);
+      } else if (framework === 'astro') {
+        console.log(`       import FortressInit from '../components/FortressInit.astro';`);
+      } else if (framework === 'qwik') {
+        console.log(`       import { Fortress } from '../../components/fortress/fortress';`);
+      } else if (framework === 'angular') {
+        console.log(`       import { FortressService } from './api/fortress.service';`);
+      } else if (framework === 'vite') {
+        console.log(`       import { initFortress } from './fortress';`);
+      } else if (framework === 'html') {
+        console.log(`       <script type="module" src="/fortress.js"></script>`);
+      } else {
+        console.log(`       import { useFortress } from '@/hooks/useFortress';`);
+      }
+    }
+    if ((cspStatus === 'failed' || cspStatus === 'skipped') && meta && meta.cspFile && !isServerOnly) {
+      console.log(`  ${stepNum++}. Manually add the worker-src CSP header to your configuration (e.g., in ./${meta.cspFile}):`);
+      console.log(`       worker-src 'self' blob:;`);
+    }
+    if (cicdStatus === 'skipped') {
+      console.log(`  ${stepNum++}. Configure CI/CD to run 'fortress build' or 'fortress-wasm-start' in your deployment pipeline.`);
+    }
+    console.log(`  ${stepNum++}. Run \`fortress build\` any time you change code inside the ${protectedDirName} directory.`);
+    console.log(`  ${stepNum++}. To protect new functions or files interactively via CLI, run \`npx fortress protect\`.\n`);
+
+    printSecretReminder();
+}
+
 async function runInteractive() {
     if (fs.existsSync(configPath) || fs.existsSync(protectedDir)) {
         console.log("\nWarning: fortress.config.js or protected/ directory already exists.");
@@ -2525,9 +2813,39 @@ async function runInteractive() {
       }
     }
     
-    const candidateFiles = findSourceFiles(targetDir);
-    const selectedFile = candidateFiles.length > 0
-        ? await promptFileSearch('Choose a file to protect:', candidateFiles)
+    const { classifyFile, resolveClassificationViaImporters } = require('../lib/classify-file');
+    const rawCandidateFiles = findSourceFiles(targetDir);
+    
+    const initialClassifications = {};
+    for (const file of rawCandidateFiles) {
+        initialClassifications[file] = classifyFile(file, targetDir);
+    }
+    
+    const finalClassifications = {};
+    for (const file of rawCandidateFiles) {
+        if (initialClassifications[file] === 'UNKNOWN') {
+            finalClassifications[file] = resolveClassificationViaImporters(file, targetDir, initialClassifications);
+        } else {
+            finalClassifications[file] = initialClassifications[file];
+        }
+    }
+    
+    const filteredCandidateFiles = rawCandidateFiles
+        .filter(file => {
+            const cls = finalClassifications[file];
+            return cls !== 'SERVER' && cls !== 'TYPES_ONLY';
+        })
+        .map(file => ({
+            file,
+            classification: finalClassifications[file]
+        }));
+
+    const selectedFileObj = filteredCandidateFiles.length > 0
+        ? await promptFileSearch('Choose a file to protect:', filteredCandidateFiles)
+        : null;
+
+    const selectedFile = selectedFileObj
+        ? selectedFileObj.file
         : await askQuestion('\nNo JS/TS source files found. Enter custom file path to protect: ');
 
     let selectedFunctions = [];
@@ -2611,18 +2929,12 @@ async function runInteractive() {
             env: { ...process.env, FORTRESS_SIGNING_PASSWORD: password }
         });
         console.log('\n✅ Build complete! Your protected functions are compiled and ready.');
-        console.log('\nNext steps:');
-        console.log('  1. Import the useFortress hook in your components:');
-        console.log('       import { useFortress } from \'@/hooks/useFortress\';');
-        console.log('  2. Add worker-src CSP header to next.config.ts:');
-        console.log('       worker-src \'self\' blob:;');
-        console.log('  3. Run `fortress build` any time you change protected/ code.');
-        console.log('  4. To protect new functions or files interactively via CLI, run `npx fortress protect`.\n');
     } catch (e) {
         console.log('\n⚠️  Scaffolding complete, but auto-build failed. Run manually:');
-        console.log(`  FORTRESS_SIGNING_PASSWORD="<your-password>" npx fortress build\n`);
+        console.log(`  FORTRESS_SIGNING_PASSWORD="<your-password>" npx fortress build`);
     }
-    printSecretReminder();
+
+    printSummary(framework, protectedDirName);
 }
 
 async function runNonInteractive() {
@@ -2649,7 +2961,7 @@ async function runNonInteractive() {
     console.log(`TypeScript: ${finalTypeScript}`);
     console.log(`Package Manager: ${finalPackageManager}`);
     console.log(`Protected directory: ${path.join(targetDir, 'protected')}`);
-    printSecretReminder();
+    printSummary(finalFramework, './protected');
 }
 
 if (isInteractive) {

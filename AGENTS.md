@@ -94,6 +94,15 @@ Every release — patch, minor, or major — must complete this checklist in ord
    cargo deny check
    ```
 
+1a. Sync all sub-package versions to match root:
+   ```bash
+   node scripts/sync-versions.js --fix
+   ```
+   Confirm output shows all sub-packages updated — no drift remaining.
+   The following sub-packages must always match the root version exactly:
+   - `packages/create-fortress-app/package.json`
+   - `packages/sdk/package.json`
+
 2. `package.json` version is updated to the new version number
 
 3. `CHANGELOG.md` is updated with a new section for this version (see changelog rules below)

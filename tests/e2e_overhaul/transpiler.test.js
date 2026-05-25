@@ -179,6 +179,44 @@ runTestSuite('F3: Transpiler E2E Overhaul Test Suite', {
         `, 'testClosureMutable');
     },
 
+    'Closures - Top-Level Arrow Function Store (Zustand style)': async () => {
+        await testEquivalence(`
+            function testStore(x) {
+                let bears = 0;
+                let set = (fn) => {
+                    let res = fn({ bears });
+                    bears = res.bears;
+                };
+                let increase = (by) => set((state) => ({ bears: state.bears + by }));
+                increase(x);
+                return bears;
+            }
+        `, 'testStore');
+    },
+
+    'Closures - Expression-bodied nested arrow function': async () => {
+        await testEquivalence(`
+            function testExpressionBodiedArrow() {
+                let x = 10;
+                let add = (y) => x + y;
+                return add(5);
+            }
+        `, 'testExpressionBodiedArrow');
+    },
+
+    'Closures - State variable renaming safety with object properties': async () => {
+        await testEquivalence(`
+            function testStateRenamingSafety() {
+                let state = { state: 42 };
+                let getVal = (state) => {
+                    let obj = { state: 100 };
+                    return state.state + obj.state;
+                };
+                return getVal(state);
+            }
+        `, 'testStateRenamingSafety');
+    },
+
     'Generators - Happy Path equivalence check': async () => {
         await testEquivalence(`
             function* testGenHappy() {
@@ -515,5 +553,128 @@ runTestSuite('F3: Transpiler E2E Overhaul Test Suite', {
                 return new Proxy(target, handler);
             }
         `, 'testProxyDynamicException');
+    },
+
+    'Closures - Top-level destructuring with arrow function does not crash': async () => {
+        const { transpile } = require('../../compiler/dist/js-transpiler.js');
+        transpile('const [fn] = [ (x) => x ];', { functionName: 'main' });
+    },
+
+    'Closures - Multi-declarator variable statement in closure scope': async () => {
+        await testEquivalence(`
+            function testMultiDecl() {
+                let x = 1, y = 2;
+                let getX = () => x;
+                return getX() + y;
+            }
+        `, 'testMultiDecl');
+    },
+
+    'Challenger Stress - Multi-declarator in loop init': async () => {
+        await testEquivalence(`
+            function testMultiDeclLoop() {
+                let sum = 0;
+                for (let i = 0, j = 10; i < j; ) {
+                    sum = sum + i + j;
+                    i = i + 1;
+                    j = j - 1;
+                }
+                return sum;
+            }
+        `, 'testMultiDeclLoop');
+    },
+
+    'Challenger Stress - Multi-declarator in loop body': async () => {
+        await testEquivalence(`
+            function testMultiDeclLoopBody() {
+                let sum = 0;
+                for (let i = 0; i < 5; i++) {
+                    let a = i, b = i * 2, c = i * 3;
+                    sum = sum + a + b + c;
+                }
+                return sum;
+            }
+        `, 'testMultiDeclLoopBody');
+    },
+
+    'Challenger Stress - Multi-declarator in conditional blocks': async () => {
+        await testEquivalence(`
+            function testMultiDeclConditional() {
+                let x = 10;
+                if (x > 5) {
+                    let a = 100, b = 200;
+                    if (a > 50) {
+                        let c = 300, d = 400;
+                        x = x + a + b + c + d;
+                    } else {
+                        let e = 500, f = 600;
+                        x = x + e + f;
+                    }
+                } else {
+                    let g = 700, h = 800;
+                    x = x + g + h;
+                }
+                return x;
+            }
+        `, 'testMultiDeclConditional');
+    },
+
+    'Challenger Stress - Arrow functions - no parameter expression-bodied': async () => {
+        await testEquivalence(`
+            function testArrowNoParamExpr() {
+                let f = () => 42;
+                return f();
+            }
+        `, 'testArrowNoParamExpr');
+    },
+
+    'Challenger Stress - Arrow functions - single parameter expression-bodied': async () => {
+        await testEquivalence(`
+            function testArrowSingleParamExpr() {
+                let f = x => x + 10;
+                return f(5);
+            }
+        `, 'testArrowSingleParamExpr');
+    },
+
+    'Challenger Stress - Arrow functions - multiple parameters expression-bodied': async () => {
+        await testEquivalence(`
+            function testArrowMultiParamExpr() {
+                let f = (x, y, z) => x + y + z;
+                return f(1, 2, 3);
+            }
+        `, 'testArrowMultiParamExpr');
+    },
+
+    'Challenger Stress - Arrow functions - block-bodied': async () => {
+        await testEquivalence(`
+            function testArrowBlockBodied() {
+                let f = (x, y) => {
+                    let z = x * y;
+                    return z + 5;
+                };
+                return f(3, 4);
+            }
+        `, 'testArrowBlockBodied');
+    },
+
+    'Challenger Stress - Arrow functions - destructuring parameter': async () => {
+        await testEquivalence(`
+            function testArrowDestructParam() {
+                let f = ({a, b}) => a + b;
+                return f({a: 10, b: 20});
+            }
+        `, 'testArrowDestructParam');
+    },
+
+
+    'Challenger Stress - Top-level destructuring pattern inputs': async () => {
+        const { transpile } = require('../../compiler/dist/js-transpiler.js');
+        // Object pattern destructuring
+        transpile('const { a, b: { c } } = { a: 1, b: { c: 2 } };', { functionName: 'main' });
+        // Array pattern destructuring with default value and rest element
+        transpile('let [x, y = 10, ...z] = [1, null, 3, 4];', { functionName: 'main' });
+        // Mixed object and array destructuring
+        transpile('const { a: [b, c] } = { a: [10, 20] };', { functionName: 'main' });
     }
 });

@@ -125,6 +125,7 @@ export function verifyEquivalenceSync(
     `;
     const functionName = cleanJsCode.match(/function\s+(\w+)/)?.[1] || 
                          cleanJsCode.match(/function\*\s+(\w+)/)?.[1] || 
+                         cleanJsCode.match(/(?:const|let|var)\s+(\w+)\s*=\s*/)?.[1] ||
                          'defaultFunc';
 
     const initInfo = verifierInstance.run(cleanJsCode, builtins, functionName, [], true);
@@ -382,6 +383,7 @@ export async function verifyEquivalence(
     const cleanJsCode = originalJsCode.trim();
     const functionName = cleanJsCode.match(/function\s+(\w+)/)?.[1] || 
                          cleanJsCode.match(/function\*\s+(\w+)/)?.[1] || 
+                         cleanJsCode.match(/(?:const|let|var)\s+(\w+)\s*=\s*/)?.[1] ||
                          'defaultFunc';
     
     let transpileRes;

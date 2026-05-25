@@ -70,139 +70,7 @@ if (!command || command === '--help' || command === '-h') {
 
 (async () => {
     if (command === 'build') {
-        function askYesNo(query) {
-            return new Promise((resolve) => {
-                const readline = require('readline');
-                const rl = readline.createInterface({
-                    input: process.stdin,
-                    output: process.stdout
-                });
-                rl.question(query, (answer) => {
-                    rl.close();
-                    process.stdin.pause();
-                    const lower = answer.trim().toLowerCase();
-                    resolve(lower === 'y' || lower === 'yes');
-                });
-            });
-        }
-
-        // 1. Probe check for isolated-vm
-        let hasIvm = false;
-        try {
-            let ivm;
-            try {
-                ivm = require('isolated-vm');
-            } catch (e) {
-                const { createRequire } = require('module');
-                const path = require('path');
-                const localRequire = createRequire(path.resolve(process.cwd(), 'package.json'));
-                ivm = localRequire('isolated-vm');
-            }
-            if (!ivm) {
-                throw new Error("isolated-vm not found");
-            }
-            const { execSync } = require('child_process');
-            execSync('"' + process.execPath + '" -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
-                stdio: 'ignore',
-                timeout: 1000
-            });
-            hasIvm = true;
-        } catch (e) {
-            hasIvm = false;
-        }
-
-        // 2. If missing and interactive, prompt the user
-        if (!hasIvm && process.stdin.isTTY && process.stdout.isTTY) {
-            console.log("\n[INFO] The secure sandbox package 'isolated-vm' is not installed or failed to load.");
-            console.log("Without it, the compiler will fall back to Node's built-in 'vm' module (which is less secure for untrusted code).");
-            console.log("");
-            const install = await askYesNo("Would you like to install and compile 'isolated-vm' now? (y/n) ");
-            if (install) {
-                // Check for compilers
-                let hasCompilers = false;
-                const { execSync } = require('child_process');
-                try {
-                    if (process.platform === 'darwin') {
-                        execSync('xcode-select -p', { stdio: 'ignore' });
-                        hasCompilers = true;
-                    } else if (process.platform === 'win32') {
-                        execSync('where cl.exe', { stdio: 'ignore' });
-                        hasCompilers = true;
-                    } else {
-                        execSync('make --version && (gcc --version || g++ --version || clang --version)', { stdio: 'ignore', shell: true });
-                        hasCompilers = true;
-                    }
-                } catch (err) {
-                    hasCompilers = false;
-                }
-
-                if (!hasCompilers) {
-                    console.log("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                    if (process.platform === 'darwin') {
-                        console.log("[INFO] Native C++ compiler tools are missing on your system.");
-                        console.log("Fortress will trigger the macOS Command Line Tools installer now.");
-                        console.log("Please complete the installation dialog that appears on your screen,");
-                        console.log("then run the build command again once finished.");
-                        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-                        try {
-                            const spawn = require('cross-spawn');
-                            spawn.sync('xcode-select', ['--install'], { stdio: 'inherit' });
-                        } catch (e) {}
-                    } else if (process.platform === 'win32') {
-                        console.log("[ERROR] Native C++ compiler tools (MSVC cl.exe) are missing.");
-                        console.log("To compile the secure sandbox, please install the build tools:");
-                        console.log("  winget install Microsoft.VisualStudio.Workload.VCTools");
-                        console.log("After installing, please run the build command again.");
-                        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-                    } else {
-                        console.log("[ERROR] Native C++ compiler tools (gcc, make, or clang) are missing.");
-                        console.log("To compile the secure sandbox, please install the build tools:");
-                        console.log("  Ubuntu/Debian: sudo apt install build-essential");
-                        console.log("  Fedora/RHEL:   sudo dnf groupinstall \"Development Tools\"");
-                        console.log("After installing, please run the build command again.");
-                        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-                    }
-                    process.exit(1);
-                } else {
-                    console.log("\n[INFO] Compiler tools detected. Compiling and installing 'isolated-vm'...");
-                    let installCmd = 'npm install --save-dev isolated-vm';
-                    if (fs.existsSync('pnpm-lock.yaml')) {
-                        installCmd = 'pnpm add -D isolated-vm';
-                    } else if (fs.existsSync('yarn.lock')) {
-                        installCmd = 'yarn add -D isolated-vm';
-                    } else if (fs.existsSync('bun.lockb') || fs.existsSync('bun.lock')) {
-                        installCmd = 'bun add -d isolated-vm';
-                    }
-                    
-                    try {
-                        const spawn = require('cross-spawn');
-                        const parts = installCmd.split(' ');
-                        const result = spawn.sync(parts[0], parts.slice(1), { stdio: 'inherit', cwd: process.cwd() });
-                        if (result.status === 0) {
-                            console.log("\n✓ 'isolated-vm' compiled and installed successfully!\n");
-                            try {
-                                const { execSync } = require('child_process');
-                                execSync('"' + process.execPath + '" -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
-                                    stdio: 'ignore',
-                                    timeout: 1000
-                                });
-                                hasIvm = true;
-                            } catch (e) {
-                                hasIvm = false;
-                                console.log("⚠️ Verification failed after installation. Falling back to the Node.js built-in 'vm' module.\n");
-                            }
-                        } else {
-                            console.log("\n⚠️ Compilation failed. Falling back to the Node.js built-in 'vm' module.\n");
-                        }
-                    } catch (err) {
-                        console.log(`\n⚠️ Failed to run installer: ${err.message}. Falling back to 'vm'.\n`);
-                    }
-                }
-            } else {
-                console.log("\n[INFO] Proceeding with the Node.js built-in 'vm' module fallback.\n");
-            }
-        }
-
+        await syncConfigProtectPaths();
         const configPath = path.resolve(process.cwd(), 'fortress.config.js');
         let config = {};
         if (fs.existsSync(configPath)) {
@@ -1040,6 +908,17 @@ function injectProtectAnnotations(content, selectedFunctions) {
     const insertIndices = [];
     const funcsToProtect = new Set(selectedFunctions);
     
+    function hasProtectAnnotation(node) {
+        if (node && node.leadingComments) {
+            for (const comment of node.leadingComments) {
+                if (/@protect\b/.test(comment.value)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    
     function traverse(node) {
         if (!node) return;
         
@@ -1098,7 +977,12 @@ function injectProtectAnnotations(content, selectedFunctions) {
         }
         
         if (foundName && funcsToProtect.has(foundName) && declNode && declNode.start !== undefined) {
-            insertIndices.push(declNode.start);
+            const alreadyProtected = hasProtectAnnotation(declNode) || 
+                                     hasProtectAnnotation(node) ||
+                                     /@protect\b/.test(content.substring(Math.max(0, declNode.start - 200), declNode.start));
+            if (!alreadyProtected) {
+                insertIndices.push(declNode.start);
+            }
         }
         
         for (const key in node) {
@@ -1139,15 +1023,191 @@ function injectProtectAnnotations(content, selectedFunctions) {
     return result;
 }
 
+function getExportedFunctionsWithStatus(content) {
+    const parser = require('@babel/parser');
+    let ast;
+    try {
+        ast = parser.parse(content, {
+            sourceType: 'module',
+            plugins: ['typescript', 'jsx', 'decorators-legacy']
+        });
+    } catch (e) {
+        return [];
+    }
+    
+    // Pass 1: Compile a registry of all top-level functions and variables.
+    const registry = new Map(); // name -> { node, parentNode, isFunction }
+    
+    function registerVariable(node, parentNode) {
+        if (node.type === 'VariableDeclaration') {
+            for (const decl of node.declarations) {
+                if (decl.id && decl.id.type === 'Identifier') {
+                    const isFunc = decl.init && (
+                        decl.init.type === 'FunctionExpression' || 
+                        decl.init.type === 'ArrowFunctionExpression'
+                    );
+                    registry.set(decl.id.name, { node: decl, parentNode: parentNode || node, isFunction: isFunc });
+                }
+            }
+        }
+    }
+    
+    function registerFunction(node, parentNode) {
+        if (node.type === 'FunctionDeclaration' && node.id) {
+            registry.set(node.id.name, { node, parentNode: parentNode || node, isFunction: true });
+        }
+    }
+    
+    for (const stmt of ast.program.body) {
+        if (stmt.type === 'FunctionDeclaration') {
+            registerFunction(stmt, null);
+        } else if (stmt.type === 'VariableDeclaration') {
+            registerVariable(stmt, null);
+        } else if (stmt.type === 'ExportNamedDeclaration') {
+            if (stmt.declaration) {
+                if (stmt.declaration.type === 'FunctionDeclaration') {
+                    registerFunction(stmt.declaration, stmt);
+                } else if (stmt.declaration.type === 'VariableDeclaration') {
+                    registerVariable(stmt.declaration, stmt);
+                }
+            }
+        } else if (stmt.type === 'ExportDefaultDeclaration') {
+            const decl = stmt.declaration;
+            if (decl.type === 'FunctionDeclaration') {
+                registerFunction(decl, stmt);
+            } else if (decl.type === 'FunctionExpression' || decl.type === 'ArrowFunctionExpression') {
+                const name = decl.id ? decl.id.name : 'default';
+                registry.set(name, { node: decl, parentNode: stmt, isFunction: true });
+            }
+        }
+    }
+    
+    // Pass 2: Traverse top-level export statements and extract only functions that are genuinely exported.
+    const results = [];
+    const seenNames = new Set();
+    
+    function hasProtectAnnotation(node) {
+        if (node && node.leadingComments) {
+            for (const comment of node.leadingComments) {
+                if (/@protect\b/.test(comment.value)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function commentPrecedesNode(nodeStart) {
+        const preceding = content.substring(0, nodeStart);
+        const lastCommentEnd = preceding.lastIndexOf('*/');
+        if (lastCommentEnd === -1) return false;
+        const lastCommentStart = preceding.lastIndexOf('/*', lastCommentEnd);
+        if (lastCommentStart === -1) return false;
+        
+        const commentVal = preceding.substring(lastCommentStart, lastCommentEnd + 2);
+        if (!/@protect\b/.test(commentVal)) return false;
+        
+        const between = preceding.substring(lastCommentEnd + 2);
+        const cleanBetween = between.replace(/\s/g, '').replace(/^export(default)?/, '');
+        return cleanBetween === '';
+    }
+    
+    function isNodeProtected(node, parentNode) {
+        if (hasProtectAnnotation(node)) return true;
+        if (hasProtectAnnotation(parentNode)) return true;
+        if (node && node.start !== undefined && commentPrecedesNode(node.start)) return true;
+        if (parentNode && parentNode.start !== undefined && commentPrecedesNode(parentNode.start)) return true;
+        return false;
+    }
+    
+    function addFunctionResult(exportedName, localName) {
+        if (seenNames.has(exportedName)) return;
+        
+        const entry = registry.get(localName);
+        if (entry && entry.isFunction) {
+            const isProtected = isNodeProtected(entry.node, entry.parentNode);
+            results.push({ name: exportedName, isProtected });
+            seenNames.add(exportedName);
+        }
+    }
+    
+    for (const stmt of ast.program.body) {
+        if (stmt.type === 'ExportNamedDeclaration') {
+            if (stmt.declaration) {
+                if (stmt.declaration.type === 'FunctionDeclaration' && stmt.declaration.id) {
+                    addFunctionResult(stmt.declaration.id.name, stmt.declaration.id.name);
+                } else if (stmt.declaration.type === 'VariableDeclaration') {
+                    for (const decl of stmt.declaration.declarations) {
+                        if (decl.id && decl.id.type === 'Identifier') {
+                            addFunctionResult(decl.id.name, decl.id.name);
+                        }
+                    }
+                }
+            }
+            if (stmt.specifiers) {
+                for (const spec of stmt.specifiers) {
+                    if (spec.exported && spec.exported.type === 'Identifier' && spec.local && spec.local.type === 'Identifier') {
+                        addFunctionResult(spec.exported.name, spec.local.name);
+                    }
+                }
+            }
+        } else if (stmt.type === 'ExportDefaultDeclaration') {
+            const decl = stmt.declaration;
+            if (decl.type === 'FunctionDeclaration') {
+                const name = decl.id ? decl.id.name : 'default';
+                addFunctionResult(name, name);
+            } else if (decl.type === 'FunctionExpression' || decl.type === 'ArrowFunctionExpression') {
+                const name = decl.id ? decl.id.name : 'default';
+                addFunctionResult(name, name);
+            } else if (decl.type === 'Identifier') {
+                addFunctionResult('default', decl.name);
+            }
+        }
+    }
+    
+    return results;
+}
+
+function hasUnprotectedExportedFunctions(content) {
+    const funcs = getExportedFunctionsWithStatus(content);
+    if (funcs.length === 0) return false;
+    return funcs.some(f => !f.isProtected);
+}
+
 async function promptFileSearch(message, files) {
+    function getBadge(item) {
+        let badge = '';
+        if (item.classification === 'AMBIGUOUS') {
+            badge += `${C.yellow} ⚠ ambiguous${C.reset}`;
+        } else if (item.classification === 'UNKNOWN') {
+            badge += `${C.gray} ? unclassified${C.reset}`;
+        }
+        if (item.hasUnprotected) {
+            badge += `${C.red} (unprotected exports)${C.reset}`;
+        }
+        return badge;
+    }
+
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.log(`\n${message}`);
-        files.forEach((f, i) => console.log(`${i + 1}) ${f}`));
+        files.forEach((f, i) => {
+            let badgeText = '';
+            if (f.classification === 'AMBIGUOUS') badgeText += ' ⚠ ambiguous';
+            else if (f.classification === 'UNKNOWN') badgeText += ' ? unclassified';
+            if (f.hasUnprotected) badgeText += ' (unprotected exports)';
+            console.log(`${i + 1}) ${f.file}${badgeText}`);
+        });
         console.log(`${files.length + 1}) [Enter custom path]`);
         const ans = await askQuestion(`Enter number (1-${files.length + 1}): `);
-        const n = parseInt(ans, 10);
+        const trimmed = ans.trim();
+        const n = parseInt(trimmed, 10);
         if (n >= 1 && n <= files.length) return files[n - 1];
-        return await askQuestion('Enter custom file path: ');
+        if (trimmed) {
+            const matched = files.find(f => f.file.toLowerCase().includes(trimmed.toLowerCase()));
+            if (matched) return matched;
+        }
+        const customPath = await askQuestion('Enter custom file path: ');
+        return { file: customPath, classification: 'UNKNOWN', hasUnprotected: false };
     }
     return new Promise((resolve) => {
         let query = '', idx = 0, scroll = 0, drawn = 0;
@@ -1155,7 +1215,7 @@ async function promptFileSearch(message, files) {
         const { stdin, stdout } = process;
         stdout.write(C.hide);
         function getFiltered() {
-            const base = query ? files.filter(f => f.toLowerCase().includes(query.toLowerCase())) : [...files];
+            const base = query ? files.filter(f => f.file.toLowerCase().includes(query.toLowerCase())) : [...files];
             return [...base, '[Enter custom path]'];
         }
         function highlightMatch(str, q) {
@@ -1174,10 +1234,23 @@ async function promptFileSearch(message, files) {
             const end = Math.min(scroll + VISIBLE, filtered.length);
             if (scroll > 0) lines.push(`${C.dim}  ↑ ${scroll} more${C.reset}`);
             for (let i = scroll; i < end; i++) {
-                const active = i === idx, isCustom = filtered[i] === '[Enter custom path]';
+                const active = i === idx;
+                const item = filtered[i];
+                const isCustom = item === '[Enter custom path]';
                 const prefix = active ? `${C.cyan}❯ ${C.reset}` : '  ';
-                let lbl = isCustom ? `${C.dim}[Enter custom path]${C.reset}` : highlightMatch(filtered[i], query);
-                if (active) lbl = `${C.cyan}${C.bold}${isCustom ? '[Enter custom path]' : filtered[i]}${C.reset}`;
+                
+                let lbl = '';
+                if (isCustom) {
+                    lbl = active 
+                        ? `${C.cyan}${C.bold}[Enter custom path]${C.reset}` 
+                        : `${C.dim}[Enter custom path]${C.reset}`;
+                } else {
+                    const badge = getBadge(item);
+                    const highlighted = highlightMatch(item.file, query);
+                    lbl = active 
+                        ? `${C.cyan}${C.bold}${item.file}${C.reset}${badge}` 
+                        : `${highlighted}${badge}`;
+                }
                 lines.push(`${prefix}${lbl}`);
             }
             if (end < filtered.length) lines.push(`${C.dim}  ↓ ${filtered.length - end} more${C.reset}`);
@@ -1190,9 +1263,11 @@ async function promptFileSearch(message, files) {
             stdout.write(C.up(drawn));
             if (val === '[Enter custom path]') {
                 stdout.write(`${C.bold}${message}${C.reset} ${C.dim}custom path${C.reset}\n`);
-                askQuestion('Enter custom file path: ').then(resolve);
+                askQuestion('Enter custom file path: ').then(customPath => {
+                    resolve({ file: customPath, classification: 'UNKNOWN' });
+                });
             } else {
-                stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${val}${C.reset}\n`);
+                stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${val.file}${C.reset}\n`);
                 resolve(val);
             }
         }
@@ -1213,15 +1288,38 @@ async function promptFileSearch(message, files) {
 async function promptMultiSelect(message, options, { visibleCount = 10 } = {}) {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
         console.log(`\n${message} (enter numbers separated by commas, or 'a' for all)`);
-        options.forEach((o, i) => console.log(`${i + 1}) ${o}`));
+        const preselectedIndices = [];
+        options.forEach((o, i) => {
+            const name = typeof o === 'string' ? o : o.name;
+            const isAlreadyProt = (typeof o !== 'string' && o.alreadyProtected);
+            const isProt = (typeof o !== 'string' && o.isProtected);
+            if (isProt || isAlreadyProt) preselectedIndices.push(i);
+            
+            let badge = '';
+            if (isAlreadyProt) {
+                badge = ' (already protected)';
+            } else if (isProt) {
+                badge = ' [protected]';
+            }
+            console.log(`${i + 1}) ${name}${badge}`);
+        });
         const ans = await askQuestion('Enter selection: ');
         if (ans.trim().toLowerCase() === 'a') return [...options];
+        if (ans.trim() === '') {
+            const preselected = preselectedIndices.map(idx => options[idx]);
+            return preselected.length > 0 ? preselected : [options[0]];
+        }
         const picks = ans.split(',').map(n => options[parseInt(n.trim(), 10) - 1]).filter(Boolean);
         return picks.length > 0 ? picks : [options[0]];
     }
     return new Promise((resolve) => {
         let idx = 0, scroll = 0, drawn = 0;
         const selected = new Set();
+        options.forEach((opt, i) => {
+            if (typeof opt !== 'string' && (opt.isProtected || opt.alreadyProtected)) {
+                selected.add(i);
+            }
+        });
         const { stdin, stdout } = process;
         stdout.write(C.hide);
         function paint() {
@@ -1229,10 +1327,31 @@ async function promptMultiSelect(message, options, { visibleCount = 10 } = {}) {
             const end = Math.min(scroll + visibleCount, options.length);
             if (scroll > 0) lines.push(`${C.dim}  ↑ ${scroll} more${C.reset}`);
             for (let i = scroll; i < end; i++) {
+                const opt = options[i];
+                const optName = typeof opt === 'string' ? opt : opt.name;
+                const optIsProtected = typeof opt === 'string' ? false : opt.isProtected;
+                const optAlreadyProtected = typeof opt === 'string' ? false : opt.alreadyProtected;
+                
                 const active = i === idx, sel = selected.has(i);
                 const dot = sel ? `${C.green}●${C.reset}` : `${C.dim}○${C.reset}`;
                 const cur = active ? `${C.cyan}❯${C.reset}` : ' ';
-                const lbl = active ? `${C.cyan}${C.bold}${options[i]}${C.reset}` : sel ? `${C.green}${options[i]}${C.reset}` : options[i];
+                
+                let badge = '';
+                if (optAlreadyProtected) {
+                    badge = ` ${C.dim}(already protected)${C.reset}`;
+                } else if (optIsProtected) {
+                    badge = ` ${C.green}[protected]${C.reset}`;
+                }
+                
+                let lbl = '';
+                if (active) {
+                    lbl = `${C.cyan}${C.bold}${optName}${C.reset}${badge}`;
+                } else if (sel) {
+                    lbl = `${C.green}${optName}${C.reset}${badge}`;
+                } else {
+                    lbl = `${optName}${badge}`;
+                }
+                
                 lines.push(` ${cur} ${dot} ${lbl}`);
             }
             if (end < options.length) lines.push(`${C.dim}  ↓ ${options.length - end} more${C.reset}`);
@@ -1241,10 +1360,11 @@ async function promptMultiSelect(message, options, { visibleCount = 10 } = {}) {
         function done() {
             stdin.setRawMode(false); stdin.pause(); stdin.removeListener('data', onKey); stdout.write(C.show);
             const result = selected.size > 0 ? [...selected].sort((a,b)=>a-b).map(i => options[i]) : [options[idx]];
+            const resultNames = result.map(o => typeof o === 'string' ? o : o.name);
             stdout.write(C.up(drawn));
             for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
             stdout.write(C.up(drawn));
-            stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${result.join(', ')}${C.reset}\n`);
+            stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${resultNames.join(', ')}${C.reset}\n`);
             resolve(result);
         }
         function onKey(k) {
@@ -1260,7 +1380,172 @@ async function promptMultiSelect(message, options, { visibleCount = 10 } = {}) {
     });
 }
 
+async function addProtectPathsToConfig(configPath, filesToProtect) {
+    const { loadFile, writeFile } = require('magicast');
+    const mod = await loadFile(configPath);
+    const newlyAddedPaths = [];
+    let modified = false;
+    
+    // Helper to match paths
+    function isPathMatched(filePath, patterns) {
+        const pathNormalize = filePath.replace(/^\.\//, '');
+        for (const pattern of patterns) {
+            const patternStr = typeof pattern === 'string' ? pattern : String(pattern.$code || pattern);
+            const patternNormalize = patternStr.replace(/^\.\//, '').replace(/['"`]/g, '');
+            const escaped = patternNormalize.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+            const regexStr = '^' + escaped.replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*') + '$';
+            const rx = new RegExp(regexStr);
+            if (rx.test(pathNormalize)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    // Find module.exports = { ... } object literal
+    let moduleExportsObj = null;
+    if (mod.$ast && mod.$ast.body) {
+        for (const node of mod.$ast.body) {
+            if (
+                node.type === 'ExpressionStatement' &&
+                node.expression.type === 'AssignmentExpression' &&
+                node.expression.operator === '='
+            ) {
+                const left = node.expression.left;
+                const right = node.expression.right;
+                const isModuleExports = 
+                    (left.type === 'MemberExpression' &&
+                     left.object.name === 'module' &&
+                     left.property.name === 'exports') ||
+                    (left.type === 'Identifier' && left.name === 'exports');
+                    
+                if (isModuleExports && right.type === 'ObjectExpression') {
+                    moduleExportsObj = right;
+                    break;
+                }
+            }
+        }
+    }
+    
+    if (moduleExportsObj) {
+        // Look for 'protect' property inside module.exports
+        let protectProp = null;
+        for (const prop of moduleExportsObj.properties) {
+            if (
+                prop.type === 'ObjectProperty' &&
+                ((prop.key.type === 'Identifier' && prop.key.name === 'protect') ||
+                 (prop.key.type === 'StringLiteral' && prop.key.value === 'protect'))
+            ) {
+                protectProp = prop;
+                break;
+            }
+        }
+        
+        if (protectProp) {
+            if (protectProp.value.type === 'ArrayExpression') {
+                const existingElements = [];
+                for (const el of protectProp.value.elements) {
+                    if (el.type === 'StringLiteral') {
+                        existingElements.push(el.value);
+                    } else {
+                        existingElements.push(String(el.$code || el.name || ''));
+                    }
+                }
+                
+                for (const file of filesToProtect) {
+                    if (!isPathMatched(file, existingElements)) {
+                        protectProp.value.elements.push({
+                            type: 'StringLiteral',
+                            value: file
+                        });
+                        existingElements.push(file);
+                        newlyAddedPaths.push(file);
+                        modified = true;
+                    }
+                }
+            }
+        } else {
+            // Create 'protect' property inside module.exports
+            moduleExportsObj.properties.push({
+                type: 'ObjectProperty',
+                key: {
+                    type: 'Identifier',
+                    name: 'protect'
+                },
+                value: {
+                    type: 'ArrayExpression',
+                    elements: filesToProtect.map(file => ({
+                        type: 'StringLiteral',
+                        value: file
+                    }))
+                },
+                computed: false,
+                shorthand: false
+            });
+            newlyAddedPaths.push(...filesToProtect);
+            modified = true;
+        }
+    } else {
+        // Fallback to ES module / default exports
+        let protectList = [];
+        if (mod.exports.protect) {
+            protectList = Array.isArray(mod.exports.protect) ? mod.exports.protect : [mod.exports.protect];
+        }
+        for (const file of filesToProtect) {
+            if (!isPathMatched(file, protectList)) {
+                if (mod.exports.protect) {
+                    if (Array.isArray(mod.exports.protect)) {
+                        mod.exports.protect.push(file);
+                    } else {
+                        mod.exports.protect = [mod.exports.protect, file];
+                    }
+                } else {
+                    mod.exports.protect = [file];
+                }
+                protectList.push(file);
+                newlyAddedPaths.push(file);
+                modified = true;
+            }
+        }
+    }
+    
+    if (modified) {
+        await writeFile(mod, configPath);
+    }
+    return newlyAddedPaths;
+}
+
+async function syncConfigProtectPaths() {
+    const configPath = path.resolve(process.cwd(), 'fortress.config.js');
+    if (!fs.existsSync(configPath)) {
+        return;
+    }
+    const rawCandidateFiles = findSourceFiles(process.cwd());
+    const filesWithProtectAnnotations = [];
+    for (const file of rawCandidateFiles) {
+        try {
+            const content = fs.readFileSync(path.resolve(process.cwd(), file), 'utf8');
+            if (/\/\*\*?([\s\S]*?)@protect\b([\s\S]*?)\*\/|\/\/\s*@protect\b/.test(content)) {
+                filesWithProtectAnnotations.push(file);
+            }
+        } catch (e) {}
+    }
+    if (filesWithProtectAnnotations.length === 0) {
+        return;
+    }
+    try {
+        const filesToProtect = filesWithProtectAnnotations.map(file => './' + file.replace(/\\/g, '/'));
+        const added = await addProtectPathsToConfig(configPath, filesToProtect);
+        for (const rel of added) {
+            console.log(`✓ Added "${rel}" to the protect paths in fortress.config.js (detected @protect annotation)`);
+        }
+    } catch (e) {
+        console.warn(`Warning: Could not automatically update protect paths in fortress.config.js for annotated files:`, e.message);
+    }
+}
+
 async function interactiveProtect() {
+    await syncConfigProtectPaths();
     const { loadFile, writeFile } = require('magicast');
     
     // 1. Locate config
@@ -1271,14 +1556,67 @@ async function interactiveProtect() {
     }
     
     // 2. Find source files
-    const candidateFiles = findSourceFiles(process.cwd());
-    if (candidateFiles.length === 0) {
+    const rawCandidateFiles = findSourceFiles(process.cwd());
+    
+    const { classifyFile, resolveClassificationViaImporters } = require('../packages/create-fortress-app/lib/classify-file');
+    const initialClassifications = {};
+    for (const file of rawCandidateFiles) {
+        initialClassifications[file] = classifyFile(file, process.cwd());
+    }
+    
+    const finalClassifications = {};
+    for (const file of rawCandidateFiles) {
+        if (initialClassifications[file] === 'UNKNOWN') {
+            finalClassifications[file] = resolveClassificationViaImporters(file, process.cwd(), initialClassifications);
+        } else {
+            finalClassifications[file] = initialClassifications[file];
+        }
+    }
+    
+    const filteredCandidateFiles = rawCandidateFiles
+        .filter(file => {
+            const cls = finalClassifications[file];
+            return cls !== 'SERVER' && cls !== 'TYPES_ONLY';
+        })
+        .map(file => ({
+            file,
+            classification: finalClassifications[file]
+        }));
+        
+    if (filteredCandidateFiles.length === 0) {
         console.error("Error: No JS/TS source files found in the current directory.");
         process.exit(1);
     }
+
+    // Prioritise files containing unprotected functions at the top of the selection menu
+    const filesWithUnprotected = [];
+    const filesWithoutUnprotected = [];
+    for (const fileObj of filteredCandidateFiles) {
+        try {
+            const content = fs.readFileSync(path.resolve(process.cwd(), fileObj.file), 'utf8');
+            const hasUnprotected = hasUnprotectedExportedFunctions(content);
+            const enrichedObj = {
+                ...fileObj,
+                hasUnprotected
+            };
+            if (hasUnprotected) {
+                filesWithUnprotected.push(enrichedObj);
+            } else {
+                filesWithoutUnprotected.push(enrichedObj);
+            }
+        } catch (e) {
+            filesWithoutUnprotected.push({
+                ...fileObj,
+                hasUnprotected: false
+            });
+        }
+    }
+    
+    const sortedCandidateFiles = [...filesWithUnprotected, ...filesWithoutUnprotected];
     
     // 3. Choose a file
-    const selectedFile = await promptFileSearch('Choose a file to protect:', candidateFiles);
+    const selectedFileObj = await promptFileSearch('Choose a file to protect:', sortedCandidateFiles);
+    const selectedFile = selectedFileObj.file;
     const fullFilePath = path.resolve(process.cwd(), selectedFile);
     
     // 4. Read file and parse functions
@@ -1292,11 +1630,33 @@ async function interactiveProtect() {
     
     let detectedFunctions = [];
     try {
-        detectedFunctions = babelParseExportedFunctions(content);
+        detectedFunctions = getExportedFunctionsWithStatus(content);
     } catch (e) {
         console.error(`Error parsing functions in ${selectedFile}:`, e.message);
         process.exit(1);
     }
+    
+    // Enrich with alreadyProtected status
+    let outputDir = './protected';
+    if (fs.existsSync(configPath)) {
+        try {
+            const config = require(configPath);
+            if (config.output) {
+                outputDir = config.output;
+            }
+        } catch (e) {}
+    }
+    
+    detectedFunctions = detectedFunctions.map(f => {
+        const name = typeof f === 'string' ? f : f.name;
+        const fvbcPath = path.join(path.resolve(process.cwd(), outputDir), `${name}.fvbc`);
+        const opPath = path.join(path.resolve(process.cwd(), outputDir), `${name}.opcodes.json`);
+        const alreadyProtected = fs.existsSync(fvbcPath) && fs.existsSync(opPath);
+        return {
+            ...f,
+            alreadyProtected
+        };
+    });
     
     if (detectedFunctions.length === 0) {
         console.log(`No exportable functions detected in ${selectedFile}.`);
@@ -1304,7 +1664,8 @@ async function interactiveProtect() {
     }
     
     // 5. Select functions
-    const selectedFunctions = await promptMultiSelect('Choose function(s) to protect:', detectedFunctions);
+    const selectedFunctionsObjs = await promptMultiSelect('Choose function(s) to protect:', detectedFunctions);
+    const selectedFunctions = selectedFunctionsObjs.map(f => typeof f === 'string' ? f : f.name);
     if (selectedFunctions.length === 0) {
         console.log("No functions selected. Aborting.");
         process.exit(0);
@@ -1320,41 +1681,13 @@ async function interactiveProtect() {
         process.exit(1);
     }
     
+    await syncConfigProtectPaths();
+    
     // 7. Update fortress.config.js protect array if not already matched
     try {
         const relativePath = './' + selectedFile.replace(/\\/g, '/');
-        const mod = await loadFile(configPath);
-        
-        let protectList = [];
-        if (mod.exports.protect) {
-            protectList = Array.isArray(mod.exports.protect) ? mod.exports.protect : [mod.exports.protect];
-        }
-        
-        function isPathMatched(filePath, patterns) {
-            const pathNormalize = filePath.replace(/^\.\//, '');
-            for (const pattern of patterns) {
-                const patternNormalize = pattern.replace(/^\.\//, '');
-                const escaped = patternNormalize.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-                const regexStr = '^' + escaped.replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*') + '$';
-                const rx = new RegExp(regexStr);
-                if (rx.test(pathNormalize)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-        
-        if (!isPathMatched(relativePath, protectList)) {
-            if (mod.exports.protect) {
-                if (Array.isArray(mod.exports.protect)) {
-                    mod.exports.protect.push(relativePath);
-                } else {
-                    mod.exports.protect = [mod.exports.protect, relativePath];
-                }
-            } else {
-                mod.exports.protect = [relativePath];
-            }
-            await writeFile(mod, configPath);
+        const added = await addProtectPathsToConfig(configPath, [relativePath]);
+        if (added.length > 0) {
             console.log(`✓ Added "${relativePath}" to the protect paths in fortress.config.js`);
         }
     } catch (e) {

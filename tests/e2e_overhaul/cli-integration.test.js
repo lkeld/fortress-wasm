@@ -349,7 +349,7 @@ runTestSuite('F4: create-fortress-app CLI E2E Overhaul Test Suite', {
         cleanupDirs();
     },
 
-    'Husky Hook Setup - initializes Husky and creates pre-commit hook': async () => {
+    'Husky Hook Setup - initialises Husky and creates pre-commit hook': async () => {
         const dir = getTempDir();
         fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
         
@@ -494,7 +494,12 @@ runTestSuite('F4: create-fortress-app CLI E2E Overhaul Test Suite', {
             child.on('close', resolve);
         });
         
-        assert.ok(stdout.includes('Successfully injected /** @protect */ annotations'));
+        if (!stdout.includes('Successfully injected /** @protect */ annotations')) {
+            console.log("TEST FAILURE DETAILS:");
+            console.log("STDOUT:\n", stdout);
+            console.log("STDERR:\n", stderr);
+        }
+        assert.ok(stdout.includes('Successfully injected /** @protect */ annotations'));;
         
         // Verify source file content has annotations
         const updatedSrc = fs.readFileSync(path.join(srcDir, 'utils.js'), 'utf8');
@@ -506,5 +511,322 @@ runTestSuite('F4: create-fortress-app CLI E2E Overhaul Test Suite', {
         assert.ok(updatedConfig.includes('./src/utils.js'));
         
         cleanupDirs();
+    },
+
+    'File Classification and Filtering - filters server and type-only files and displays badges in prompt': async () => {
+        const dir = getTempDir();
+        // Create config file
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), 'module.exports = {\n  protect: []\n};');
+        
+        // Create source files under src/
+        const srcDir = path.join(dir, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        
+        fs.writeFileSync(path.join(srcDir, 'client.js'), '\'use client\';\nexport function clientFunc() {\n  return 1;\n}');
+        fs.writeFileSync(path.join(srcDir, 'ambiguous.js'), '\'use client\';\nimport fs from \'fs\';\nexport function ambiguousFunc() {\n  return 2;\n}');
+        fs.writeFileSync(path.join(srcDir, 'unknown.js'), 'export function unknownFunc() {\n  return 3;\n}');
+        fs.writeFileSync(path.join(srcDir, 'server.js'), '\'use server\';\nexport function serverFunc() {\n  return 4;\n}');
+        fs.writeFileSync(path.join(srcDir, 'types.d.ts'), 'export interface X {}');
+        
+        const apiDir = path.join(srcDir, 'api');
+        fs.mkdirSync(apiDir, { recursive: true });
+        fs.writeFileSync(path.join(apiDir, 'auth.js'), 'export function authFunc() {\n  return 5;\n}');
+        
+        const fortressBin = path.join(__dirname, '../../bin/index.js');
+        const { spawn } = require('child_process');
+        
+        const child = spawn('node', [fortressBin, 'protect'], {
+            cwd: dir,
+            env: {
+                ...process.env,
+                FORTRESS_SIGNING_PASSWORD: 'securepassword123'
+            }
+        });
+        
+        let stdout = '';
+        let stderr = '';
+        let respondedFile = false;
+        
+        await new Promise((resolve) => {
+            child.stdout.on('data', (data) => {
+                const chunk = data.toString();
+                stdout += chunk;
+                
+                if (stdout.includes('Choose a file to protect:') && !respondedFile) {
+                    respondedFile = true;
+                    // We select client.js (option 1)
+                    child.stdin.write('1\n');
+                }
+                if (stdout.includes('Choose function(s) to protect:')) {
+                    child.stdin.write('1\n');
+                }
+            });
+            child.stderr.on('data', (data) => {
+                stderr += data.toString();
+            });
+            child.on('close', resolve);
+        });
+
+
+        // Verify the filtered list matches expectations
+        assert.ok(stdout.includes('src/client.js'));
+        assert.ok(stdout.includes('src/ambiguous.js ⚠ ambiguous'));
+        assert.ok(stdout.includes('src/unknown.js ? unclassified'));
+        
+        // Server and type-only files must be hidden
+        assert.ok(!stdout.includes('src/server.js'));
+        assert.ok(!stdout.includes('src/types.d.ts'));
+        assert.ok(!stdout.includes('src/api/auth.js'));
+        
+        cleanupDirs();
+    },
+
+    'Create-Fortress-App Classification and Filtering - filters and shows badges in scaffolding prompt': async () => {
+        const dir = getTempDir();
+        
+        // Create source files under src/
+        const srcDir = path.join(dir, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        
+        fs.writeFileSync(path.join(srcDir, 'client.js'), '\'use client\';\nexport function clientFunc() {\n  return 1;\n}');
+        fs.writeFileSync(path.join(srcDir, 'ambiguous.js'), '\'use client\';\nimport fs from \'fs\';\nexport function ambiguousFunc() {\n  return 2;\n}');
+        fs.writeFileSync(path.join(srcDir, 'unknown.js'), 'export function unknownFunc() {\n  return 3;\n}');
+        fs.writeFileSync(path.join(srcDir, 'server.js'), '\'use server\';\nexport function serverFunc() {\n  return 4;\n}');
+        
+        const promptResponses = [
+            { prompt: 'Confirm this framework?', response: 'y' },
+            { prompt: 'Choose a file to protect:', response: '1' }, // Select client.js
+            { prompt: 'Choose function(s) to protect:', response: '1' },
+            { prompt: 'Enter signing password (min 12 chars):', response: 'securepassword123' },
+            { prompt: 'Confirm signing password:', response: 'securepassword123' },
+            { prompt: 'Confirm API endpoint', response: '' },
+            { prompt: 'Confirm output directory', response: './protected' },
+            { prompt: 'Add signing password and keys path to .env?', response: 'y' }
+        ];
+
+        const result = await spawnInteractiveProcess([dir], promptResponses);
+        assertExitCode(result, 0);
+
+
+        // Verify the filtered list outputs in stdout
+        assert.ok(result.stdout.includes('src/client.js'));
+        assert.ok(result.stdout.includes('src/ambiguous.js ⚠ ambiguous'));
+        assert.ok(result.stdout.includes('src/unknown.js ? unclassified'));
+        
+        // Server and type-only files must be hidden
+        assert.ok(!result.stdout.includes('src/server.js'));
+
+        cleanupDirs();
+    },
+
+    'Interactive Protect Command - prioritises unprotected files and pre-selects protected functions': async () => {
+        const dir = getTempDir();
+        // Create config file
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), 'module.exports = {\n  protect: []\n};');
+        
+        const srcDir = path.join(dir, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        // File with @protect already inside
+        fs.writeFileSync(path.join(srcDir, 'already_protected.js'), '/** @protect */\nexport function alreadyProtected() {\n  return 1;\n}');
+        // File with unprotected function
+        fs.writeFileSync(path.join(srcDir, 'unprotected.js'), 'export function unprotected() {\n  return 2;\n}');
+        // File with mix
+        fs.writeFileSync(path.join(srcDir, 'mix.js'), '/** @protect */\nexport function previouslyProtected() {\n  return 3;\n}\nexport function needsProtection() {\n  return 4;\n}');
+        
+        const fortressBin = path.join(__dirname, '../../bin/index.js');
+        const { spawn } = require('child_process');
+        
+        const child = spawn('node', [fortressBin, 'protect'], {
+            cwd: dir,
+            env: {
+                ...process.env,
+                FORTRESS_SIGNING_PASSWORD: 'securepassword123'
+            }
+        });
+        
+        let stdout = '';
+        let stderr = '';
+        let respondedFile = false;
+        let respondedFunc = false;
+        
+        await new Promise((resolve) => {
+            child.stdout.on('data', (data) => {
+                const chunk = data.toString();
+                stdout += chunk;
+                
+                if (stdout.includes('Choose a file to protect:') && !respondedFile) {
+                    respondedFile = true;
+                    child.stdin.write('mix.js\r');
+                }
+                if (stdout.includes('Choose function(s) to protect:') && !respondedFunc) {
+                    respondedFunc = true;
+                    child.stdin.write('\r');
+                }
+            });
+            child.stderr.on('data', (data) => {
+                stderr += data.toString();
+            });
+            child.on('close', resolve);
+        });
+
+
+
+        // Verify the prioritisation badges were shown
+        assert.ok(/src\/mix\.js.*\(unprotected exports\)/.test(stdout));
+        assert.ok(/src\/unprotected\.js.*\(unprotected exports\)/.test(stdout));
+        
+        // Verify the function badge was shown
+        assert.ok(stdout.includes('previouslyProtected [protected]'));
+        
+        // Verify config has been updated to include both selected and auto-detected protected files
+        const updatedConfig = fs.readFileSync(path.join(dir, 'fortress.config.js'), 'utf8');
+        assert.ok(updatedConfig.includes('./src/mix.js'), 'mix.js must be in protect list');
+        assert.ok(updatedConfig.includes('./src/already_protected.js'), 'already_protected.js must be auto-detected and added to protect list');
+        
+        cleanupDirs();
+    },
+
+    'Create-Fortress-App Next.js scaffold - prints hook and CSP auto-injection messages': async () => {
+        const dir = getTempDir();
+        const pkg = { dependencies: { next: '^13.0.0' } };
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
+        fs.writeFileSync(path.join(dir, 'next.config.js'), 'module.exports = {};');
+        
+        const result = await spawnProcess('node', [createStubPath, dir]);
+        assertExitCode(result, 0);
+        assertStdoutContains(result, 'Content Security Policy (CSP) header auto-configured');
+        assertStdoutContains(result, 'To complete setup, manually import and call the useFortress client hook');
+        cleanupDirs();
+    },
+
+    'F4 E2E - Repeated auto-protect detection': async () => {
+        const dir = getTempDir();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), 'module.exports = {\n  protect: []\n};');
+        const srcDir = path.join(dir, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        fs.writeFileSync(path.join(srcDir, 'a.js'), '/** @protect */\nexport function funcA() {}');
+        
+        const fortressBin = path.join(__dirname, '../../bin/index.js');
+        const { execSync } = require('child_process');
+        
+        execSync(`FORTRESS_SIGNING_PASSWORD=validpassword123 node ${fortressBin} build`, {
+            cwd: dir,
+            stdio: 'pipe'
+        });
+        
+        let configContent = fs.readFileSync(path.join(dir, 'fortress.config.js'), 'utf8');
+        assert.ok(configContent.includes('./src/a.js'));
+        
+        const countOccurrences = (str, sub) => str.split(sub).length - 1;
+        assert.strictEqual(countOccurrences(configContent, './src/a.js'), 1);
+        
+        fs.writeFileSync(path.join(srcDir, 'b.js'), '/** @protect */\nexport function funcB() {}');
+        
+        execSync(`FORTRESS_SIGNING_PASSWORD=validpassword123 node ${fortressBin} build`, {
+            cwd: dir,
+            stdio: 'pipe'
+        });
+        
+        configContent = fs.readFileSync(path.join(dir, 'fortress.config.js'), 'utf8');
+        assert.ok(configContent.includes('./src/a.js'));
+        assert.ok(configContent.includes('./src/b.js'));
+        assert.strictEqual(countOccurrences(configContent, './src/a.js'), 1);
+        assert.strictEqual(countOccurrences(configContent, './src/b.js'), 1);
+        
+        cleanupDirs();
+    },
+
+    'F4 E2E - Pre-selection verification': async () => {
+        const dir = getTempDir();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), 'module.exports = {\n  protect: ["./src/test.js"],\n  output: "./protected"\n};');
+        const srcDir = path.join(dir, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        
+        const protectedDir = path.join(dir, 'protected');
+        fs.mkdirSync(protectedDir, { recursive: true });
+        fs.writeFileSync(path.join(protectedDir, 'sensitiveFunc.fvbc'), 'mock bytes');
+        fs.writeFileSync(path.join(protectedDir, 'sensitiveFunc.opcodes.json'), '{}');
+        
+        fs.writeFileSync(path.join(srcDir, 'test.js'), 'export function sensitiveFunc() {}\nexport function ordinaryFunc() {}');
+        
+        const fortressBin = path.join(__dirname, '../../bin/index.js');
+        const { spawn } = require('child_process');
+        
+        const child = spawn('node', [fortressBin, 'protect'], {
+            cwd: dir,
+            env: {
+                ...process.env,
+                FORTRESS_SIGNING_PASSWORD: 'securepassword123'
+            }
+        });
+        
+        let stdout = '';
+        let respondedFile = false;
+        
+        await new Promise((resolve) => {
+            child.stdout.on('data', (data) => {
+                const chunk = data.toString();
+                stdout += chunk;
+                
+                if (stdout.includes('Choose a file to protect:') && !respondedFile) {
+                    respondedFile = true;
+                    child.stdin.write('1\n');
+                }
+                if (stdout.includes('Choose function(s) to protect:')) {
+                    child.stdin.write('\n');
+                }
+            });
+            child.on('close', resolve);
+        });
+        
+        assert.ok(stdout.includes('sensitiveFunc (already protected)'));
+        assert.ok(stdout.includes('ordinaryFunc'));
+        
+        cleanupDirs();
+    },
+
+    'F4 E2E - Post-scaffold success summary': async () => {
+        const dir = getTempDir();
+        const pkg = { 
+            dependencies: { next: '^13.0.0' },
+            scripts: { build: 'fortress build && next build' }
+        };
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
+        
+        const appDir = path.join(dir, 'app');
+        fs.mkdirSync(appDir, { recursive: true });
+        fs.writeFileSync(path.join(appDir, 'layout.tsx'), 'export default function Layout({ children }) { return children; }');
+        fs.writeFileSync(path.join(dir, 'next.config.js'), 'module.exports = {};');
+        
+        const result = await spawnProcess('node', [createStubPath, dir]);
+        assertExitCode(result, 0);
+        
+        assertStdoutContains(result, 'Client hook auto-injected');
+        assertStdoutContains(result, 'Content Security Policy (CSP) header auto-configured');
+        
+        const hasManualHook = result.stdout.includes('To complete setup, manually import and call the useFortress client hook');
+        const hasManualCsp = result.stdout.includes('Manually add the worker-src CSP');
+        const hasManualCicd = result.stdout.includes('Configure CI/CD to run');
+        assert.strictEqual(hasManualHook, false, 'Should not print manual client hook steps');
+        assert.strictEqual(hasManualCsp, false, 'Should not print manual CSP steps');
+        assert.strictEqual(hasManualCicd, false, 'Should not print manual CI/CD steps');
+        
+        cleanupDirs();
+    },
+
+    'F4 E2E - Post-scaffold manual action summary': async () => {
+        const dir = getTempDir();
+        const pkg = { dependencies: { next: '^13.0.0' } };
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify(pkg));
+        
+        const result = await spawnProcess('node', [createStubPath, dir]);
+        assertExitCode(result, 0);
+        
+        assertStdoutContains(result, 'To complete setup, manually import and call the useFortress client hook');
+        assertStdoutContains(result, 'Manually add the worker-src CSP');
+        assertStdoutContains(result, "Configure CI/CD to run 'fortress build' or 'fortress-wasm-start'");
+        
+        cleanupDirs();
     }
 });
+

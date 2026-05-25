@@ -26,7 +26,9 @@ export function applyRegisterBanking(
     deconflictScopes(funcNode);
 
     // Pack parameters into a single __args object if > 2 parameters (excluding entry function)
-    if (funcNode.params.length > 2 && funcNode.id.name !== options.functionName) {
+    if (funcNode.params.length > 2 &&
+        funcNode.id.name !== options.functionName &&
+        !funcNode.id.name.startsWith(options.functionName + '_closure_')) {
         const originalParams = funcNode.params.map((p: any) => p.name);
         const fileNode = t.file(t.program([funcNode]));
         traverse(fileNode, {

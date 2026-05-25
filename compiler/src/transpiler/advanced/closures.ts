@@ -2,26 +2,72 @@ import traverse from '@babel/traverse';
 const t: any = require('@babel/types');
 import { TranspileContext } from '../types';
 
+function getLocalBindings(functionPath: any): Set<string> {
+    const bindings = new Set<string>();
+    const collectParams = (node: any) => {
+        if (!node) return;
+        if (t.isIdentifier(node)) {
+            bindings.add(node.name);
+        } else if (t.isAssignmentPattern(node)) {
+            collectParams(node.left);
+        } else if (t.isArrayPattern(node)) {
+            for (const elem of node.elements) {
+                collectParams(elem);
+            }
+        } else if (t.isObjectPattern(node)) {
+            for (const prop of node.properties) {
+                if (t.isObjectProperty(prop)) {
+                    collectParams(prop.value);
+                } else if (t.isRestElement(prop)) {
+                    collectParams(prop.argument);
+                }
+            }
+        } else if (t.isRestElement(node)) {
+            collectParams(node.argument);
+        }
+    };
+    for (const param of functionPath.node.params) {
+        collectParams(param);
+    }
+    functionPath.traverse({
+        VariableDeclarator(path: any) {
+            if (path.getFunctionParent() === functionPath) {
+                collectParams(path.node.id);
+            }
+        },
+        FunctionDeclaration(path: any) {
+            if (path.getFunctionParent() === functionPath && path.node.id) {
+                bindings.add(path.node.id.name);
+            }
+        }
+    });
+    return bindings;
+}
+
 export function transformClosures(ast: any, context: TranspileContext, applyRegisterBanking: any) {
     const liftedFuncs: { name: string; arity: number }[] = [];
     const usedArities = new Set<number>();
 
-    // Split multi-declarators first
-    traverse(ast, {
-        VariableDeclaration(path: any) {
-            if (path.node.declarations.length > 1) {
-                const splitDecls = path.node.declarations.map((decl: any) => 
-                    t.variableDeclaration(path.node.kind, [t.cloneNode(decl)])
-                );
-                path.replaceWithMultiple(splitDecls);
-            }
-        }
-    });
-
     const nestedFunctionPaths: any[] = [];
     traverse(ast, {
         Function(path: any) {
-            if (path.parentPath.getFunctionParent() !== null) {
+            // Do not lift the root function declaration (main entry point function)
+            if (path.isFunctionDeclaration() && path.node.id && path.node.id.name === context.options.functionName) {
+                return;
+            }
+            // Lift all arrow functions, function expressions, or nested function declarations
+            const isArrow = path.isArrowFunctionExpression();
+            const isExpr = path.isFunctionExpression();
+            let isNested = false;
+            let parent = path.parentPath;
+            while (parent) {
+                if (parent.isFunction()) {
+                    isNested = true;
+                    break;
+                }
+                parent = parent.parentPath;
+            }
+            if (isArrow || isExpr || isNested) {
                 nestedFunctionPaths.push(path);
             }
         }
@@ -45,6 +91,69 @@ export function transformClosures(ast: any, context: TranspileContext, applyRegi
     const functionCapturedVars = new Map<any, Set<string>>();
 
     for (const nestedPath of nestedFunctionPaths) {
+        // Convert arrow function with expression body to block statement early to normalise it and avoid crashes when prepending scope state declaration
+        if (nestedPath.isArrowFunctionExpression() && !t.isBlockStatement(nestedPath.node.body)) {
+            const bodyNode = t.cloneNode(nestedPath.node.body);
+            nestedPath.get('body').replaceWith(
+                t.blockStatement([t.returnStatement(bodyNode)])
+            );
+        }
+        nestedPath.scope.crawl();
+
+        // 1. Rename any local parameter/variable named 'state' to '__state_param' to avoid collision with lifted closure state parameter 'state'
+        const hasStateParam = getLocalBindings(nestedPath).has('state');
+        if (hasStateParam) {
+            const renameParam = (node: any) => {
+                if (!node) return;
+                if (t.isIdentifier(node)) {
+                    if (node.name === 'state') {
+                        node.name = '__state_param';
+                    }
+                } else if (t.isAssignmentPattern(node)) {
+                    renameParam(node.left);
+                } else if (t.isArrayPattern(node)) {
+                    for (const elem of node.elements) {
+                        renameParam(elem);
+                    }
+                } else if (t.isObjectPattern(node)) {
+                    for (const prop of node.properties) {
+                        if (t.isObjectProperty(prop)) {
+                            renameParam(prop.value);
+                        } else if (t.isRestElement(prop)) {
+                            renameParam(prop.argument);
+                        }
+                    }
+                } else if (t.isRestElement(node)) {
+                    renameParam(node.argument);
+                }
+            };
+            for (const param of nestedPath.node.params) {
+                renameParam(param);
+            }
+
+            nestedPath.traverse({
+                Identifier(idPath: any) {
+                    if ((idPath.isReferencedIdentifier() || idPath.isBindingIdentifier()) && idPath.node.name === 'state') {
+                        let isShadowed = false;
+                        let currPath = idPath;
+                        while (currPath && currPath !== nestedPath) {
+                            if (currPath.isFunction() && currPath.node !== nestedPath.node) {
+                                if (getLocalBindings(currPath).has('state')) {
+                                    isShadowed = true;
+                                    break;
+                                }
+                            }
+                            currPath = currPath.parentPath;
+                        }
+                        if (!isShadowed) {
+                            idPath.node.name = '__state_param';
+                        }
+                    }
+                }
+            });
+            nestedPath.scope.crawl();
+        }
+
         const upvars = new Set<string>();
         nestedPath.traverse({
             Identifier(idPath: any) {
@@ -53,25 +162,36 @@ export function transformClosures(ast: any, context: TranspileContext, applyRegi
                         return;
                     }
                     const name = idPath.node.name;
-                    const binding = idPath.scope.getBinding(name);
-                    if (binding) {
-                        let isLocal = false;
-                        let currScope = binding.scope;
-                        while (currScope) {
-                            if (currScope === nestedPath.scope) {
+                    let isLocal = false;
+                    let currPath = idPath;
+                    while (currPath && currPath !== nestedPath) {
+                        if (currPath.isFunction()) {
+                            if (getLocalBindings(currPath).has(name)) {
                                 isLocal = true;
                                 break;
                             }
-                            currScope = currScope.parent;
                         }
-                        if (!isLocal) {
-                            let funcScope = binding.scope;
-                            while (funcScope && funcScope.path.type !== 'FunctionDeclaration' && funcScope.path.type !== 'FunctionExpression' && funcScope.path.type !== 'ArrowFunctionExpression') {
-                                funcScope = funcScope.parent;
+                        currPath = currPath.parentPath;
+                    }
+                    if (!isLocal) {
+                        if (getLocalBindings(nestedPath).has(name)) {
+                            isLocal = true;
+                        }
+                    }
+                    if (!isLocal) {
+                        let curr = nestedPath.parentPath;
+                        let definedInOuterFunc = false;
+                        while (curr) {
+                            if (curr.isFunction()) {
+                                if (getLocalBindings(curr).has(name)) {
+                                    definedInOuterFunc = true;
+                                    break;
+                                }
                             }
-                            if (funcScope) {
-                                upvars.add(name);
-                            }
+                            curr = curr.parentPath;
+                        }
+                        if (definedInOuterFunc) {
+                            upvars.add(name);
                         }
                     }
                 }
@@ -101,11 +221,22 @@ export function transformClosures(ast: any, context: TranspileContext, applyRegi
             nestedPath.traverse({
                 Identifier(idPath: any) {
                     if ((idPath.isReferencedIdentifier() || idPath.isBindingIdentifier()) && capturedVars.has(idPath.node.name)) {
-                        const binding = idPath.scope.getBinding(idPath.node.name);
-                        if (binding && binding.scope.path === nestedPath) {
-                            if (idPath.parentPath && idPath.parentPath.isFunction() && idPath.parentKey === 'id') {
-                                return;
+                        const name = idPath.node.name;
+                        if (idPath.parentPath && idPath.parentPath.isFunction() && (idPath.parentKey === 'id' || idPath.parentKey === 'params' || idPath.listKey === 'params')) {
+                            return;
+                        }
+                        let isLocal = false;
+                        let currPath = idPath;
+                        while (currPath && currPath !== nestedPath) {
+                            if (currPath.isFunction()) {
+                                if (getLocalBindings(currPath).has(name)) {
+                                    isLocal = true;
+                                    break;
+                                }
                             }
+                            currPath = currPath.parentPath;
+                        }
+                        if (!isLocal) {
                             idPath.replaceWith(t.memberExpression(t.identifier('scopeState'), t.identifier(idPath.node.name)));
                             idPath.skip();
                         }
@@ -114,8 +245,7 @@ export function transformClosures(ast: any, context: TranspileContext, applyRegi
                 VariableDeclarator(decPath: any) {
                     const id = decPath.node.id;
                     if (t.isIdentifier(id) && capturedVars.has(id.name)) {
-                        const binding = decPath.scope.getBinding(id.name);
-                        if (binding && binding.scope.path === nestedPath) {
+                        if (decPath.getFunctionParent() === nestedPath) {
                             const init = decPath.node.init || t.nullLiteral();
                             decPath.parentPath.replaceWith(t.expressionStatement(
                                 t.assignmentExpression('=', t.memberExpression(t.identifier('scopeState'), t.identifier(id.name)), init)
@@ -175,22 +305,22 @@ export function transformClosures(ast: any, context: TranspileContext, applyRegi
         nestedPath.traverse({
             Identifier(idPath: any) {
                 if ((idPath.isReferencedIdentifier() || idPath.isBindingIdentifier()) && upvars.has(idPath.node.name)) {
-                    const binding = idPath.scope.getBinding(idPath.node.name);
+                    const name = idPath.node.name;
+                    if (idPath.parentPath && idPath.parentPath.isFunction() && (idPath.parentKey === 'id' || idPath.parentKey === 'params' || idPath.listKey === 'params')) {
+                        return;
+                    }
                     let isLocal = false;
-                    if (binding) {
-                        let currScope = binding.scope;
-                        while (currScope) {
-                            if (currScope === nestedPath.scope) {
+                    let currPath = idPath;
+                    while (currPath && currPath !== nestedPath) {
+                        if (currPath.isFunction()) {
+                            if (getLocalBindings(currPath).has(name)) {
                                 isLocal = true;
                                 break;
                             }
-                            currScope = currScope.parent;
                         }
+                        currPath = currPath.parentPath;
                     }
                     if (!isLocal) {
-                        if (idPath.parentPath && idPath.parentPath.isFunction() && idPath.parentKey === 'id') {
-                            return;
-                        }
                         idPath.replaceWith(t.memberExpression(t.identifier('state'), t.identifier(idPath.node.name)));
                         idPath.skip();
                     }
@@ -213,10 +343,10 @@ export function transformClosures(ast: any, context: TranspileContext, applyRegi
         applyRegisterBanking(liftedFunc);
         context.extraFuncNodes.push(liftedFunc);
 
-        let parentFuncPath = nestedPath.parentPath.getFunctionParent();
+        let parentFuncPath = nestedPath.parentPath.isFunction() ? nestedPath.parentPath : nestedPath.parentPath.getFunctionParent();
         let stateExpr;
         if (parentFuncPath) {
-            const isParentNested = parentFuncPath.parentPath.getFunctionParent() !== null;
+            const isParentNested = parentFuncPath.parentPath.isFunction() || parentFuncPath.parentPath.getFunctionParent() !== null;
             const parentCaptured = functionCapturedVars.get(parentFuncPath);
             if (parentCaptured && parentCaptured.size > 0) {
                 stateExpr = t.identifier('scopeState');
@@ -260,11 +390,22 @@ export function transformClosures(ast: any, context: TranspileContext, applyRegi
             rootPath.traverse({
                 Identifier(idPath: any) {
                     if ((idPath.isReferencedIdentifier() || idPath.isBindingIdentifier()) && rootCaptured.has(idPath.node.name)) {
-                        const binding = idPath.scope.getBinding(idPath.node.name);
-                        if (binding && binding.scope.path === rootPath) {
-                            if (idPath.parentPath && idPath.parentPath.isFunction() && idPath.parentKey === 'id') {
-                                return;
+                        const name = idPath.node.name;
+                        if (idPath.parentPath && idPath.parentPath.isFunction() && (idPath.parentKey === 'id' || idPath.parentKey === 'params' || idPath.listKey === 'params')) {
+                            return;
+                        }
+                        let isLocal = false;
+                        let currPath = idPath;
+                        while (currPath && currPath !== rootPath) {
+                            if (currPath.isFunction()) {
+                                if (getLocalBindings(currPath).has(name)) {
+                                    isLocal = true;
+                                    break;
+                                }
                             }
+                            currPath = currPath.parentPath;
+                        }
+                        if (!isLocal) {
                             idPath.replaceWith(t.memberExpression(t.identifier('scopeState'), t.identifier(idPath.node.name)));
                             idPath.skip();
                         }
@@ -273,8 +414,7 @@ export function transformClosures(ast: any, context: TranspileContext, applyRegi
                 VariableDeclarator(decPath: any) {
                     const id = decPath.node.id;
                     if (t.isIdentifier(id) && rootCaptured.has(id.name)) {
-                        const binding = decPath.scope.getBinding(id.name);
-                        if (binding && binding.scope.path === rootPath) {
+                        if (decPath.getFunctionParent() === rootPath) {
                             const init = decPath.node.init || t.nullLiteral();
                             decPath.parentPath.replaceWith(t.expressionStatement(
                                 t.assignmentExpression('=', t.memberExpression(t.identifier('scopeState'), t.identifier(id.name)), init)

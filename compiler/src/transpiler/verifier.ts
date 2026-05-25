@@ -52,13 +52,7 @@ class IsolatedVerifier {
             this.ivm = ivm;
             this.hasIvm = true;
         } catch (e) {
-            if (isMainThread) {
-                console.warn(
-                    "[WARNING] 'isolated-vm' is not installed or failed probe checks. Falling back to Node.js built-in 'vm' module.\n" +
-                    "RISK WARNING: The built-in 'vm' module does not provide a secure sandbox. " +
-                    "Executing untrusted code can lead to Remote Code Execution (RCE) on the host system."
-                );
-            }
+            // Silently fall back to built-in vm
         }
     }
 

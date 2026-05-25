@@ -131,6 +131,81 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
         }
     });
 
+    // Split multi-declarator variable declarations first to simplify arrow function detection
+    traverse(ast, {
+        VariableDeclaration(path: any) {
+            if (path.node.declarations.length > 1) {
+                if (path.parentPath.isForStatement({ init: path.node })) {
+                    return;
+                }
+                const splitDecls = path.node.declarations.map((decl: any) => 
+                    t.variableDeclaration(path.node.kind, [t.cloneNode(decl)])
+                );
+                path.replaceWithMultiple(splitDecls);
+            }
+        }
+    });
+
+    // Convert top-level arrow functions and function expressions to FunctionDeclarations
+    for (let i = 0; i < ast.program.body.length; i++) {
+        const node = ast.program.body[i];
+        if (t.isVariableDeclaration(node)) {
+            const decls = node.declarations;
+            if (decls.length === 1) {
+                const decl = decls[0];
+                const init = decl.init;
+                if (t.isIdentifier(decl.id) && init && (t.isArrowFunctionExpression(init) || t.isFunctionExpression(init))) {
+                    let bodyNode = init.body;
+                    if (!t.isBlockStatement(bodyNode)) {
+                        bodyNode = t.blockStatement([t.returnStatement(t.cloneNode(bodyNode))]);
+                    }
+                    const funcDecl = t.functionDeclaration(
+                        t.identifier(decl.id.name),
+                        init.params.map((p: any) => t.cloneNode(p)),
+                        t.cloneNode(bodyNode)
+                    );
+                    ast.program.body[i] = funcDecl;
+                }
+            }
+        } else if (t.isExpressionStatement(node)) {
+            const expr = node.expression;
+            if (t.isAssignmentExpression(expr) && expr.operator === '=') {
+                const left = expr.left;
+                const right = expr.right;
+                if (t.isIdentifier(left) && (t.isArrowFunctionExpression(right) || t.isFunctionExpression(right))) {
+                    let bodyNode = right.body;
+                    if (!t.isBlockStatement(bodyNode)) {
+                        bodyNode = t.blockStatement([t.returnStatement(t.cloneNode(bodyNode))]);
+                    }
+                    const funcDecl = t.functionDeclaration(
+                        t.identifier(left.name),
+                        right.params.map((p: any) => t.cloneNode(p)),
+                        t.cloneNode(bodyNode)
+                    );
+                    ast.program.body[i] = funcDecl;
+                }
+            } else if (t.isArrowFunctionExpression(expr) || t.isFunctionExpression(expr)) {
+                let bodyNode = expr.body;
+                if (!t.isBlockStatement(bodyNode)) {
+                    bodyNode = t.blockStatement([t.returnStatement(t.cloneNode(bodyNode))]);
+                }
+                const funcDecl = t.functionDeclaration(
+                    t.identifier(options.functionName),
+                    expr.params.map((p: any) => t.cloneNode(p)),
+                    t.cloneNode(bodyNode)
+                );
+                ast.program.body[i] = funcDecl;
+            }
+        }
+    }
+
+    // Re-crawl scope to ensure Babel's cached scope maps reflect the AST changes
+    traverse(ast, {
+        Program(programPath: any) {
+            programPath.scope.crawl();
+        }
+    });
+
     const rootStmt = ast.program.body[0];
     if (rootStmt && (t.isFunctionDeclaration(rootStmt) || t.isFunctionExpression(rootStmt) || t.isArrowFunctionExpression(rootStmt))) {
         context.originalParamNames = rootStmt.params.map((p: any) => p.name);
@@ -226,6 +301,10 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
     // 7. Transform Closures
     transformClosures(ast, context, bankingWrapper);
 
+    // Temporarily attach extraFuncNodes to program body so they are traversed by visitors
+    ast.program.body.push(...context.extraFuncNodes);
+    context.extraFuncNodes.length = 0;
+
     // 8. Main AST traversal pass
     traverse(ast, {
         ObjectExpression: createObjectExpressionVisitor(context),
@@ -282,6 +361,18 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
             }
         });
     }
+
+    // Extract helper function declarations back to extraFuncNodes
+    const rootName = context.options.functionName;
+    const remainingBody: any[] = [];
+    for (const stmt of ast.program.body) {
+        if (t.isFunctionDeclaration(stmt) && stmt.id && stmt.id.name !== rootName) {
+            context.extraFuncNodes.push(stmt);
+        } else {
+            remainingBody.push(stmt);
+        }
+    }
+    ast.program.body = remainingBody;
 
     rewriteCallSites(ast.program);
 
