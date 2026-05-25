@@ -14,10 +14,25 @@ function getTempReportPath() {
 
 fs.mkdirSync(TEMP_BASE, { recursive: true });
 
+// Create dummy protected files in the current directory so that the offline verification succeeds
+const localProtectedDir = path.resolve(process.cwd(), 'protected');
+let createdLocalProtected = false;
+if (!fs.existsSync(localProtectedDir)) {
+    fs.mkdirSync(localProtectedDir, { recursive: true });
+    fs.writeFileSync(path.join(localProtectedDir, 'dummy.fvbc'), 'dummy');
+    fs.writeFileSync(path.join(localProtectedDir, 'dummy.opcodes.json'), '[]');
+    createdLocalProtected = true;
+}
+
 function cleanup() {
     try {
         fs.rmSync(TEMP_BASE, { recursive: true, force: true });
     } catch (e) {}
+    if (createdLocalProtected) {
+        try {
+            fs.rmSync(localProtectedDir, { recursive: true, force: true });
+        } catch (e) {}
+    }
 }
 
 runTestSuite('F9: Verify Command E2E Overhaul Test Suite', {

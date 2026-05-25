@@ -89,6 +89,48 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
         ]
     });
 
+    // Strip TypeScript annotations and type-only statements to output clean JS
+    traverse(ast, {
+        TSTypeAnnotation(path: any) {
+            path.remove();
+        },
+        TSTypeParameterInstantiation(path: any) {
+            path.remove();
+        },
+        TSTypeParameterDeclaration(path: any) {
+            path.remove();
+        },
+        TSAsExpression(path: any) {
+            path.replaceWith(path.node.expression);
+        },
+        TSTypeAssertion(path: any) {
+            path.replaceWith(path.node.expression);
+        },
+        TSNonNullExpression(path: any) {
+            path.replaceWith(path.node.expression);
+        },
+        TSInterfaceDeclaration(path: any) {
+            path.remove();
+        },
+        TSTypeAliasDeclaration(path: any) {
+            path.remove();
+        },
+        TSEnumDeclaration(path: any) {
+            path.remove();
+        },
+        TSDeclareFunction(path: any) {
+            path.remove();
+        },
+        enter(path: any) {
+            if (path.node && path.node.typeAnnotation) {
+                delete path.node.typeAnnotation;
+            }
+            if (path.node && path.node.returnType) {
+                delete path.node.returnType;
+            }
+        }
+    });
+
     const rootStmt = ast.program.body[0];
     if (rootStmt && (t.isFunctionDeclaration(rootStmt) || t.isFunctionExpression(rootStmt) || t.isArrowFunctionExpression(rootStmt))) {
         context.originalParamNames = rootStmt.params.map((p: any) => p.name);

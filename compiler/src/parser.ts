@@ -176,6 +176,9 @@ export class Parser {
     }
 
     public parseStatement(): Statement {
+        if (this.currentToken.type === TokenType.Identifier && this.currentToken.value === 'fn' && this.peekToken.type === TokenType.Identifier) {
+            return this.parseFunctionDeclaration();
+        }
         switch (this.currentToken.type) {
             case TokenType.Let: return this.parseLetStatement();
             case TokenType.Return: return this.parseReturnStatement();
@@ -225,7 +228,11 @@ export class Parser {
     }
 
     private parseFunctionDeclaration(): FunctionDeclaration {
-        this.expect(TokenType.Fn);
+        if (this.currentToken.type === TokenType.Fn) {
+            this.expect(TokenType.Fn);
+        } else {
+            this.expect(TokenType.Identifier);
+        }
         const name = { type: 'Identifier' as const, name: this.currentToken.value };
         this.expect(TokenType.Identifier);
         this.expect(TokenType.LParen);
@@ -382,7 +389,10 @@ export class Parser {
                 const properties: Property[] = [];
                 while (this.currentToken.type !== TokenType.RBrace && this.currentToken.type !== TokenType.EOF) {
                     let key: Identifier | Literal;
-                    if (this.currentToken.type === TokenType.Identifier) {
+                    const isKeyToken = 
+                        this.currentToken.type === TokenType.Identifier ||
+                        (this.currentToken.type >= TokenType.Let && this.currentToken.type <= TokenType.For);
+                    if (isKeyToken) {
                         key = { type: 'Identifier', name: this.currentToken.value };
                         this.nextToken();
                     } else if (this.currentToken.type === TokenType.String) {
@@ -468,7 +478,13 @@ export class Parser {
         if (token.type === TokenType.Dot) {
             this.nextToken();
             const name = this.currentToken.value;
-            this.expect(TokenType.Identifier);
+            const isKeywordOrIdentifier = 
+                this.currentToken.type === TokenType.Identifier ||
+                (this.currentToken.type >= TokenType.Let && this.currentToken.type <= TokenType.For);
+            if (!isKeywordOrIdentifier) {
+                throw new Error(`Expected identifier or keyword after dot, got ${this.currentToken.type} at line ${this.currentToken.line}`);
+            }
+            this.nextToken();
             const property = { type: 'Identifier' as const, name };
             return { type: 'MemberExpression', object: left, property, computed: false };
         }

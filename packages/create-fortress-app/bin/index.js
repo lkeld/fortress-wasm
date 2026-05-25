@@ -562,7 +562,9 @@ function findSourceFiles(dir) {
             } else if (stat.isFile()) {
                 const ext = path.extname(file);
                 if (['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'].includes(ext)) {
-                    results.push(path.relative(dir, fullPath));
+                    if (!file.includes('.config.') && file !== 'package.json' && file !== 'package-lock.json') {
+                        results.push(path.relative(dir, fullPath));
+                    }
                 }
             }
         }

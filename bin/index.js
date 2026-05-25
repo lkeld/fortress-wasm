@@ -44,6 +44,7 @@ if (!command || command === '--help' || command === '-h') {
     console.log("Commands:");
     console.log("  dev      Start the development server");
     console.log("  build    Scan and compile annotated functions");
+    console.log("  protect  Interactively select and protect functions via the CLI");
     console.log("  verify   Verify a fortress-wasm build");
     process.exit(0);
 }
@@ -647,50 +648,69 @@ if (!command || command === '--help' || command === '-h') {
             });
         }
 
-        const active = await checkEndpointActive(endpoint);
+        const isHttp = endpoint.startsWith('http://') || endpoint.startsWith('https://');
+        const active = isHttp ? await checkEndpointActive(endpoint) : fs.existsSync(endpoint);
         let executionCorrect = false;
         let payloadObfuscated = false;
 
         if (active) {
-            try {
-                // If active: Run Playwright chromium verifier checking 8 metrics.
-                const { chromium } = require('@playwright/test');
-                const browser = await chromium.launch({ headless: true });
-                const context = await browser.newContext();
-                const page = await context.newPage();
-                
-                await page.goto('about:blank');
-                
-                const validationResult = await page.evaluate(async (ep) => {
-                    try {
-                        const res = await fetch(ep, { cache: 'no-store' });
-                        if (!res.ok) return { error: `Failed to fetch payload: ${res.status}` };
-                        const data = await res.json();
-                        
-                        const hasPayload = !!data.payload;
-                        const hasOpcodes = !!data.opcodeMap;
-                        const hasHandshake = !!data.handshake;
-                        
-                        return {
-                            success: hasPayload && hasOpcodes && hasHandshake,
-                            headers: Object.fromEntries(res.headers.entries())
-                        };
-                    } catch (e) {
-                        return { error: e.message };
+            if (isHttp) {
+                try {
+                    // If active: Run Playwright chromium verifier checking 8 metrics.
+                    const { chromium } = require('@playwright/test');
+                    const browser = await chromium.launch({ headless: true });
+                    const context = await browser.newContext();
+                    const page = await context.newPage();
+                    
+                    await page.goto('about:blank');
+                    
+                    const validationResult = await page.evaluate(async (ep) => {
+                        try {
+                            const res = await fetch(ep, { cache: 'no-store' });
+                            if (!res.ok) return { error: `Failed to fetch payload: ${res.status}` };
+                            const data = await res.json();
+                            
+                            const hasPayload = !!data.payload;
+                            const hasOpcodes = !!data.opcodeMap;
+                            const hasHandshake = !!data.handshake;
+                            
+                            return {
+                                success: hasPayload && hasOpcodes && hasHandshake,
+                                headers: Object.fromEntries(res.headers.entries())
+                            };
+                        } catch (e) {
+                            return { error: e.message };
+                        }
+                    }, endpoint);
+                    
+                    await browser.close();
+                    
+                    if (!validationResult.success) {
+                        failures.push(`Active verification error: ${validationResult.error || 'Invalid payload structure'}`);
+                        score -= 20;
+                    } else {
+                        executionCorrect = true;
+                        payloadObfuscated = true;
                     }
-                }, endpoint);
-                
-                await browser.close();
-                
-                if (!validationResult.success) {
-                    failures.push(`Active verification error: ${validationResult.error || 'Invalid payload structure'}`);
-                    score -= 20;
-                } else {
-                    executionCorrect = true;
-                    payloadObfuscated = true;
+                } catch (err) {
+                    // Playwright launch error, fallback to direct HTTP verification
+                    try {
+                        const data = await fetchJSON(endpoint);
+                        const { payload, opcodeMap, handshake } = data;
+                        if (payload && opcodeMap && handshake) {
+                            executionCorrect = true;
+                            payloadObfuscated = true;
+                        } else {
+                            failures.push("Invalid payload structure from active endpoint");
+                            score -= 20;
+                        }
+                    } catch (e) {
+                        failures.push(`Active HTTP verification error: ${e.message}`);
+                        score -= 20;
+                    }
                 }
-            } catch (err) {
-                // Playwright launch error, fallback to direct HTTP verification
+            } else {
+                // If it is a local file, directly read and verify the payload
                 try {
                     const data = await fetchJSON(endpoint);
                     const { payload, opcodeMap, handshake } = data;
@@ -702,7 +722,7 @@ if (!command || command === '--help' || command === '-h') {
                         score -= 20;
                     }
                 } catch (e) {
-                    failures.push(`Active HTTP verification error: ${e.message}`);
+                    failures.push(`Active file verification error: ${e.message}`);
                     score -= 20;
                 }
             }
@@ -831,8 +851,499 @@ if (!command || command === '--help' || command === '-h') {
         } else {
             process.exit(0);
         }
+    } else if (command === 'protect') {
+        await interactiveProtect();
     }
 })().catch(err => {
     console.error("CLI Error:", err);
     process.exit(1);
 });
+
+// ─── Interactive Protect Command & Helpers ────────────────────────────────────
+
+const C = {
+    reset:     '\x1b[0m',
+    bold:      '\x1b[1m',
+    dim:       '\x1b[2m',
+    cyan:      '\x1b[36m',
+    green:     '\x1b[32m',
+    yellow:    '\x1b[33m',
+    gray:      '\x1b[90m',
+    clearLine: '\x1b[2K\r',
+    up:        (n) => `\x1b[${n}A`,
+    hide:      '\x1b[?25l',
+    show:      '\x1b[?25h',
+};
+
+function renderLines(stdout, lines, lastCount) {
+    if (lastCount > 0) stdout.write(C.up(lastCount));
+    for (const line of lines) stdout.write(C.clearLine + line + '\n');
+    return lines.length;
+}
+
+function askQuestion(query) {
+    return new Promise((resolve) => {
+        const readline = require('readline');
+        const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout
+        });
+        rl.question(query, (answer) => {
+            rl.close();
+            resolve(answer);
+        });
+    });
+}
+
+function findSourceFiles(dir) {
+    const results = [];
+    const ignoredDirs = ['node_modules', '.git', 'dist', 'build', '.nuxt', '.next', '.svelte-kit', '.fortress_keys', 'protected'];
+    const priorityDirs = ['lib', 'utils', 'helpers', 'services', 'core', 'shared'];
+    function walk(currentDir, depth) {
+        let files;
+        try {
+            files = fs.readdirSync(currentDir);
+        } catch (e) {
+            return;
+        }
+        files.sort((a, b) => {
+            const aIsPriority = priorityDirs.includes(a.toLowerCase());
+            const bIsPriority = priorityDirs.includes(b.toLowerCase());
+            if (aIsPriority && !bIsPriority) return -1;
+            if (!aIsPriority && bIsPriority) return 1;
+            return a.localeCompare(b);
+        });
+        for (const file of files) {
+            const fullPath = path.join(currentDir, file);
+            let stat;
+            try {
+                stat = fs.statSync(fullPath);
+            } catch (e) {
+                continue;
+            }
+            if (stat.isDirectory()) {
+                if (!ignoredDirs.includes(file)) {
+                    walk(fullPath, depth + 1);
+                }
+            } else if (stat.isFile()) {
+                const ext = path.extname(file);
+                if (['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'].includes(ext)) {
+                    if (!file.includes('.config.') && file !== 'package.json' && file !== 'package-lock.json') {
+                        results.push(path.relative(dir, fullPath));
+                    }
+                }
+            }
+        }
+    }
+    walk(dir, 0);
+    return results;
+}
+
+function babelParseExportedFunctions(content) {
+    const parser = require('@babel/parser');
+    const ast = parser.parse(content, {
+        sourceType: 'module',
+        plugins: ['typescript', 'jsx', 'decorators-legacy']
+    });
+    
+    const names = new Set();
+    
+    function traverse(node) {
+        if (!node) return;
+        if (node.type === 'ExportNamedDeclaration') {
+            if (node.declaration) {
+                const decl = node.declaration;
+                if (decl.type === 'FunctionDeclaration' && decl.id) {
+                    names.add(decl.id.name);
+                } else if (decl.type === 'VariableDeclaration') {
+                    for (const vDecl of decl.declarations) {
+                        if (vDecl.id && vDecl.id.type === 'Identifier') {
+                            names.add(vDecl.id.name);
+                        }
+                    }
+                }
+            }
+            if (node.specifiers) {
+                for (const spec of node.specifiers) {
+                    if (spec.exported && spec.exported.type === 'Identifier') {
+                        names.add(spec.exported.name);
+                    }
+                }
+            }
+        } else if (node.type === 'ExportDefaultDeclaration') {
+            const decl = node.declaration;
+            if (decl.type === 'FunctionDeclaration' && decl.id) {
+                names.add(decl.id.name);
+            } else if (decl.type === 'Identifier') {
+                names.add(decl.name);
+            }
+        }
+        
+        for (const key in node) {
+            const child = node[key];
+            if (Array.isArray(child)) {
+                for (const item of child) {
+                    if (item && typeof item === 'object' && typeof item.type === 'string') {
+                        traverse(item);
+                    }
+                }
+            } else if (child && typeof child === 'object' && typeof child.type === 'string') {
+                traverse(child);
+            }
+        }
+    }
+    
+    traverse(ast);
+    return Array.from(names);
+}
+
+function injectProtectAnnotations(content, selectedFunctions) {
+    if (!selectedFunctions || selectedFunctions.length === 0) return content;
+    
+    const parser = require('@babel/parser');
+    let ast;
+    try {
+        ast = parser.parse(content, {
+            sourceType: 'module',
+            plugins: ['typescript', 'jsx', 'decorators-legacy']
+        });
+    } catch (e) {
+        return content;
+    }
+    
+    const insertIndices = [];
+    const funcsToProtect = new Set(selectedFunctions);
+    
+    function traverse(node) {
+        if (!node) return;
+        
+        let foundName = null;
+        let declNode = null;
+        
+        if (node.type === 'ExportNamedDeclaration') {
+            if (node.declaration) {
+                const decl = node.declaration;
+                declNode = node;
+                if (decl.type === 'FunctionDeclaration' && decl.id) {
+                    foundName = decl.id.name;
+                } else if (decl.type === 'VariableDeclaration') {
+                    for (const vDecl of decl.declarations) {
+                        if (vDecl.id && vDecl.id.type === 'Identifier') {
+                            if (funcsToProtect.has(vDecl.id.name)) {
+                                foundName = vDecl.id.name;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if (node.specifiers && !foundName) {
+                for (const spec of node.specifiers) {
+                    if (spec.exported && spec.exported.type === 'Identifier') {
+                        if (funcsToProtect.has(spec.exported.name)) {
+                            foundName = spec.exported.name;
+                            declNode = node;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else if (node.type === 'ExportDefaultDeclaration') {
+            const decl = node.declaration;
+            declNode = node;
+            if (decl.type === 'FunctionDeclaration' && decl.id) {
+                foundName = decl.id.name;
+            } else if (decl.type === 'Identifier') {
+                foundName = decl.name;
+            }
+        } else if (node.type === 'FunctionDeclaration' && node.id) {
+            foundName = node.id.name;
+            declNode = node;
+        } else if (node.type === 'VariableDeclaration') {
+            for (const vDecl of node.declarations) {
+                if (vDecl.id && vDecl.id.type === 'Identifier') {
+                    if (funcsToProtect.has(vDecl.id.name)) {
+                        foundName = vDecl.id.name;
+                        declNode = node;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (foundName && funcsToProtect.has(foundName) && declNode && declNode.start !== undefined) {
+            insertIndices.push(declNode.start);
+        }
+        
+        for (const key in node) {
+            const child = node[key];
+            if (Array.isArray(child)) {
+                for (const item of child) {
+                    if (item && typeof item === 'object' && typeof item.type === 'string') {
+                        traverse(item);
+                    }
+                }
+            } else if (child && typeof child === 'object' && typeof child.type === 'string') {
+                traverse(child);
+            }
+        }
+    }
+    
+    traverse(ast);
+    
+    const uniqueIndices = Array.from(new Set(insertIndices)).sort((a, b) => b - a);
+    
+    let result = content;
+    for (const idx of uniqueIndices) {
+        const beforeStr = result.substring(Math.max(0, idx - 100), idx);
+        if (/@protect\b/.test(beforeStr)) {
+            continue;
+        }
+        
+        const lastNewLine = result.lastIndexOf('\n', idx);
+        const insertAt = lastNewLine === -1 ? 0 : lastNewLine + 1;
+        
+        const lineStart = result.substring(insertAt, idx);
+        const indentMatch = lineStart.match(/^\s*/);
+        const indent = indentMatch ? indentMatch[0] : '';
+        
+        result = result.substring(0, insertAt) + indent + '/** @protect */\n' + result.substring(insertAt);
+    }
+    
+    return result;
+}
+
+async function promptFileSearch(message, files) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.log(`\n${message}`);
+        files.forEach((f, i) => console.log(`${i + 1}) ${f}`));
+        console.log(`${files.length + 1}) [Enter custom path]`);
+        const ans = await askQuestion(`Enter number (1-${files.length + 1}): `);
+        const n = parseInt(ans, 10);
+        if (n >= 1 && n <= files.length) return files[n - 1];
+        return await askQuestion('Enter custom file path: ');
+    }
+    return new Promise((resolve) => {
+        let query = '', idx = 0, scroll = 0, drawn = 0;
+        const VISIBLE = 10;
+        const { stdin, stdout } = process;
+        stdout.write(C.hide);
+        function getFiltered() {
+            const base = query ? files.filter(f => f.toLowerCase().includes(query.toLowerCase())) : [...files];
+            return [...base, '[Enter custom path]'];
+        }
+        function highlightMatch(str, q) {
+            if (!q) return str;
+            const lo = str.toLowerCase(), qi = lo.indexOf(q.toLowerCase());
+            if (qi < 0) return str;
+            return str.slice(0, qi) + C.yellow + C.bold + str.slice(qi, qi + q.length) + C.reset + str.slice(qi + q.length);
+        }
+        function paint() {
+            const filtered = getFiltered();
+            if (idx >= filtered.length) { idx = filtered.length - 1; scroll = Math.max(0, idx - VISIBLE + 1); }
+            const lines = [
+                `${C.bold}${message}${C.reset}`,
+                `  ${C.cyan}❯${C.reset} ${query}${C.dim}▌ type to filter, ↑↓ navigate, enter select${C.reset}`
+            ];
+            const end = Math.min(scroll + VISIBLE, filtered.length);
+            if (scroll > 0) lines.push(`${C.dim}  ↑ ${scroll} more${C.reset}`);
+            for (let i = scroll; i < end; i++) {
+                const active = i === idx, isCustom = filtered[i] === '[Enter custom path]';
+                const prefix = active ? `${C.cyan}❯ ${C.reset}` : '  ';
+                let lbl = isCustom ? `${C.dim}[Enter custom path]${C.reset}` : highlightMatch(filtered[i], query);
+                if (active) lbl = `${C.cyan}${C.bold}${isCustom ? '[Enter custom path]' : filtered[i]}${C.reset}`;
+                lines.push(`${prefix}${lbl}`);
+            }
+            if (end < filtered.length) lines.push(`${C.dim}  ↓ ${filtered.length - end} more${C.reset}`);
+            drawn = renderLines(stdout, lines, drawn);
+        }
+        function done(val) {
+            stdin.setRawMode(false); stdin.pause(); stdin.removeListener('data', onKey); stdout.write(C.show);
+            stdout.write(C.up(drawn));
+            for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
+            stdout.write(C.up(drawn));
+            if (val === '[Enter custom path]') {
+                stdout.write(`${C.bold}${message}${C.reset} ${C.dim}custom path${C.reset}\n`);
+                askQuestion('Enter custom file path: ').then(resolve);
+            } else {
+                stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${val}${C.reset}\n`);
+                resolve(val);
+            }
+        }
+        function onKey(k) {
+            if (k === '\x03') { stdin.setRawMode(false); stdout.write(C.show); process.exit(130); }
+            const filtered = getFiltered();
+            if (k === '\x1b[A' && idx > 0) { idx--; if (idx < scroll) scroll = idx; }
+            else if (k === '\x1b[B' && idx < filtered.length - 1) { idx++; if (idx >= scroll + VISIBLE) scroll = idx - VISIBLE + 1; }
+            else if (k === '\x7f' || k === '\b') { if (query.length > 0) { query = query.slice(0, -1); idx = 0; scroll = 0; } }
+            else if (k === '\r' || k === '\n') { done(filtered[idx]); return; }
+            else if (k.length === 1 && k >= ' ') { query += k; idx = 0; scroll = 0; }
+            paint();
+        }
+        stdin.setRawMode(true); stdin.resume(); stdin.setEncoding('utf8'); stdin.on('data', onKey); paint();
+    });
+}
+
+async function promptMultiSelect(message, options, { visibleCount = 10 } = {}) {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        console.log(`\n${message} (enter numbers separated by commas, or 'a' for all)`);
+        options.forEach((o, i) => console.log(`${i + 1}) ${o}`));
+        const ans = await askQuestion('Enter selection: ');
+        if (ans.trim().toLowerCase() === 'a') return [...options];
+        const picks = ans.split(',').map(n => options[parseInt(n.trim(), 10) - 1]).filter(Boolean);
+        return picks.length > 0 ? picks : [options[0]];
+    }
+    return new Promise((resolve) => {
+        let idx = 0, scroll = 0, drawn = 0;
+        const selected = new Set();
+        const { stdin, stdout } = process;
+        stdout.write(C.hide);
+        function paint() {
+            const lines = [`${C.bold}${message}${C.reset} ${C.dim}(space select, 'a' all, enter confirm)${C.reset}`];
+            const end = Math.min(scroll + visibleCount, options.length);
+            if (scroll > 0) lines.push(`${C.dim}  ↑ ${scroll} more${C.reset}`);
+            for (let i = scroll; i < end; i++) {
+                const active = i === idx, sel = selected.has(i);
+                const dot = sel ? `${C.green}●${C.reset}` : `${C.dim}○${C.reset}`;
+                const cur = active ? `${C.cyan}❯${C.reset}` : ' ';
+                const lbl = active ? `${C.cyan}${C.bold}${options[i]}${C.reset}` : sel ? `${C.green}${options[i]}${C.reset}` : options[i];
+                lines.push(` ${cur} ${dot} ${lbl}`);
+            }
+            if (end < options.length) lines.push(`${C.dim}  ↓ ${options.length - end} more${C.reset}`);
+            drawn = renderLines(stdout, lines, drawn);
+        }
+        function done() {
+            stdin.setRawMode(false); stdin.pause(); stdin.removeListener('data', onKey); stdout.write(C.show);
+            const result = selected.size > 0 ? [...selected].sort((a,b)=>a-b).map(i => options[i]) : [options[idx]];
+            stdout.write(C.up(drawn));
+            for (let i = 0; i < drawn; i++) stdout.write(C.clearLine + '\n');
+            stdout.write(C.up(drawn));
+            stdout.write(`${C.bold}${message}${C.reset} ${C.cyan}${result.join(', ')}${C.reset}\n`);
+            resolve(result);
+        }
+        function onKey(k) {
+            if (k === '\x03') { stdin.setRawMode(false); stdout.write(C.show); process.exit(130); }
+            if (k === '\x1b[A' && idx > 0) { idx--; if (idx < scroll) scroll = idx; }
+            else if (k === '\x1b[B' && idx < options.length - 1) { idx++; if (idx >= scroll + visibleCount) scroll = idx - visibleCount + 1; }
+            else if (k === ' ') { selected.has(idx) ? selected.delete(idx) : selected.add(idx); }
+            else if (k === 'a' || k === 'A') { selected.size === options.length ? selected.clear() : options.forEach((_, i) => selected.add(i)); }
+            else if (k === '\r' || k === '\n') { done(); return; }
+            paint();
+        }
+        stdin.setRawMode(true); stdin.resume(); stdin.setEncoding('utf8'); stdin.on('data', onKey); paint();
+    });
+}
+
+async function interactiveProtect() {
+    const { loadFile, writeFile } = require('magicast');
+    
+    // 1. Locate config
+    const configPath = path.resolve(process.cwd(), 'fortress.config.js');
+    if (!fs.existsSync(configPath)) {
+        console.error("Error: fortress.config.js not found. Please run 'npx create-fortress-app .' first to scaffold your application.");
+        process.exit(1);
+    }
+    
+    // 2. Find source files
+    const candidateFiles = findSourceFiles(process.cwd());
+    if (candidateFiles.length === 0) {
+        console.error("Error: No JS/TS source files found in the current directory.");
+        process.exit(1);
+    }
+    
+    // 3. Choose a file
+    const selectedFile = await promptFileSearch('Choose a file to protect:', candidateFiles);
+    const fullFilePath = path.resolve(process.cwd(), selectedFile);
+    
+    // 4. Read file and parse functions
+    let content = '';
+    try {
+        content = fs.readFileSync(fullFilePath, 'utf8');
+    } catch (e) {
+        console.error(`Error: Failed to read file ${selectedFile}`);
+        process.exit(1);
+    }
+    
+    let detectedFunctions = [];
+    try {
+        detectedFunctions = babelParseExportedFunctions(content);
+    } catch (e) {
+        console.error(`Error parsing functions in ${selectedFile}:`, e.message);
+        process.exit(1);
+    }
+    
+    if (detectedFunctions.length === 0) {
+        console.log(`No exportable functions detected in ${selectedFile}.`);
+        process.exit(0);
+    }
+    
+    // 5. Select functions
+    const selectedFunctions = await promptMultiSelect('Choose function(s) to protect:', detectedFunctions);
+    if (selectedFunctions.length === 0) {
+        console.log("No functions selected. Aborting.");
+        process.exit(0);
+    }
+    
+    // 6. Inject annotations into the file
+    const updatedContent = injectProtectAnnotations(content, selectedFunctions);
+    try {
+        fs.writeFileSync(fullFilePath, updatedContent, 'utf8');
+        console.log(`\n✓ Successfully injected /** @protect */ annotations above the selected function(s) in ${selectedFile}!`);
+    } catch (e) {
+        console.error(`Error: Failed to write updates to ${selectedFile}`);
+        process.exit(1);
+    }
+    
+    // 7. Update fortress.config.js protect array if not already matched
+    try {
+        const relativePath = './' + selectedFile.replace(/\\/g, '/');
+        const mod = await loadFile(configPath);
+        
+        let protectList = [];
+        if (mod.exports.protect) {
+            protectList = Array.isArray(mod.exports.protect) ? mod.exports.protect : [mod.exports.protect];
+        }
+        
+        function isPathMatched(filePath, patterns) {
+            const pathNormalize = filePath.replace(/^\.\//, '');
+            for (const pattern of patterns) {
+                const patternNormalize = pattern.replace(/^\.\//, '');
+                const escaped = patternNormalize.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+                const regexStr = '^' + escaped.replace(/\\\*\\\*/g, '.*').replace(/\\\*/g, '[^/]*') + '$';
+                const rx = new RegExp(regexStr);
+                if (rx.test(pathNormalize)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        if (!isPathMatched(relativePath, protectList)) {
+            if (mod.exports.protect) {
+                if (Array.isArray(mod.exports.protect)) {
+                    mod.exports.protect.push(relativePath);
+                } else {
+                    mod.exports.protect = [mod.exports.protect, relativePath];
+                }
+            } else {
+                mod.exports.protect = [relativePath];
+            }
+            await writeFile(mod, configPath);
+            console.log(`✓ Added "${relativePath}" to the protect paths in fortress.config.js`);
+        }
+    } catch (e) {
+        console.warn(`Warning: Could not automatically update protect paths in fortress.config.js:`, e.message);
+    }
+    
+    // 8. Rebuild the protected functions
+    console.log("\nBuilding protected functions...");
+    process.stdin.pause();
+    const { execSync } = require('child_process');
+    try {
+        execSync('node ' + path.resolve(__dirname, 'index.js') + ' build', { stdio: 'inherit' });
+        process.exit(0);
+    } catch (e) {
+        process.exit(1);
+    }
+}
+

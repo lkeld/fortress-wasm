@@ -90,7 +90,8 @@ function countOpCode(bytecode, opcodeMap, op) {
         token = lexer.nextToken();
     }
     tokens.push(token);
-    node_assert_1.default.strictEqual(tokens[0].type, lexer_1.TokenType.Fn);
+    node_assert_1.default.strictEqual(tokens[0].type, lexer_1.TokenType.Identifier);
+    node_assert_1.default.strictEqual(tokens[0].value, 'fn');
     node_assert_1.default.strictEqual(tokens[1].type, lexer_1.TokenType.Identifier);
     node_assert_1.default.strictEqual(tokens[1].value, 'myFunc');
     node_assert_1.default.strictEqual(tokens[2].type, lexer_1.TokenType.LParen);

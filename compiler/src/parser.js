@@ -27,6 +27,9 @@ var Parser = /** @class */ (function () {
         return { type: 'Program', body: body };
     };
     Parser.prototype.parseStatement = function () {
+        if (this.currentToken.type === lexer_1.TokenType.Identifier && this.currentToken.value === 'fn' && this.peekToken.type === lexer_1.TokenType.Identifier) {
+            return this.parseFunctionDeclaration();
+        }
         switch (this.currentToken.type) {
             case lexer_1.TokenType.Let: return this.parseLetStatement();
             case lexer_1.TokenType.Return: return this.parseReturnStatement();
@@ -72,7 +75,12 @@ var Parser = /** @class */ (function () {
         return { type: 'ReturnStatement', value: value };
     };
     Parser.prototype.parseFunctionDeclaration = function () {
-        this.expect(lexer_1.TokenType.Fn);
+        if (this.currentToken.type === lexer_1.TokenType.Fn) {
+            this.expect(lexer_1.TokenType.Fn);
+        }
+        else {
+            this.expect(lexer_1.TokenType.Identifier);
+        }
         var name = { type: 'Identifier', name: this.currentToken.value };
         this.expect(lexer_1.TokenType.Identifier);
         this.expect(lexer_1.TokenType.LParen);
@@ -217,7 +225,9 @@ var Parser = /** @class */ (function () {
                 var properties = [];
                 while (this.currentToken.type !== lexer_1.TokenType.RBrace && this.currentToken.type !== lexer_1.TokenType.EOF) {
                     var key = void 0;
-                    if (this.currentToken.type === lexer_1.TokenType.Identifier) {
+                    var isKeyToken = this.currentToken.type === lexer_1.TokenType.Identifier ||
+                        (this.currentToken.type >= lexer_1.TokenType.Let && this.currentToken.type <= lexer_1.TokenType.For);
+                    if (isKeyToken) {
                         key = { type: 'Identifier', name: this.currentToken.value };
                         this.nextToken();
                     }
@@ -299,7 +309,12 @@ var Parser = /** @class */ (function () {
         if (token.type === lexer_1.TokenType.Dot) {
             this.nextToken();
             var name_1 = this.currentToken.value;
-            this.expect(lexer_1.TokenType.Identifier);
+            var isKeywordOrIdentifier = this.currentToken.type === lexer_1.TokenType.Identifier ||
+                (this.currentToken.type >= lexer_1.TokenType.Let && this.currentToken.type <= lexer_1.TokenType.For);
+            if (!isKeywordOrIdentifier) {
+                throw new Error("Expected identifier or keyword after dot, got ".concat(this.currentToken.type, " at line ").concat(this.currentToken.line));
+            }
+            this.nextToken();
             var property = { type: 'Identifier', name: name_1 };
             return { type: 'MemberExpression', object: left, property: property, computed: false };
         }

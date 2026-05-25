@@ -446,5 +446,65 @@ runTestSuite('F4: create-fortress-app CLI E2E Overhaul Test Suite', {
         assert.ok(gitignore.includes('.fortress_dev_key'));
         
         cleanupDirs();
+    },
+
+    'Interactive Protect Command - selects and protects a function': async () => {
+        const dir = getTempDir();
+        // Create config file
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), 'module.exports = {\n  protect: []\n};');
+        // Create source file
+        const srcDir = path.join(dir, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        fs.writeFileSync(path.join(srcDir, 'utils.js'), 'export function sensitiveFunc() {\n  return "secret";\n}');
+        
+        // Spawn index.js protect using child_process
+        const fortressBin = path.join(__dirname, '../../bin/index.js');
+        const { spawn } = require('child_process');
+        
+        const child = spawn('node', [fortressBin, 'protect'], {
+            cwd: dir,
+            env: {
+                ...process.env,
+                FORTRESS_SIGNING_PASSWORD: 'securepassword123'
+            }
+        });
+        
+        let stdout = '';
+        let stderr = '';
+        let respondedFile = false;
+        let respondedFunc = false;
+        
+        await new Promise((resolve) => {
+            child.stdout.on('data', (data) => {
+                const chunk = data.toString();
+                stdout += chunk;
+                
+                if (stdout.includes('Choose a file to protect:') && !respondedFile) {
+                    respondedFile = true;
+                    child.stdin.write('1\n');
+                }
+                if (stdout.includes('Choose function(s) to protect:') && !respondedFunc) {
+                    respondedFunc = true;
+                    child.stdin.write('1\n');
+                }
+            });
+            child.stderr.on('data', (data) => {
+                stderr += data.toString();
+            });
+            child.on('close', resolve);
+        });
+        
+        assert.ok(stdout.includes('Successfully injected /** @protect */ annotations'));
+        
+        // Verify source file content has annotations
+        const updatedSrc = fs.readFileSync(path.join(srcDir, 'utils.js'), 'utf8');
+        assert.ok(updatedSrc.includes('/** @protect */'));
+        assert.ok(updatedSrc.includes('export function sensitiveFunc()'));
+        
+        // Verify config has been updated
+        const updatedConfig = fs.readFileSync(path.join(dir, 'fortress.config.js'), 'utf8');
+        assert.ok(updatedConfig.includes('./src/utils.js'));
+        
+        cleanupDirs();
     }
 });

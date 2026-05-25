@@ -108,7 +108,6 @@ var Lexer = /** @class */ (function () {
             }
             switch (ident) {
                 case 'let': return { type: TokenType.Let, value: ident, line: this.line };
-                case 'fn': return { type: TokenType.Fn, value: ident, line: this.line };
                 case 'return': return { type: TokenType.Return, value: ident, line: this.line };
                 case 'if': return { type: TokenType.If, value: ident, line: this.line };
                 case 'else': return { type: TokenType.Else, value: ident, line: this.line };

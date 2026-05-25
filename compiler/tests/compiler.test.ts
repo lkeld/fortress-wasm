@@ -93,7 +93,8 @@ test('Lexer: strings and identifiers', () => {
     }
     tokens.push(token);
     
-    assert.strictEqual(tokens[0].type, TokenType.Fn);
+    assert.strictEqual(tokens[0].type, TokenType.Identifier);
+    assert.strictEqual(tokens[0].value, 'fn');
     assert.strictEqual(tokens[1].type, TokenType.Identifier);
     assert.strictEqual(tokens[1].value, 'myFunc');
     assert.strictEqual(tokens[2].type, TokenType.LParen);

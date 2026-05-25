@@ -2,6 +2,16 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.6.0] — 2026-05-25
+
+### Added
+- Added an interactive `fortress protect` command that lets developers select a source file and its functions, automatically injects `/** @protect */` JSDoc annotations, updates the `protect` array in `fortress.config.js` via `magicast`, and triggers a build.
+
+### Fixed
+- Fixed FVM parser syntax crashes when resolving member expression properties (e.g. `obj.fn`) or object literal keys matching FVM keywords by allowing keywords as properties, and contextually recognising the `fn` keyword using lookahead.
+- Fixed a parser syntax error (`Expected token type 31, got 36`) when scanning TypeScript files by implementing a TypeScript type-stripping pass during transpilation that removes type annotations, parameter properties, and interfaces.
+- Hardened the `verify` command to support local JSON payload files passed to `--endpoint`, bypassing Playwright browser execution to directly read and audit the payload offline.
+
 ## [1.5.9] - 2026-05-25
 
 ### Fixed
