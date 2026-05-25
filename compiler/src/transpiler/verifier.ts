@@ -45,7 +45,7 @@ class IsolatedVerifier {
             }
             // Probe if isolated-vm is functional (does not segfault) on this Node/OS setup
             const { execSync } = require('child_process');
-            execSync('node -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
+            execSync('"' + process.execPath + '" -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
                 stdio: 'ignore',
                 timeout: 1000
             });

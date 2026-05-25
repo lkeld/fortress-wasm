@@ -2605,7 +2605,7 @@ async function runInteractive() {
     const fortressBin = path.resolve(__dirname, '../../../bin/index.js');
     const { execSync } = require('child_process');
     try {
-        execSync(`FORTRESS_SIGNING_PASSWORD="${password}" node "${fortressBin}" build`, {
+        execSync(`FORTRESS_SIGNING_PASSWORD="${password}" "${process.execPath}" "${fortressBin}" build`, {
             cwd: targetDir,
             stdio: 'inherit',
             env: { ...process.env, FORTRESS_SIGNING_PASSWORD: password }
@@ -2616,7 +2616,8 @@ async function runInteractive() {
         console.log('       import { useFortress } from \'@/hooks/useFortress\';');
         console.log('  2. Add worker-src CSP header to next.config.ts:');
         console.log('       worker-src \'self\' blob:;');
-        console.log('  3. Run `fortress build` any time you change protected/ code.\n');
+        console.log('  3. Run `fortress build` any time you change protected/ code.');
+        console.log('  4. To protect new functions or files interactively via CLI, run `npx fortress protect`.\n');
     } catch (e) {
         console.log('\n⚠️  Scaffolding complete, but auto-build failed. Run manually:');
         console.log(`  FORTRESS_SIGNING_PASSWORD="<your-password>" npx fortress build\n`);

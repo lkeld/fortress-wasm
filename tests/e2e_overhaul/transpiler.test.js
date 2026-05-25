@@ -70,6 +70,36 @@ runTestSuite('F3: Transpiler E2E Overhaul Test Suite', {
         }, /Error:/);
     },
 
+    'Try/Catch Error Handling - Unsupported transpiler check': async () => {
+        assert.throws(() => {
+            transpile('function test() { try { let x = 1; } catch (e) {} }', {
+                functionName: 'test',
+                filePath: 'test.js',
+                verifyEquivalence: false
+            });
+        }, /Try\/catch exception handling is not supported/);
+    },
+
+    'Comma Operator - Unsupported transpiler check': async () => {
+        assert.throws(() => {
+            transpile('function test() { let x = (1, 2); }', {
+                functionName: 'test',
+                filePath: 'test.js',
+                verifyEquivalence: false
+            });
+        }, /Comma operator \(SequenceExpression\) is not supported/);
+    },
+
+    'Async/Await Splitting - Unsupported transpiler check': async () => {
+        assert.throws(() => {
+            transpile('async function test() { await 5; }', {
+                functionName: 'test',
+                filePath: 'test.js',
+                verifyEquivalence: false
+            });
+        }, /Async\/await splitting is not supported/);
+    },
+
     // --- Tier 2: Boundary & Corner Cases (5 tests) ---
     'Unsupported Syntax Error - clean error reporting on syntax invalidity': async () => {
         assert.throws(() => {

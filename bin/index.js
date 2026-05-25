@@ -83,7 +83,7 @@ if (!command || command === '--help' || command === '-h') {
                 throw new Error("isolated-vm not found");
             }
             const { execSync } = require('child_process');
-            execSync('node -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
+            execSync('"' + process.execPath + '" -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
                 stdio: 'ignore',
                 timeout: 1000
             });
@@ -161,6 +161,17 @@ if (!command || command === '--help' || command === '-h') {
                         const result = spawn.sync(parts[0], parts.slice(1), { stdio: 'inherit', cwd: process.cwd() });
                         if (result.status === 0) {
                             console.log("\n✓ 'isolated-vm' compiled and installed successfully!\n");
+                            try {
+                                const { execSync } = require('child_process');
+                                execSync('"' + process.execPath + '" -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
+                                    stdio: 'ignore',
+                                    timeout: 1000
+                                });
+                                hasIvm = true;
+                            } catch (e) {
+                                hasIvm = false;
+                                console.log("⚠️ Verification failed after installation. Falling back to the Node.js built-in 'vm' module.\n");
+                            }
                         } else {
                             console.log("\n⚠️ Compilation failed. Falling back to the Node.js built-in 'vm' module.\n");
                         }
@@ -1340,7 +1351,7 @@ async function interactiveProtect() {
     process.stdin.pause();
     const { execSync } = require('child_process');
     try {
-        execSync('node ' + path.resolve(__dirname, 'index.js') + ' build', { stdio: 'inherit' });
+        execSync('"' + process.execPath + '" "' + path.resolve(__dirname, 'index.js') + '" build', { stdio: 'inherit' });
         process.exit(0);
     } catch (e) {
         process.exit(1);

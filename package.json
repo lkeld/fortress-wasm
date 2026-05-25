@@ -85,6 +85,7 @@
     "@babel/parser": "^7.20.0",
     "@babel/traverse": "^7.29.0",
     "@babel/types": "^7.20.0",
+    "@lkeld/fortress-wasm": "^1.6.0",
     "argon2": "^0.44.0",
     "cross-spawn": "^7.0.3",
     "jimp": "^1.6.1",

@@ -172,6 +172,15 @@ export function transpile(code: string, options: TranspileOptions): TranspileRes
         },
         ConditionalExpression(path: any) {
             throw new Error("Ternary operator (ConditionalExpression) is not supported");
+        },
+        TryStatement(path: any) {
+            throw new Error("Try/catch exception handling is not supported");
+        },
+        SequenceExpression(path: any) {
+            throw new Error("Comma operator (SequenceExpression) is not supported");
+        },
+        AwaitExpression(path: any) {
+            throw new Error("Async/await splitting is not supported");
         }
     });
 
