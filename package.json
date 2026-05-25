@@ -100,7 +100,7 @@
     "@types/babel__traverse": "^7.28.0",
     "@types/node": "^25.9.1",
     "@types/pngjs": "^6.0.5",
-    "typescript": "^5.0.0"
+    "typescript": "^6.0.3"
   },
   "optionalDependencies": {
     "isolated-vm": "^6.1.2"
