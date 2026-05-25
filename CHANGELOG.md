@@ -2,6 +2,13 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.6.1] — 2026-05-25
+
+### Fixed
+- Fixed compilation crashes caused by try/catch blocks, async/await functions, and comma operators inside protected code by implementing explicit transpiler-level validation checks that reject these unsupported constructs with clear error messages.
+- Hardened the `isolated-vm` secure sandbox environment checks across the compiler verifier and CLI build scripts by invoking `process.execPath` instead of a generic `node` shell command, preventing binary and version mismatches.
+- Updated the CLI package installation process to dynamically re-evaluate the sandbox probe check and update compilation settings immediately after `isolated-vm` is installed.
+
 ## [1.6.0] — 2026-05-25
 
 ### Added
