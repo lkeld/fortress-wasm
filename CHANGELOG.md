@@ -2,6 +2,21 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.7.0] — 2026-05-25
+
+### Added
+- Added a robust AST-based configuration updater (`addProtectPathsToConfig`) in `bin/index.js` that directly modifies the `protect` array within `module.exports` object literals, ensuring configuration edits are cleanly applied to CommonJS configs without syntax or key duplication issues.
+- Added a robust 4-tier source file classifier (`classifyFile`) in `packages/create-fortress-app/lib/classify-file.js` to categorise and filter out server-side and type-only files in scaffolding and protect selectors.
+- Added automatic scan and pre-selection support for previously protected files and functions when running `npx fortress protect`.
+
+### Changed
+- Upgraded the JSDoc scanner in `compiler/src/scanner.ts` to utilise a full Babel AST parser with comprehensive TypeScript plugin support, enabling clean scanning of Zustand stores and TS generic parameters without compiler syntax errors.
+- Silenced standard Node `vm` fallback warnings and installation prompts for `isolated-vm` to streamline scaffolding execution.
+- Aligned post-scaffold manual instructions to dynamically print task summaries based on configured frameworks.
+
+### Fixed
+- Fixed CLI build exit codes to propagate scanner and verifier compilation failures, ensuring the build task terminates with code 1 upon syntax errors.
+
 ## [1.6.1] — 2026-05-25
 
 ### Fixed
