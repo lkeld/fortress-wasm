@@ -10,6 +10,25 @@ try {
     version = require('../package.json').version;
 } catch (e) {}
 
+const C = {
+    reset:     '\x1b[0m',
+    bold:      '\x1b[1m',
+    dim:       '\x1b[2m',
+    cyan:      '\x1b[36m',
+    green:     '\x1b[32m',
+    yellow:    '\x1b[33m',
+    gray:      '\x1b[90m',
+    clearLine: '\x1b[2K\r',
+    up:        (n) => `\x1b[${n}A`,
+    hide:      '\x1b[?25l',
+    show:      '\x1b[?25h',
+};
+
+// Prints a formatted scanner error message using the CLI colours.
+function printError(file, message) {
+    console.error(`${C.bold}${C.yellow}Scanner Error in ${file}:${C.reset} ${message}`);
+}
+
 const command = process.argv[2];
 const args = process.argv.slice(3);
 
@@ -200,7 +219,15 @@ if (!command || command === '--help' || command === '-h') {
         console.log("Scanning directory for @protect annotations (parallel)...");
         
         // Scan files in parallel using worker threads
-        const functions = await scanDirectoryParallel(process.cwd());
+        const { results: functions, errors } = await scanDirectoryParallel(process.cwd());
+
+        if (errors && errors.length > 0) {
+            errors.forEach(err => {
+                printError(err.file, err.message);
+            });
+            console.error("Build failed due to scanner errors.");
+            process.exit(1);
+        }
 
         functions.forEach(fn => {
             // Validate name characters (spaces/symbols)
@@ -872,19 +899,7 @@ if (!command || command === '--help' || command === '-h') {
 
 // ─── Interactive Protect Command & Helpers ────────────────────────────────────
 
-const C = {
-    reset:     '\x1b[0m',
-    bold:      '\x1b[1m',
-    dim:       '\x1b[2m',
-    cyan:      '\x1b[36m',
-    green:     '\x1b[32m',
-    yellow:    '\x1b[33m',
-    gray:      '\x1b[90m',
-    clearLine: '\x1b[2K\r',
-    up:        (n) => `\x1b[${n}A`,
-    hide:      '\x1b[?25l',
-    show:      '\x1b[?25h',
-};
+// C is defined globally at the top of the file to avoid redeclaration.
 
 function renderLines(stdout, lines, lastCount) {
     if (lastCount > 0) stdout.write(C.up(lastCount));

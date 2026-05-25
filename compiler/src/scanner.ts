@@ -87,124 +87,36 @@ export interface ProtectedFunction {
     opcodeMap?: number[];
 }
 
-function extractBlock(src: string): string {
-    let openBraces = 0;
-    let foundOpen = false;
-    let i = 0;
-    
-    while (i < src.length) {
-        const char = src[i];
-        
-        // Check for comments first
-        if (char === '/' && src[i + 1] === '/') {
-            i += 2;
-            while (i < src.length && src[i] !== '\n' && src[i] !== '\r') {
-                i++;
-            }
-            continue;
-        }
-        
-        if (char === '/' && src[i + 1] === '*') {
-            i += 2;
-            while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) {
-                i++;
-            }
-            if (i < src.length) {
-                i += 2; // skip the '*/'
-            }
-            continue;
-        }
-        
-        // Check for strings
-        if (char === '"' || char === "'" || char === '`') {
-            const quote = char;
-            i++;
-            while (i < src.length && src[i] !== quote) {
-                if (src[i] === '\\') {
-                    i += 2; // skip escape and escaped char
-                } else {
-                    i++;
-                }
-            }
-            if (i < src.length) {
-                i++; // skip the closing quote
-            }
-            continue;
-        }
-        
-        // Check for regex
-        if (char === '/') {
-            // Determine if it is indeed a regex (not division)
-            let isRegex = false;
-            // Scan backwards to see if it's a regex
-            let j = i - 1;
-            while (j >= 0 && /\s/.test(src[j])) {
-                j--;
-            }
-            if (j < 0) {
-                isRegex = true;
+// Parses a declaration while iteratively slicing the code to recover from syntax errors.
+function parseDeclaration(code: string): { ast: any; slicedCode: string } {
+    let currentCode = code;
+    while (true) {
+        try {
+            const ast = parser.parse(currentCode, {
+                sourceType: 'module',
+                plugins: [
+                    'typescript',
+                    'jsx',
+                    ['decorators', { decoratorsBeforeExport: true }],
+                    'classProperties',
+                    'classPrivateProperties',
+                    'classPrivateMethods',
+                    'dynamicImport',
+                    'optionalChaining',
+                    'nullishCoalescingOperator',
+                    'exportDefaultFrom',
+                    'importMeta'
+                ]
+            });
+            return { ast, slicedCode: currentCode };
+        } catch (e: any) {
+            if (typeof e.pos === 'number' && e.pos > 0 && e.pos < currentCode.length) {
+                currentCode = currentCode.substring(0, e.pos);
             } else {
-                const lastChar = src[j];
-                if (['=', '+', '-', '*', '&', '|', '^', '?', ':', ',', ';', '(', '[', '{', '!', '=', '<', '>'].includes(lastChar)) {
-                    isRegex = true;
-                } else if (/[a-zA-Z0-9_$]/.test(lastChar)) {
-                    let wordStart = j;
-                    while (wordStart > 0 && /[a-zA-Z0-9_$]/.test(src[wordStart - 1])) {
-                        wordStart--;
-                    }
-                    const word = src.substring(wordStart, j + 1);
-                    const regexKeywords = ['return', 'throw', 'yield', 'typeof', 'delete', 'void', 'in', 'instanceof', 'case', 'new'];
-                    if (regexKeywords.includes(word)) {
-                        isRegex = true;
-                    }
-                }
-            }
-            
-            if (isRegex) {
-                // Verify there is a closing '/' on the same line
-                let k = i + 1;
-                let foundClose = false;
-                let inCharClass = false;
-                while (k < src.length && src[k] !== '\n' && src[k] !== '\r') {
-                    if (src[k] === '\\') {
-                        k += 2;
-                        continue;
-                    }
-                    if (src[k] === '[') {
-                        inCharClass = true;
-                    } else if (src[k] === ']' && inCharClass) {
-                        inCharClass = false;
-                    }
-                    if (src[k] === '/' && !inCharClass) {
-                        foundClose = true;
-                        break;
-                    }
-                    k++;
-                }
-                
-                if (foundClose) {
-                    i = k + 1;
-                    // Skip flags
-                    while (i < src.length && /[a-z]/i.test(src[i])) {
-                        i++;
-                    }
-                    continue;
-                }
+                throw e;
             }
         }
-        
-        if (char === '{') {
-            openBraces++;
-            foundOpen = true;
-        } else if (char === '}') {
-            openBraces--;
-            if (foundOpen && openBraces === 0) {
-                return src.substring(0, i + 1);
-            }
-        }
-        i++;
     }
-    return src;
 }
 
 export function scanFile(filePath: string): ProtectedFunction[] {
@@ -232,80 +144,73 @@ export function scanFile(filePath: string): ProtectedFunction[] {
         let remainingSource = source.substring(commentEndIndex).trim();
         
         let isExported = false;
-        if (remainingSource.startsWith('export')) {
+        let codeToParse = remainingSource;
+        if (codeToParse.startsWith('export default')) {
             isExported = true;
-            remainingSource = remainingSource.substring(6).trim();
+            codeToParse = codeToParse.substring('export default'.length).trim();
+        } else if (codeToParse.startsWith('export')) {
+            isExported = true;
+            codeToParse = codeToParse.substring('export'.length).trim();
         }
 
-        // Extract the functional block to avoid syntax errors from outer scopes (e.g. classes)
-        const blockCode = extractBlock(remainingSource);
-        
-        try {
-            // Parse using Babel
-            const fileAst = parser.parse(blockCode, {
-                sourceType: 'module',
-                plugins: ['typescript', 'classProperties']
-            });
+        const { ast: fileAst, slicedCode } = parseDeclaration(codeToParse);
 
-            const stmt = fileAst.program.body[0];
-            if (!stmt) continue;
+        const stmt = fileAst.program.body[0];
+        if (!stmt) continue;
 
-            let functionName = "";
-            let originalJsCode = blockCode;
+        const blockCode = slicedCode.substring(stmt.start || 0, stmt.end || slicedCode.length);
 
-            if (t.isFunctionDeclaration(stmt)) {
-                functionName = stmt.id ? stmt.id.name : "";
-            } else if (t.isClassDeclaration(stmt)) {
-                functionName = stmt.id ? stmt.id.name : "";
-            } else if (t.isVariableDeclaration(stmt)) {
-                const decl = stmt.declarations[0];
-                if (t.isIdentifier(decl.id)) {
-                    functionName = decl.id.name;
-                }
+        let functionName = "";
+        let originalJsCode = blockCode;
+
+        if (t.isFunctionDeclaration(stmt)) {
+            functionName = stmt.id ? stmt.id.name : "";
+        } else if (t.isClassDeclaration(stmt)) {
+            functionName = stmt.id ? stmt.id.name : "";
+        } else if (t.isVariableDeclaration(stmt)) {
+            const decl = stmt.declarations[0];
+            if (t.isIdentifier(decl.id)) {
+                functionName = decl.id.name;
             }
-
-            if (!functionName) continue;
-
-            // Transpile using JS-to-FVM Transpiler
-            const { fvmSource, usedStdlib } = transpile(originalJsCode, {
-                functionName,
-                filePath,
-                verifyEquivalence: false // will run manually below
-            });
-
-            // Extract used standard library helper ASTs
-            const stdlibParser = new Parser(stdlibSource);
-            const stdlibAst = stdlibParser.parseProgram();
-            const neededHelpers = stdlibAst.body.filter(s => 
-                s.type === 'FunctionDeclaration' && usedStdlib.includes(s.name.name)
-            );
-
-            // Parse FVM AST and prepend needed stdlib helpers
-            const fvmParser = new Parser(fvmSource);
-            const fvmAst = fvmParser.parseProgram();
-            fvmAst.body.unshift(...neededHelpers);
-
-            // Compile to bytecode
-            const codegen = new CodeGenerator();
-            const { code, opcodeMap } = codegen.generate(fvmAst, functionName);
-
-            // Run Equivalence Verification
-            verifyEquivalenceSync(originalJsCode, code, Array.from(opcodeMap));
-
-            results.push({
-                name: functionName,
-                customName,
-                endpoint,
-                code: Buffer.from(code).toString('base64'),
-                filePath,
-                isExported,
-                opcodeMap: Array.from(opcodeMap)
-            });
-
-        } catch (e: any) {
-            console.error(`Scanner Error in ${filePath}:`, e.stack || e);
-            // Silence/propagate compilation errors for scanner robustness
         }
+
+        if (!functionName) continue;
+
+        // Transpile using JS-to-FVM Transpiler
+        const { fvmSource, usedStdlib } = transpile(originalJsCode, {
+            functionName,
+            filePath,
+            verifyEquivalence: false // will run manually below
+        });
+
+        // Extract used standard library helper ASTs
+        const stdlibParser = new Parser(stdlibSource);
+        const stdlibAst = stdlibParser.parseProgram();
+        const neededHelpers = stdlibAst.body.filter(s => 
+            s.type === 'FunctionDeclaration' && usedStdlib.includes(s.name.name)
+        );
+
+        // Parse FVM AST and prepend needed stdlib helpers
+        const fvmParser = new Parser(fvmSource);
+        const fvmAst = fvmParser.parseProgram();
+        fvmAst.body.unshift(...neededHelpers);
+
+        // Compile to bytecode
+        const codegen = new CodeGenerator();
+        const { code, opcodeMap } = codegen.generate(fvmAst, functionName);
+
+        // Run Equivalence Verification
+        verifyEquivalenceSync(originalJsCode, code, Array.from(opcodeMap));
+
+        results.push({
+            name: functionName,
+            customName,
+            endpoint,
+            code: Buffer.from(code).toString('base64'),
+            filePath,
+            isExported,
+            opcodeMap: Array.from(opcodeMap)
+        });
     }
     
     return results;
@@ -353,9 +258,9 @@ function findFilesRecursive(dir: string): string[] {
     return results;
 }
 
-export async function scanDirectoryParallel(dirPath: string): Promise<ProtectedFunction[]> {
+export async function scanDirectoryParallel(dirPath: string): Promise<{ results: ProtectedFunction[], errors: { file: string, message: string }[] }> {
     const files = findFilesRecursive(dirPath);
-    if (files.length === 0) return [];
+    if (files.length === 0) return { results: [], errors: [] };
 
     let workerScript = __filename;
     if (workerScript.endsWith('.ts')) {
@@ -366,16 +271,21 @@ export async function scanDirectoryParallel(dirPath: string): Promise<ProtectedF
     }
 
     const limit = Math.min((os.cpus() || []).length || 4, 8);
-    const resultsArray: ProtectedFunction[][] = new Array(files.length);
+    const resultsArray: { results: ProtectedFunction[], error?: string }[] = new Array(files.length);
     let index = 0;
 
-    async function runWorker(file: string): Promise<ProtectedFunction[]> {
-        return new Promise<ProtectedFunction[]>((resolve) => {
+    async function runWorker(file: string): Promise<{ results: ProtectedFunction[], error?: string }> {
+        return new Promise<{ results: ProtectedFunction[], error?: string }>((resolve) => {
             let worker: Worker;
             try {
                 worker = new Worker(workerScript);
-            } catch (err) {
-                return resolve(scanFile(file));
+            } catch (err: any) {
+                try {
+                    const results = scanFile(file);
+                    return resolve({ results });
+                } catch (fallbackErr: any) {
+                    return resolve({ results: [], error: fallbackErr.message });
+                }
             }
 
             let resolved = false;
@@ -384,29 +294,34 @@ export async function scanDirectoryParallel(dirPath: string): Promise<ProtectedF
                     if (!resolved) {
                         resolved = true;
                         worker.terminate();
-                        resolve(msg.results);
+                        resolve({ results: msg.results });
                     }
                 } else if (msg && msg.type === 'SCAN_ERROR') {
                     if (!resolved) {
                         resolved = true;
                         worker.terminate();
-                        resolve([]);
+                        resolve({ results: [], error: msg.error });
                     }
                 }
             });
 
-            worker.on('error', () => {
+            worker.on('error', (err: any) => {
                 if (!resolved) {
                     resolved = true;
                     worker.terminate();
-                    resolve(scanFile(file));
+                    try {
+                        const results = scanFile(file);
+                        resolve({ results });
+                    } catch (fallbackErr: any) {
+                        resolve({ results: [], error: fallbackErr.message || String(err) });
+                    }
                 }
             });
 
-            worker.on('exit', () => {
+            worker.on('exit', (code) => {
                 if (!resolved) {
                     resolved = true;
-                    resolve([]);
+                    resolve({ results: [], error: `Worker exited with code ${code}` });
                 }
             });
 
@@ -429,10 +344,16 @@ export async function scanDirectoryParallel(dirPath: string): Promise<ProtectedF
     await Promise.all(poolPromises);
 
     const allFunctions: ProtectedFunction[] = [];
-    for (const res of resultsArray) {
+    const errors: { file: string, message: string }[] = [];
+    for (let i = 0; i < files.length; i++) {
+        const res = resultsArray[i];
         if (res) {
-            allFunctions.push(...res);
+            if (res.error) {
+                errors.push({ file: files[i], message: res.error });
+            } else {
+                allFunctions.push(...res.results);
+            }
         }
     }
-    return allFunctions;
+    return { results: allFunctions, errors };
 }

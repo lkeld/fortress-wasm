@@ -209,6 +209,46 @@ runTestSuite('F8: @protect Annotations E2E Overhaul Test Suite', {
         const scanned = scanFile(file);
         assert.strictEqual(scanned.length, 1);
         assert.strictEqual(scanned[0].name, 'handle');
+    },
+
+    'AST Parser Upgrades - parses modern syntax features': async () => {
+        const dir = getTempWorkspace();
+        const file = path.join(dir, 'app.js');
+        // Let's write a file using decorators, typescript types, optional chaining, nullish coalescing OUTSIDE the protected function
+        fs.writeFileSync(file, `
+            /**
+             * @protect
+             */
+            export function basicFunc(arg) {
+                const a = 1;
+                return a;
+            }
+
+            // Modern syntax and TS outside the protected function that requires Babel plugins to parse
+            const b: string = window?.location ?? 'localhost';
+        `);
+        const scanned = scanFile(file);
+        assert.strictEqual(scanned.length, 1);
+        assert.strictEqual(scanned[0].name, 'basicFunc');
+    },
+
+    'AST Parser Upgrades - handles syntax/compilation error and exits with code 1': async () => {
+        const dir = getTempWorkspace();
+        fs.writeFileSync(path.join(dir, 'fortress.config.js'), `
+            module.exports = { output: './protected' };
+        `);
+        fs.writeFileSync(path.join(dir, 'app.js'), `
+            /**
+             * @protect
+             */
+            export function brokenFunc() {
+                // Syntax error here
+                const x = ;
+            }
+        `);
+        const result = await spawnProcess('node', [cliPath, 'build'], { cwd: dir });
+        assertExitCode(result, 1);
+        assert.ok(result.stderr.includes('Scanner Error') || result.stderr.includes('Build failed due to scanner errors.'));
         cleanup();
     }
 });
