@@ -2,6 +2,11 @@
 
 All notable changes to Fortress WASM will be documented in this file.
 
+## [1.5.8] - 2026-05-25
+
+### Fixed
+- Fixed module resolution in the verifier and build command by implementing a fallback resolver context that searches relative to the project directory (`process.cwd()`), ensuring that the `isolated-vm` secure sandbox can be successfully loaded and functional when running via `npx`.
+
 ## [1.5.7] - 2026-05-25
 
 ### Added

@@ -18,14 +18,31 @@ import { isMainThread } from 'worker_threads';
  *   arbitrary code in the main Node.js process (e.g., via prototype pollution or constructor access).
  * - Warning: NEVER use Mode B with untrusted user input. A warning is logged when falling back to this mode.
  */
+function loadIsolatedVM(): any {
+    try {
+        return require('isolated-vm');
+    } catch (e) {
+        try {
+            const { createRequire } = require('module');
+            const path = require('path');
+            const localRequire = createRequire(path.resolve(process.cwd(), 'package.json'));
+            return localRequire('isolated-vm');
+        } catch (err) {
+            return null;
+        }
+    }
+}
+
 class IsolatedVerifier {
     private ivm: any = null;
     private hasIvm = false;
 
     constructor() {
         try {
-            // Dynamically require isolated-vm to support optional dependency pattern
-            const ivm = require('isolated-vm');
+            const ivm = loadIsolatedVM();
+            if (!ivm) {
+                throw new Error("isolated-vm not found");
+            }
             // Probe if isolated-vm is functional (does not segfault) on this Node/OS setup
             const { execSync } = require('child_process');
             execSync('node -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {

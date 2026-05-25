@@ -69,7 +69,18 @@ if (!command || command === '--help' || command === '-h') {
         // 1. Probe check for isolated-vm
         let hasIvm = false;
         try {
-            require('isolated-vm');
+            let ivm;
+            try {
+                ivm = require('isolated-vm');
+            } catch (e) {
+                const { createRequire } = require('module');
+                const path = require('path');
+                const localRequire = createRequire(path.resolve(process.cwd(), 'package.json'));
+                ivm = localRequire('isolated-vm');
+            }
+            if (!ivm) {
+                throw new Error("isolated-vm not found");
+            }
             const { execSync } = require('child_process');
             execSync('node -e "const ivm = require(\'isolated-vm\'); new ivm.Isolate({ memoryLimit: 128 });"', {
                 stdio: 'ignore',
